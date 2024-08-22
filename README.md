@@ -2,6 +2,10 @@
 
 EyE Annotation Tool is a tool for annotating pupil, iris and eyelid in eye images. It provides a user-friendly interface for manual annotation and supports AI-assisted detection.
 
+<p align="center">
+<img src="annotation_app/resources/main_page.png" alt="EyE Annotation Tool Main Page" width="800">
+</p>
+
 ## Features
 
 - Load and navigate through multiple eye images
@@ -63,3 +67,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 ## Acknowledgments
 
 This project has received funding from the European Union's Horizon Europe research and innovation funding program under grant agreement No 101072410, Eyes4ICU project.
+
+<p align="center">
+<img src="annotation_app/resources/Funded_by_EU_Eyes4ICU.png" alt="Funded by EU Eyes4ICU" width="500">
+</p>
