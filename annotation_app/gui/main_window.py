@@ -177,7 +177,7 @@ class MainWindow(QMainWindow):
             image_path = self.image_paths[self.current_image_index]
             if self.image_viewer.load_image(image_path):
                 self.setWindowTitle(
-                    f"Eye Image Ellipse Fitter - {os.path.basename(image_path)}"
+                    f"EyE Annotation Tool - {os.path.basename(image_path)}"
                 )
                 self.annotation_controller.load_annotations()
             else:
