@@ -18,7 +18,6 @@ def save_annotations(
         "pupil_ellipse": ellipse_to_dict(pupil_ellipse),
         "iris_ellipse": ellipse_to_dict(iris_ellipse),
     }
-
     with open(annotation_path, "w") as f:
         json.dump(current_annotation, f, indent=2)
 
@@ -28,13 +27,13 @@ def load_annotations(annotation_path):
         with open(annotation_path, "r") as f:
             ann = json.load(f)
         return {
-            "pupil_points": [QPointF(x, y) for x, y in ann["pupil_points"]],
-            "iris_points": [QPointF(x, y) for x, y in ann["iris_points"]],
+            "pupil_points": [QPointF(x, y) for x, y in ann.get("pupil_points", [])],
+            "iris_points": [QPointF(x, y) for x, y in ann.get("iris_points", [])],
             "eyelid_contour_points": [
                 QPointF(x, y) for x, y in ann.get("eyelid_contour_points", [])
             ],
-            "pupil_ellipse": dict_to_ellipse(ann["pupil_ellipse"]),
-            "iris_ellipse": dict_to_ellipse(ann["iris_ellipse"]),
+            "pupil_ellipse": dict_to_ellipse(ann.get("pupil_ellipse")),
+            "iris_ellipse": dict_to_ellipse(ann.get("iris_ellipse")),
         }
     else:
         return {
@@ -47,14 +46,12 @@ def load_annotations(annotation_path):
 
 
 def get_annotation_path(image_path):
-
     directory = os.path.dirname(image_path)
     filename = os.path.splitext(os.path.basename(image_path))[0]
     return os.path.join(directory, f"{filename}_annotation.json")
 
 
 def ellipse_to_dict(ellipse):
-
     if ellipse is None:
         return None
     center, size, angle = ellipse
@@ -66,7 +63,6 @@ def ellipse_to_dict(ellipse):
 
 
 def dict_to_ellipse(ellipse_dict):
-
     if ellipse_dict is None:
         return None
     center = QPointF(*ellipse_dict["center"])
