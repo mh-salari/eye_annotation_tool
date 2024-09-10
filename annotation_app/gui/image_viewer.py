@@ -107,7 +107,11 @@ class ImageViewer(QWidget):
             self.annotation_changed.emit()
 
     def keyPressEvent(self, event: QKeyEvent):
-        if event.key() == Qt.Key_Delete:
+        if event.key() == Qt.Key_Plus or event.key() == Qt.Key_Equal:
+            self.zoom(True, self.rect().center())
+        elif event.key() == Qt.Key_Minus:
+            self.zoom(False, self.rect().center())
+        elif event.key() == Qt.Key_Delete:
             self.delete_selected_point()
         else:
             super().keyPressEvent(event)
