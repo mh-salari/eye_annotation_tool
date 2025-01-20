@@ -21,6 +21,7 @@ class ImageViewer(QWidget):
         self.setAttribute(Qt.WA_MouseTracking, True)
         self.setMouseTracking(True)
 
+
     def setup_ui(self):
         layout = QVBoxLayout()
         self.image_label = QLabel()
@@ -47,6 +48,10 @@ class ImageViewer(QWidget):
         self.panning = False
         self.last_pan_pos = None
         self.pixmap = None
+        # Variables for shift-click point movement
+        self.shift_pressed = False
+        self.last_mouse_pos = None
+        self.moving_all_points = False
 
     def setup_colors(self):
         # Define colors with transparency
@@ -113,8 +118,14 @@ class ImageViewer(QWidget):
             self.zoom(False, self.rect().center())
         elif event.key() == Qt.Key_Delete:
             self.delete_selected_point()
+        elif event.key() == Qt.Key_Shift:
+            self.shift_pressed = True
         else:
             super().keyPressEvent(event)
+    def keyReleaseEvent(self, event: QKeyEvent):
+        if event.key() == Qt.Key_Shift:
+            self.shift_pressed = False
+        super().keyReleaseEvent(event)
 
     def delete_selected_point(self):
         if self.selected_point:
@@ -147,6 +158,9 @@ class ImageViewer(QWidget):
 
                 if self.selected_point:
                     self.moving_point = True
+                    self.last_mouse_pos = image_pos
+                    self.moving_all_points = self.shift_pressed
+
                     if selected_annotation != self.current_annotation:
                         self.current_annotation = selected_annotation
                         self.annotation_type_changed.emit(self.current_annotation)
@@ -174,17 +188,33 @@ class ImageViewer(QWidget):
             self.last_pan_pos = event.pos()
         elif self.moving_point and self.selected_point:
             new_pos = self.get_image_position(event.pos())
-            if new_pos:
-                if self.current_annotation == "pupil":
-                    index = self.pupil_points.index(self.selected_point)
-                    self.pupil_points[index] = new_pos
-                elif self.current_annotation == "iris":
-                    index = self.iris_points.index(self.selected_point)
-                    self.iris_points[index] = new_pos
-                else:  # eyelid contour
-                    index = self.eyelid_contour_points.index(self.selected_point)
-                    self.eyelid_contour_points[index] = new_pos
+            if new_pos and self.last_mouse_pos:
+                # Calculate the movement delta
+                delta_x = new_pos.x() - self.last_mouse_pos.x()
+                delta_y = new_pos.y() - self.last_mouse_pos.y()
+                
+                if self.moving_all_points:
+                    # Move all points in the current annotation type
+                    if self.current_annotation == "pupil":
+                        self.move_points_by_delta(self.pupil_points, delta_x, delta_y)
+                    elif self.current_annotation == "iris":
+                        self.move_points_by_delta(self.iris_points, delta_x, delta_y)
+                    else:  # eyelid contour
+                        self.move_points_by_delta(self.eyelid_contour_points, delta_x, delta_y)
+                else:
+                    # Move only the selected point
+                    if self.current_annotation == "pupil":
+                        index = self.pupil_points.index(self.selected_point)
+                        self.pupil_points[index] = new_pos
+                    elif self.current_annotation == "iris":
+                        index = self.iris_points.index(self.selected_point)
+                        self.iris_points[index] = new_pos
+                    else:  # eyelid contour
+                        index = self.eyelid_contour_points.index(self.selected_point)
+                        self.eyelid_contour_points[index] = new_pos
+                
                 self.selected_point = new_pos
+                self.last_mouse_pos = new_pos
                 self.update_image()
 
     def mouseReleaseEvent(self, event):
@@ -456,3 +486,8 @@ class ImageViewer(QWidget):
             self.clear_pupil_ellipse()
         elif self.current_annotation == "iris":
             self.clear_iris_ellipse()
+
+    def move_points_by_delta(self, points, delta_x, delta_y):
+        """Helper method to move all points in a list by a given delta."""
+        for i in range(len(points)):
+            points[i] = QPointF(points[i].x() + delta_x, points[i].y() + delta_y)
