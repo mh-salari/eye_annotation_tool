@@ -142,6 +142,9 @@ class MainWindow(QMainWindow):
         self.annotation_controls.clear_eyelid_points_requested.connect(
             self.image_viewer.clear_eyelid_points
         )
+        self.annotation_controls.clear_glint_points_requested.connect(
+            self.image_viewer.clear_glint_points
+        )
         self.annotation_controls.clear_all_requested.connect(
             self.image_viewer.clear_all
         )

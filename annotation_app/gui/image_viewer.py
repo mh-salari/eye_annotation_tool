@@ -39,6 +39,7 @@ class ImageViewer(QWidget):
         self.pupil_points = []
         self.iris_points = []
         self.eyelid_contour_points = []
+        self.glint_points = []
         self.pupil_ellipse = None
         self.iris_ellipse = None
         self.current_annotation = "pupil"
@@ -67,6 +68,9 @@ class ImageViewer(QWidget):
         self.eyelid_select_color = QColor(0, 189, 194, 255)
         self.eyelid_ellipse_color = QColor(0, 118, 195, 255)
 
+        self.glint_color = QColor(255, 165, 0, 255)  # Orange
+        self.glint_select_color = QColor(255, 215, 0, 255)  # Gold
+
     def setup_undo_system(self):
         self.undo_stack = deque(maxlen=10)
         self.undo_index = -1
@@ -83,6 +87,8 @@ class ImageViewer(QWidget):
         return {
             "pupil_points": self.pupil_points.copy(),
             "iris_points": self.iris_points.copy(),
+            "eyelid_contour_points": self.eyelid_contour_points.copy(),
+            "glint_points": self.glint_points.copy(),
             "pupil_ellipse": self.pupil_ellipse,
             "iris_ellipse": self.iris_ellipse,
         }
@@ -106,6 +112,8 @@ class ImageViewer(QWidget):
             state = self.undo_stack[self.undo_index]
             self.pupil_points = state["pupil_points"].copy()
             self.iris_points = state["iris_points"].copy()
+            self.eyelid_contour_points = state.get("eyelid_contour_points", []).copy()
+            self.glint_points = state.get("glint_points", []).copy()
             self.pupil_ellipse = state["pupil_ellipse"]
             self.iris_ellipse = state["iris_ellipse"]
             self.update_image()
@@ -133,9 +141,10 @@ class ImageViewer(QWidget):
                 points = self.pupil_points
             elif self.current_annotation == "iris":
                 points = self.iris_points
-            else:  # eyelid contour
+            elif self.current_annotation == "eyelid_contour":
                 points = self.eyelid_contour_points
-                # Clear the fitted curve when modifying points
+            else:  # glint
+                points = self.glint_points
 
             if self.selected_point in points:
                 points.remove(self.selected_point)
@@ -169,8 +178,10 @@ class ImageViewer(QWidget):
                         self.pupil_points.append(image_pos)
                     elif self.current_annotation == "iris":
                         self.iris_points.append(image_pos)
-                    else:  # eyelid contour
+                    elif self.current_annotation == "eyelid_contour":
                         self.eyelid_contour_points.append(image_pos)
+                    else:  # glint
+                        self.glint_points.append(image_pos)
 
                 self.save_state()
                 self.annotation_changed.emit()
@@ -199,8 +210,10 @@ class ImageViewer(QWidget):
                         self.move_points_by_delta(self.pupil_points, delta_x, delta_y)
                     elif self.current_annotation == "iris":
                         self.move_points_by_delta(self.iris_points, delta_x, delta_y)
-                    else:  # eyelid contour
+                    elif self.current_annotation == "eyelid_contour":
                         self.move_points_by_delta(self.eyelid_contour_points, delta_x, delta_y)
+                    else:  # glint
+                        self.move_points_by_delta(self.glint_points, delta_x, delta_y)
                 else:
                     # Move only the selected point
                     if self.current_annotation == "pupil":
@@ -209,9 +222,12 @@ class ImageViewer(QWidget):
                     elif self.current_annotation == "iris":
                         index = self.iris_points.index(self.selected_point)
                         self.iris_points[index] = new_pos
-                    else:  # eyelid contour
+                    elif self.current_annotation == "eyelid_contour":
                         index = self.eyelid_contour_points.index(self.selected_point)
                         self.eyelid_contour_points[index] = new_pos
+                    else:  # glint
+                        index = self.glint_points.index(self.selected_point)
+                        self.glint_points[index] = new_pos
                 
                 self.selected_point = new_pos
                 self.last_mouse_pos = new_pos
@@ -313,6 +329,7 @@ class ImageViewer(QWidget):
             (self.pupil_points, self.pupil_color, "pupil"),
             (self.iris_points, self.iris_color, "iris"),
             (self.eyelid_contour_points, self.eyelid_color, "eyelid_contour"),
+            (self.glint_points, self.glint_color, "glint"),
         ]:
             for point in points:
                 scaled_point = QPointF(point.x() * self.factor, point.y() * self.factor)
@@ -324,8 +341,10 @@ class ImageViewer(QWidget):
                         painter.setPen(QPen(self.pupil_select_color, 3, Qt.SolidLine))
                     elif annotation_type == "iris":
                         painter.setPen(QPen(self.iris_select_color, 3, Qt.SolidLine))
-                    else:  # eyelid contour
+                    elif annotation_type == "eyelid_contour":
                         painter.setPen(QPen(self.eyelid_select_color, 3, Qt.SolidLine))
+                    else:  # glint
+                        painter.setPen(QPen(self.glint_select_color, 3, Qt.SolidLine))
                 else:
                     painter.setPen(QPen(color, 3, Qt.SolidLine))
                 painter.drawEllipse(scaled_point, 1.5, 1.5)
@@ -356,6 +375,7 @@ class ImageViewer(QWidget):
         pupil_point = find_closest_point(self.pupil_points, pos, self.factor)
         iris_point = find_closest_point(self.iris_points, pos, self.factor)
         eyelid_point = find_closest_point(self.eyelid_contour_points, pos, self.factor)
+        glint_point = find_closest_point(self.glint_points, pos, self.factor)
 
         closest_point = None
         closest_type = None
@@ -365,6 +385,7 @@ class ImageViewer(QWidget):
             (pupil_point, "pupil"),
             (iris_point, "iris"),
             (eyelid_point, "eyelid_contour"),
+            (glint_point, "glint"),
         ]:
             if point:
                 dist = (point.x() - pos.x()) ** 2 + (point.y() - pos.y()) ** 2
@@ -429,16 +450,24 @@ class ImageViewer(QWidget):
         self.annotation_changed.emit()
         self.update_image()
 
+    def clear_glint_points(self):
+        self.glint_points = []
+        self.save_state()
+        self.annotation_changed.emit()
+        self.update_image()
+
     def clear_all(self):
         self.clear_pupil_points()
         self.clear_iris_points()
         self.clear_eyelid_points()
+        self.clear_glint_points()
 
     def get_annotation_data(self):
         return {
             "pupil_points": self.pupil_points,
             "iris_points": self.iris_points,
             "eyelid_contour_points": self.eyelid_contour_points,
+            "glint_points": self.glint_points,
             "pupil_ellipse": self.pupil_ellipse,
             "iris_ellipse": self.iris_ellipse,
         }
@@ -447,6 +476,7 @@ class ImageViewer(QWidget):
         self.pupil_points = data.get("pupil_points", [])
         self.iris_points = data.get("iris_points", [])
         self.eyelid_contour_points = data.get("eyelid_contour_points", [])
+        self.glint_points = data.get("glint_points", [])
         self.pupil_ellipse = data.get("pupil_ellipse")
         self.iris_ellipse = data.get("iris_ellipse")
         self.reset_undo_stack(initial_state=self.get_current_state())

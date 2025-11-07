@@ -1,6 +1,6 @@
 [project]
 name = "eye_annotation_tool"
-version = "0.1.1"
+version = "0.2.1"
 description = "A tool for annotating pupil and iris in eye images"
 readme = "README.md"
 authors = [

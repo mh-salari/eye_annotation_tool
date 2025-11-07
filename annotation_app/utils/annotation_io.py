@@ -8,6 +8,7 @@ def save_annotations(
     pupil_points,
     iris_points,
     eyelid_contour_points,
+    glint_points,
     pupil_ellipse,
     iris_ellipse,
 ):
@@ -15,6 +16,7 @@ def save_annotations(
         "pupil_points": [(p.x(), p.y()) for p in pupil_points],
         "iris_points": [(p.x(), p.y()) for p in iris_points],
         "eyelid_contour_points": [(p.x(), p.y()) for p in eyelid_contour_points],
+        "glint_points": [(p.x(), p.y()) for p in glint_points],
         "pupil_ellipse": ellipse_to_dict(pupil_ellipse),
         "iris_ellipse": ellipse_to_dict(iris_ellipse),
     }
@@ -32,6 +34,7 @@ def load_annotations(annotation_path):
             "eyelid_contour_points": [
                 QPointF(x, y) for x, y in ann.get("eyelid_contour_points", [])
             ],
+            "glint_points": [QPointF(x, y) for x, y in ann.get("glint_points", [])],
             "pupil_ellipse": dict_to_ellipse(ann.get("pupil_ellipse")),
             "iris_ellipse": dict_to_ellipse(ann.get("iris_ellipse")),
         }
@@ -40,6 +43,7 @@ def load_annotations(annotation_path):
             "pupil_points": [],
             "iris_points": [],
             "eyelid_contour_points": [],
+            "glint_points": [],
             "pupil_ellipse": None,
             "iris_ellipse": None,
         }

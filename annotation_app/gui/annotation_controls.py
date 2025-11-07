@@ -14,6 +14,7 @@ class AnnotationControlPanel(QWidget):
     clear_pupil_requested = pyqtSignal()
     clear_iris_requested = pyqtSignal()
     clear_eyelid_points_requested = pyqtSignal()
+    clear_glint_points_requested = pyqtSignal()
     clear_all_requested = pyqtSignal()
     ai_assist_requested = pyqtSignal()
     clear_selected_annotation_requested = pyqtSignal()
@@ -29,12 +30,14 @@ class AnnotationControlPanel(QWidget):
         self.pupil_radio = QRadioButton("Pupil")
         self.iris_radio = QRadioButton("iris")
         self.eyelid_contour_radio = QRadioButton("Eyelid Contour")
+        self.glint_radio = QRadioButton("Glint")
         self.pupil_radio.setChecked(True)
 
         self.button_group = QButtonGroup()
         self.button_group.addButton(self.pupil_radio)
         self.button_group.addButton(self.iris_radio)
         self.button_group.addButton(self.eyelid_contour_radio)
+        self.button_group.addButton(self.glint_radio)
         self.button_group.buttonClicked.connect(self.on_annotation_changed)
 
         # Buttons for fit annotation
@@ -57,6 +60,11 @@ class AnnotationControlPanel(QWidget):
             self.clear_eyelid_points_requested.emit
         )
 
+        self.clear_glint_points_button = MaterialButton("Clear Glint Points")
+        self.clear_glint_points_button.clicked.connect(
+            self.clear_glint_points_requested.emit
+        )
+
         self.clear_all_button = MaterialButton("Clear All")
         self.clear_all_button.clicked.connect(self.clear_all_requested.emit)
 
@@ -67,11 +75,13 @@ class AnnotationControlPanel(QWidget):
         layout.addWidget(self.pupil_radio)
         layout.addWidget(self.iris_radio)
         layout.addWidget(self.eyelid_contour_radio)
+        layout.addWidget(self.glint_radio)
         layout.addWidget(self.fit_button)
         layout.addWidget(self.clear_selected_button)
         layout.addWidget(self.clear_pupil_button)
         layout.addWidget(self.clear_iris_button)
         layout.addWidget(self.clear_eyelid_points_button)
+        layout.addWidget(self.clear_glint_points_button)
         layout.addWidget(self.clear_all_button)
         layout.addWidget(self.ai_assist_button)
         layout.addStretch(1)
@@ -79,11 +89,14 @@ class AnnotationControlPanel(QWidget):
         self.setLayout(layout)
 
     def on_annotation_changed(self, button):
-        annotation_type = (
-            "pupil"
-            if button == self.pupil_radio
-            else "iris" if button == self.iris_radio else "eyelid_contour"
-        )
+        if button == self.pupil_radio:
+            annotation_type = "pupil"
+        elif button == self.iris_radio:
+            annotation_type = "iris"
+        elif button == self.eyelid_contour_radio:
+            annotation_type = "eyelid_contour"
+        else:  # glint_radio
+            annotation_type = "glint"
         self.annotation_changed.emit(annotation_type)
 
     def set_current_annotation(self, annotation_type):
@@ -91,21 +104,17 @@ class AnnotationControlPanel(QWidget):
             self.pupil_radio.setChecked(True)
         elif annotation_type == "iris":
             self.iris_radio.setChecked(True)
-        else:
+        elif annotation_type == "eyelid_contour":
             self.eyelid_contour_radio.setChecked(True)
+        else:  # glint
+            self.glint_radio.setChecked(True)
 
     def get_current_annotation_type(self):
         if self.pupil_radio.isChecked():
             return "pupil"
         elif self.iris_radio.isChecked():
             return "iris"
-        else:
+        elif self.eyelid_contour_radio.isChecked():
             return "eyelid_contour"
-
-    def get_current_annotation_type(self):
-        if self.pupil_radio.isChecked():
-            return "pupil"
-        elif self.iris_radio.isChecked():
-            return "iris"
         else:
-            return "eyelid_contour"
+            return "glint"
