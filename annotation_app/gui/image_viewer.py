@@ -1,9 +1,11 @@
-from PyQt5.QtWidgets import QLabel, QScrollArea, QWidget, QVBoxLayout, QMessageBox
-from PyQt5.QtGui import QPixmap, QPainter, QPen, QColor, QKeyEvent
-from PyQt5.QtCore import Qt, QPointF, QSizeF, pyqtSignal, QEvent, QPoint
 from collections import deque
-from ..utils.image_processing import find_closest_point, fit_ellipse
+
 import numpy as np
+from PyQt5.QtCore import QEvent, QPoint, QPointF, QSizeF, Qt, pyqtSignal
+from PyQt5.QtGui import QColor, QKeyEvent, QPainter, QPen, QPixmap
+from PyQt5.QtWidgets import QLabel, QMessageBox, QScrollArea, QVBoxLayout, QWidget
+
+from ..utils.image_processing import find_closest_point, fit_ellipse
 
 
 class ImageViewer(QWidget):
@@ -20,7 +22,6 @@ class ImageViewer(QWidget):
         self.setFocusPolicy(Qt.StrongFocus)
         self.setAttribute(Qt.WA_MouseTracking, True)
         self.setMouseTracking(True)
-
 
     def setup_ui(self):
         layout = QVBoxLayout()
@@ -97,9 +98,7 @@ class ImageViewer(QWidget):
         state = self.get_current_state()
         if self.undo_index < len(self.undo_stack) - 1:
             # If we're not at the end of the stack, remove future states
-            self.undo_stack = deque(
-                list(self.undo_stack)[: self.undo_index + 1], maxlen=5
-            )
+            self.undo_stack = deque(list(self.undo_stack)[: self.undo_index + 1], maxlen=5)
         self.undo_stack.append(state)
         self.undo_index = len(self.undo_stack) - 1
 
@@ -130,6 +129,7 @@ class ImageViewer(QWidget):
             self.shift_pressed = True
         else:
             super().keyPressEvent(event)
+
     def keyReleaseEvent(self, event: QKeyEvent):
         if event.key() == Qt.Key_Shift:
             self.shift_pressed = False
@@ -161,9 +161,7 @@ class ImageViewer(QWidget):
         elif event.button() == Qt.LeftButton:
             image_pos = self.get_image_position(event.pos())
             if image_pos:
-                self.selected_point, selected_annotation = (
-                    self.find_closest_point_and_type(image_pos)
-                )
+                self.selected_point, selected_annotation = self.find_closest_point_and_type(image_pos)
 
                 if self.selected_point:
                     self.moving_point = True
@@ -173,15 +171,14 @@ class ImageViewer(QWidget):
                     if selected_annotation != self.current_annotation:
                         self.current_annotation = selected_annotation
                         self.annotation_type_changed.emit(self.current_annotation)
-                else:
-                    if self.current_annotation == "pupil":
-                        self.pupil_points.append(image_pos)
-                    elif self.current_annotation == "iris":
-                        self.iris_points.append(image_pos)
-                    elif self.current_annotation == "eyelid_contour":
-                        self.eyelid_contour_points.append(image_pos)
-                    else:  # glint
-                        self.glint_points.append(image_pos)
+                elif self.current_annotation == "pupil":
+                    self.pupil_points.append(image_pos)
+                elif self.current_annotation == "iris":
+                    self.iris_points.append(image_pos)
+                elif self.current_annotation == "eyelid_contour":
+                    self.eyelid_contour_points.append(image_pos)
+                else:  # glint
+                    self.glint_points.append(image_pos)
 
                 self.save_state()
                 self.annotation_changed.emit()
@@ -190,12 +187,8 @@ class ImageViewer(QWidget):
     def mouseMoveEvent(self, event):
         if self.panning:
             delta = event.pos() - self.last_pan_pos
-            self.scroll_area.horizontalScrollBar().setValue(
-                self.scroll_area.horizontalScrollBar().value() - delta.x()
-            )
-            self.scroll_area.verticalScrollBar().setValue(
-                self.scroll_area.verticalScrollBar().value() - delta.y()
-            )
+            self.scroll_area.horizontalScrollBar().setValue(self.scroll_area.horizontalScrollBar().value() - delta.x())
+            self.scroll_area.verticalScrollBar().setValue(self.scroll_area.verticalScrollBar().value() - delta.y())
             self.last_pan_pos = event.pos()
         elif self.moving_point and self.selected_point:
             new_pos = self.get_image_position(event.pos())
@@ -203,7 +196,7 @@ class ImageViewer(QWidget):
                 # Calculate the movement delta
                 delta_x = new_pos.x() - self.last_mouse_pos.x()
                 delta_y = new_pos.y() - self.last_mouse_pos.y()
-                
+
                 if self.moving_all_points:
                     # Move all points in the current annotation type
                     if self.current_annotation == "pupil":
@@ -214,21 +207,20 @@ class ImageViewer(QWidget):
                         self.move_points_by_delta(self.eyelid_contour_points, delta_x, delta_y)
                     else:  # glint
                         self.move_points_by_delta(self.glint_points, delta_x, delta_y)
-                else:
-                    # Move only the selected point
-                    if self.current_annotation == "pupil":
-                        index = self.pupil_points.index(self.selected_point)
-                        self.pupil_points[index] = new_pos
-                    elif self.current_annotation == "iris":
-                        index = self.iris_points.index(self.selected_point)
-                        self.iris_points[index] = new_pos
-                    elif self.current_annotation == "eyelid_contour":
-                        index = self.eyelid_contour_points.index(self.selected_point)
-                        self.eyelid_contour_points[index] = new_pos
-                    else:  # glint
-                        index = self.glint_points.index(self.selected_point)
-                        self.glint_points[index] = new_pos
-                
+                # Move only the selected point
+                elif self.current_annotation == "pupil":
+                    index = self.pupil_points.index(self.selected_point)
+                    self.pupil_points[index] = new_pos
+                elif self.current_annotation == "iris":
+                    index = self.iris_points.index(self.selected_point)
+                    self.iris_points[index] = new_pos
+                elif self.current_annotation == "eyelid_contour":
+                    index = self.eyelid_contour_points.index(self.selected_point)
+                    self.eyelid_contour_points[index] = new_pos
+                else:  # glint
+                    index = self.glint_points.index(self.selected_point)
+                    self.glint_points[index] = new_pos
+
                 self.selected_point = new_pos
                 self.last_mouse_pos = new_pos
                 self.update_image()
@@ -270,7 +262,6 @@ class ImageViewer(QWidget):
             and event.type() == QEvent.Wheel
             and event.modifiers() == Qt.ControlModifier
         ):
-
             zoom_in = event.angleDelta().y() > 0
             self.zoom(zoom_in, event.position().toPoint())
             return True  # Event handled, don't propagate further
@@ -288,9 +279,7 @@ class ImageViewer(QWidget):
 
         # Calculate the new scroll position to keep the point under the cursor fixed
         viewport_center = self.scroll_area.viewport().rect().center()
-        scene_pos = self.scroll_area.mapToGlobal(viewport_center) - self.mapToGlobal(
-            QPoint(0, 0)
-        )
+        scene_pos = self.scroll_area.mapToGlobal(viewport_center) - self.mapToGlobal(QPoint(0, 0))
         delta = pos - scene_pos
 
         h_bar = self.scroll_area.horizontalScrollBar()
@@ -333,10 +322,7 @@ class ImageViewer(QWidget):
         ]:
             for point in points:
                 scaled_point = QPointF(point.x() * self.factor, point.y() * self.factor)
-                if (
-                    point == self.selected_point
-                    and self.current_annotation == annotation_type
-                ):
+                if point == self.selected_point and self.current_annotation == annotation_type:
                     if annotation_type == "pupil":
                         painter.setPen(QPen(self.pupil_select_color, 3, Qt.SolidLine))
                     elif annotation_type == "iris":
@@ -366,9 +352,7 @@ class ImageViewer(QWidget):
         painter.save()
         painter.translate(scaled_center)
         painter.rotate(angle)
-        painter.drawEllipse(
-            QPointF(0, 0), scaled_size.width() / 2, scaled_size.height() / 2
-        )
+        painter.drawEllipse(QPointF(0, 0), scaled_size.width() / 2, scaled_size.height() / 2)
         painter.restore()
 
     def find_closest_point_and_type(self, pos):
@@ -400,9 +384,7 @@ class ImageViewer(QWidget):
         if self.pixmap:
             widget_pos = self.scroll_area.mapFrom(self, pos)
             image_pos = self.image_label.mapFrom(self.scroll_area, widget_pos)
-            scaled_pos = QPointF(
-                image_pos.x() / self.factor, image_pos.y() / self.factor
-            )
+            scaled_pos = QPointF(image_pos.x() / self.factor, image_pos.y() / self.factor)
             if (
                 0 <= scaled_pos.x() < self.original_pixmap.width()
                 and 0 <= scaled_pos.y() < self.original_pixmap.height()
@@ -413,9 +395,7 @@ class ImageViewer(QWidget):
     def set_current_annotation(self, annotation_type):
         if self.current_annotation != annotation_type:
             self.current_annotation = annotation_type
-            self.annotation_type_changed.emit(
-                self.current_annotation
-            )  # Emit the new signal
+            self.annotation_type_changed.emit(self.current_annotation)  # Emit the new signal
         self.annotation_changed.emit()
 
     def clear_pupil_points(self):
@@ -483,11 +463,7 @@ class ImageViewer(QWidget):
         self.update_image()
 
     def fit_ellipse(self):
-        points = (
-            self.pupil_points
-            if self.current_annotation == "pupil"
-            else self.iris_points
-        )
+        points = self.pupil_points if self.current_annotation == "pupil" else self.iris_points
         if len(points) >= 5:
             x = np.array([p.x() for p in points])
             y = np.array([p.y() for p in points])
@@ -503,7 +479,7 @@ class ImageViewer(QWidget):
             self.annotation_changed.emit()
             self.update_image()
             return True
-        elif len(points) != 0:
+        if len(points) != 0:
             QMessageBox.warning(
                 self,
                 "Warning",

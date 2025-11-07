@@ -1,4 +1,4 @@
-from .plugin_manager import PluginManager
 from .plugin_interface import DetectorPlugin
+from .plugin_manager import PluginManager
 
-__all__ = ['PluginManager', 'DetectorPlugin']
+__all__ = ["DetectorPlugin", "PluginManager"]

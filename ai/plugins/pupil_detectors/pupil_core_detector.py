@@ -1,7 +1,8 @@
-from ai.plugin_interface import DetectorPlugin
-from pupil_detectors import Detector2D
-import numpy as np
 import cv2
+import numpy as np
+from pupil_detectors import Detector2D
+
+from ai.plugin_interface import DetectorPlugin
 
 
 class PupilCoreDetector(DetectorPlugin):
@@ -24,9 +25,7 @@ class PupilCoreDetector(DetectorPlugin):
 
         t = np.linspace(0, 2 * np.pi, 5, endpoint=False)
         points = np.column_stack([axes[0] * np.cos(t), axes[1] * np.sin(t)])
-        rotation_matrix = np.array(
-            [[np.cos(angle), -np.sin(angle)], [np.sin(angle), np.cos(angle)]]
-        )
+        rotation_matrix = np.array([[np.cos(angle), -np.sin(angle)], [np.sin(angle), np.cos(angle)]])
         points = np.dot(points, rotation_matrix.T) + center
 
         return ellipse, points.tolist()

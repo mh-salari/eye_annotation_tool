@@ -1,5 +1,6 @@
-import os
 import importlib.util
+import os
+
 from .plugin_interface import DetectorPlugin
 
 
@@ -31,20 +32,14 @@ class PluginManager:
                 spec.loader.exec_module(module)
                 for item_name in dir(module):
                     item = getattr(module, item_name)
-                    if (
-                        isinstance(item, type)
-                        and issubclass(item, DetectorPlugin)
-                        and item is not DetectorPlugin
-                    ):
+                    if isinstance(item, type) and issubclass(item, DetectorPlugin) and item is not DetectorPlugin:
                         plugin_instance = item()
                         if plugin_type == "pupil_detectors":
                             self.pupil_detectors[plugin_instance.name] = plugin_instance
                         elif plugin_type == "iris_detectors":
                             self.iris_detectors[plugin_instance.name] = plugin_instance
                         elif plugin_type == "eyelid_detectors":
-                            self.eyelid_detectors[plugin_instance.name] = (
-                                plugin_instance
-                            )
+                            self.eyelid_detectors[plugin_instance.name] = plugin_instance
                         else:
                             print(f"Unknown plugin type: {plugin_type}")
 

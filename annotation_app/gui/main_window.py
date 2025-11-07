@@ -1,30 +1,31 @@
-import os
 import ast
+import os
 
+from PyQt5.QtCore import QEvent, QRect, Qt
+from PyQt5.QtGui import QCloseEvent, QIcon, QPixmap
 from PyQt5.QtWidgets import (
-    QMainWindow,
-    QWidget,
-    QHBoxLayout,
-    QVBoxLayout,
+    QApplication,
     QFileDialog,
+    QHBoxLayout,
     QLabel,
     QListWidget,
+    QMainWindow,
     QMessageBox,
-    QApplication,
+    QVBoxLayout,
+    QWidget,
 )
-from PyQt5.QtGui import QIcon, QPixmap, QCloseEvent
-from PyQt5.QtCore import Qt, QEvent, QRect
 
-from .image_viewer import ImageViewer
+from ai import PluginManager
+
+from ..controllers.annotation_controller import AnnotationController
+from ..controllers.navigation_controller import NavigationController
+from ..utils.settings_handler import SettingsHandler
+from .ai_assist_handler import AIAssistHandler
 from .annotation_controls import AnnotationControlPanel
 from .custom_widgets import MaterialButton
+from .image_viewer import ImageViewer
 from .menu_handler import MenuHandler
 from .shortcut_handler import ShortcutHandler
-from .ai_assist_handler import AIAssistHandler
-from ..controllers.navigation_controller import NavigationController
-from ..controllers.annotation_controller import AnnotationController
-from ..utils.settings_handler import SettingsHandler
-from ai import PluginManager
 
 
 class MainWindow(QMainWindow):
@@ -48,9 +49,7 @@ class MainWindow(QMainWindow):
         self.connect_signals()
 
         # Set the application icon
-        icon_path = os.path.join(
-            os.path.dirname(__file__), "..", "resources", "app_icon.ico"
-        )
+        icon_path = os.path.join(os.path.dirname(__file__), "..", "resources", "app_icon.ico")
         self.setWindowIcon(QIcon(icon_path))
 
         # Store the screen size for later use
@@ -117,45 +116,21 @@ class MainWindow(QMainWindow):
         self.load_images_button.clicked.connect(self.load_images)
         self.prev_image_button.clicked.connect(self.navigation_controller.prev_image)
         self.next_image_button.clicked.connect(self.navigation_controller.next_image)
-        self.save_annotations_button.clicked.connect(
-            self.annotation_controller.save_annotations
-        )
-        self.image_list_widget.itemClicked.connect(
-            self.navigation_controller.on_image_selected
-        )
+        self.save_annotations_button.clicked.connect(self.annotation_controller.save_annotations)
+        self.image_list_widget.itemClicked.connect(self.navigation_controller.on_image_selected)
 
-        self.annotation_controls.annotation_changed.connect(
-            self.image_viewer.set_current_annotation
-        )
-        self.annotation_controls.fit_annotation_requested.connect(
-            self.image_viewer.fit_annotation
-        )
-        self.annotation_controls.clear_selected_annotation_requested.connect(
-            self.image_viewer.clear_selected_ellipse
-        )
-        self.annotation_controls.clear_pupil_requested.connect(
-            self.image_viewer.clear_pupil_points
-        )
-        self.annotation_controls.clear_iris_requested.connect(
-            self.image_viewer.clear_iris_points
-        )
-        self.annotation_controls.clear_eyelid_points_requested.connect(
-            self.image_viewer.clear_eyelid_points
-        )
-        self.annotation_controls.clear_glint_points_requested.connect(
-            self.image_viewer.clear_glint_points
-        )
-        self.annotation_controls.clear_all_requested.connect(
-            self.image_viewer.clear_all
-        )
-        self.annotation_controls.ai_assist_requested.connect(
-            self.ai_assist_handler.on_ai_assist_requested
-        )
+        self.annotation_controls.annotation_changed.connect(self.image_viewer.set_current_annotation)
+        self.annotation_controls.fit_annotation_requested.connect(self.image_viewer.fit_annotation)
+        self.annotation_controls.clear_selected_annotation_requested.connect(self.image_viewer.clear_selected_ellipse)
+        self.annotation_controls.clear_pupil_requested.connect(self.image_viewer.clear_pupil_points)
+        self.annotation_controls.clear_iris_requested.connect(self.image_viewer.clear_iris_points)
+        self.annotation_controls.clear_eyelid_points_requested.connect(self.image_viewer.clear_eyelid_points)
+        self.annotation_controls.clear_glint_points_requested.connect(self.image_viewer.clear_glint_points)
+        self.annotation_controls.clear_all_requested.connect(self.image_viewer.clear_all)
+        self.annotation_controls.ai_assist_requested.connect(self.ai_assist_handler.on_ai_assist_requested)
 
         self.image_viewer.annotation_changed.connect(self.on_annotation_changed)
-        self.image_viewer.annotation_type_changed.connect(
-            self.annotation_controls.set_current_annotation
-        )
+        self.image_viewer.annotation_type_changed.connect(self.annotation_controls.set_current_annotation)
 
     def load_images(self):
         file_dialog = QFileDialog()
@@ -179,14 +154,10 @@ class MainWindow(QMainWindow):
         if 0 <= self.current_image_index < len(self.image_paths):
             image_path = self.image_paths[self.current_image_index]
             if self.image_viewer.load_image(image_path):
-                self.setWindowTitle(
-                    f"EyE Annotation Tool - {os.path.basename(image_path)}"
-                )
+                self.setWindowTitle(f"EyE Annotation Tool - {os.path.basename(image_path)}")
                 self.annotation_controller.load_annotations()
             else:
-                QMessageBox.critical(
-                    self, "Error", f"Failed to load image: {image_path}"
-                )
+                QMessageBox.critical(self, "Error", f"Failed to load image: {image_path}")
 
     def save_current_annotations(self):
         self.annotation_controller.save_current_annotations()
@@ -216,12 +187,8 @@ class MainWindow(QMainWindow):
             new_height = int(available_geometry.height() * percentage)
 
             # Calculate new position to keep the window centered on the current screen
-            new_x = (
-                available_geometry.x() + (available_geometry.width() - new_width) // 2
-            )
-            new_y = (
-                available_geometry.y() + (available_geometry.height() - new_height) // 2
-            )
+            new_x = available_geometry.x() + (available_geometry.width() - new_width) // 2
+            new_y = available_geometry.y() + (available_geometry.height() - new_height) // 2
 
             # Set the new geometry (position and size)
             new_geometry = QRect(new_x, new_y, new_width, new_height)
@@ -278,7 +245,7 @@ class MainWindow(QMainWindow):
 
     def get_version_from_setup(self):
         setup_path = os.path.join(os.path.dirname(__file__), "..", "..", "setup.py")
-        with open(setup_path, "r") as file:
+        with open(setup_path) as file:
             tree = ast.parse(file.read())
             for node in ast.walk(tree):
                 if isinstance(node, ast.Call) and node.func.id == "setup":
@@ -294,7 +261,7 @@ class MainWindow(QMainWindow):
             "<p>Developed by "
             "<a href='https://mh-salari.ir/'"
             "style='color: #8b7aa2;'>Mohammadhossein Salari</a></p>"
-            f"<p>Current version: { self.get_version_from_setup()}</p>"
+            f"<p>Current version: {self.get_version_from_setup()}</p>"
             "<p>To get the latest version of Eye Annotation Tool, visit<br>"
             "<a href='https://github.com/mh-salari/eye_annotation_tool' "
             "style='color: #8b7aa2;' target='_blank' rel='noopener noreferrer'>"
@@ -316,13 +283,9 @@ class MainWindow(QMainWindow):
 
         # Add image
         image_label = QLabel()
-        image_path = os.path.join(
-            os.path.dirname(__file__), "..", "resources", "Funded_by_EU_Eyes4ICU.png"
-        )
+        image_path = os.path.join(os.path.dirname(__file__), "..", "resources", "Funded_by_EU_Eyes4ICU.png")
         pixmap = QPixmap(image_path)
-        image_label.setPixmap(
-            pixmap.scaled(400, 100, Qt.KeepAspectRatio, Qt.SmoothTransformation)
-        )
+        image_label.setPixmap(pixmap.scaled(400, 100, Qt.KeepAspectRatio, Qt.SmoothTransformation))
         image_label.setAlignment(Qt.AlignCenter)
         layout.addWidget(image_label)
 
@@ -332,7 +295,5 @@ class MainWindow(QMainWindow):
         msg_box = QMessageBox(self)
         msg_box.setWindowTitle("About EyE Annotation Tool")
         msg_box.setIcon(QMessageBox.NoIcon)  # This removes the icon
-        msg_box.layout().addWidget(
-            about_widget, 0, 0, 1, msg_box.layout().columnCount()
-        )
+        msg_box.layout().addWidget(about_widget, 0, 0, 1, msg_box.layout().columnCount())
         msg_box.exec_()

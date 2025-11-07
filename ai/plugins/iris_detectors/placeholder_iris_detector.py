@@ -1,5 +1,6 @@
-from ai.plugin_interface import DetectorPlugin
 import numpy as np
+
+from ai.plugin_interface import DetectorPlugin
 
 
 class PlaceholderirisDetector(DetectorPlugin):

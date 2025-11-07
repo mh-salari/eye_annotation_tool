@@ -1,10 +1,11 @@
-from PyQt5.QtWidgets import (
-    QWidget,
-    QVBoxLayout,
-    QRadioButton,
-    QButtonGroup,
-)
 from PyQt5.QtCore import pyqtSignal
+from PyQt5.QtWidgets import (
+    QButtonGroup,
+    QRadioButton,
+    QVBoxLayout,
+    QWidget,
+)
+
 from .custom_widgets import MaterialButton
 
 
@@ -45,9 +46,7 @@ class AnnotationControlPanel(QWidget):
         self.fit_button.clicked.connect(self.fit_annotation_requested.emit)
 
         self.clear_selected_button = MaterialButton("Clear Selected Annotation")
-        self.clear_selected_button.clicked.connect(
-            self.clear_selected_annotation_requested.emit
-        )
+        self.clear_selected_button.clicked.connect(self.clear_selected_annotation_requested.emit)
 
         self.clear_pupil_button = MaterialButton("Clear Pupil Points")
         self.clear_pupil_button.clicked.connect(self.clear_pupil_requested.emit)
@@ -56,14 +55,10 @@ class AnnotationControlPanel(QWidget):
         self.clear_iris_button.clicked.connect(self.clear_iris_requested.emit)
 
         self.clear_eyelid_points_button = MaterialButton("Clear Eyelid Points")
-        self.clear_eyelid_points_button.clicked.connect(
-            self.clear_eyelid_points_requested.emit
-        )
+        self.clear_eyelid_points_button.clicked.connect(self.clear_eyelid_points_requested.emit)
 
         self.clear_glint_points_button = MaterialButton("Clear Glint Points")
-        self.clear_glint_points_button.clicked.connect(
-            self.clear_glint_points_requested.emit
-        )
+        self.clear_glint_points_button.clicked.connect(self.clear_glint_points_requested.emit)
 
         self.clear_all_button = MaterialButton("Clear All")
         self.clear_all_button.clicked.connect(self.clear_all_requested.emit)
@@ -112,9 +107,8 @@ class AnnotationControlPanel(QWidget):
     def get_current_annotation_type(self):
         if self.pupil_radio.isChecked():
             return "pupil"
-        elif self.iris_radio.isChecked():
+        if self.iris_radio.isChecked():
             return "iris"
-        elif self.eyelid_contour_radio.isChecked():
+        if self.eyelid_contour_radio.isChecked():
             return "eyelid_contour"
-        else:
-            return "glint"
+        return "glint"

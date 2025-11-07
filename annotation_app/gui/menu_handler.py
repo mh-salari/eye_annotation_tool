@@ -26,9 +26,7 @@ class MenuHandler:
         file_menu.addAction(load_action)
 
         save_action = QAction("Save Annotations", self.main_window)
-        save_action.triggered.connect(
-            self.main_window.annotation_controller.save_annotations
-        )
+        save_action.triggered.connect(self.main_window.annotation_controller.save_annotations)
         file_menu.addAction(save_action)
 
         exit_action = QAction("Exit", self.main_window)
@@ -59,24 +57,14 @@ class MenuHandler:
         for detector in detectors:
             action = QAction(detector, self.main_window)
             action.setCheckable(True)
-            action.setChecked(
-                self.main_window.settings_handler.get_setting(detector_type) == detector
-            )
-            action.triggered.connect(
-                lambda checked, d=detector: self.main_window.change_detector(
-                    detector_type, d
-                )
-            )
+            action.setChecked(self.main_window.settings_handler.get_setting(detector_type) == detector)
+            action.triggered.connect(lambda checked, d=detector: self.main_window.change_detector(detector_type, d))
             menu.addAction(action)
 
-        disable_action = QAction(f"Disable", self.main_window)
+        disable_action = QAction("Disable", self.main_window)
         disable_action.setCheckable(True)
-        disable_action.setChecked(
-            self.main_window.settings_handler.get_setting(detector_type) == "disabled"
-        )
-        disable_action.triggered.connect(
-            lambda: self.main_window.change_detector(detector_type, "disabled")
-        )
+        disable_action.setChecked(self.main_window.settings_handler.get_setting(detector_type) == "disabled")
+        disable_action.triggered.connect(lambda: self.main_window.change_detector(detector_type, "disabled"))
         menu.addAction(disable_action)
 
     def update_menu_checks(self):

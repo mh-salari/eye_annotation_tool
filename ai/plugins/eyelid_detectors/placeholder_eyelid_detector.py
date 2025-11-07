@@ -1,5 +1,5 @@
+
 from ai.plugin_interface import DetectorPlugin
-import numpy as np
 
 
 class PlaceholderEyelidDetector(DetectorPlugin):

@@ -1,9 +1,11 @@
 import os
+
 from PyQt5.QtWidgets import QMessageBox
+
 from ..utils.annotation_io import (
-    save_annotations,
-    load_annotations,
     get_annotation_path,
+    load_annotations,
+    save_annotations,
 )
 
 
@@ -15,15 +17,10 @@ class AnnotationController:
         self.save_current_annotations()
 
     def save_current_annotations(self):
-        if (
-            self.main_window.annotation_modified
-            and 0
-            <= self.main_window.current_image_index
-            < len(self.main_window.image_paths)
+        if self.main_window.annotation_modified and 0 <= self.main_window.current_image_index < len(
+            self.main_window.image_paths
         ):
-            image_path = self.main_window.image_paths[
-                self.main_window.current_image_index
-            ]
+            image_path = self.main_window.image_paths[self.main_window.current_image_index]
             annotation_path = get_annotation_path(image_path)
 
             if os.path.exists(annotation_path):
@@ -43,14 +40,8 @@ class AnnotationController:
             # QMessageBox.information(self.main_window, "Success", "Annotations saved successfully.")
 
     def load_annotations(self):
-        if (
-            0
-            <= self.main_window.current_image_index
-            < len(self.main_window.image_paths)
-        ):
-            image_path = self.main_window.image_paths[
-                self.main_window.current_image_index
-            ]
+        if 0 <= self.main_window.current_image_index < len(self.main_window.image_paths):
+            image_path = self.main_window.image_paths[self.main_window.current_image_index]
             annotation_path = get_annotation_path(image_path)
             annotation_data = load_annotations(annotation_path)
             self.main_window.image_viewer.set_annotation_data(annotation_data)
@@ -69,8 +60,8 @@ class AnnotationController:
             if reply == QMessageBox.Save:
                 self.save_annotations()
                 return True
-            elif reply == QMessageBox.Discard:
+            if reply == QMessageBox.Discard:
                 return True
-            else:  # Cancel
-                return False
+            # Cancel
+            return False
         return True

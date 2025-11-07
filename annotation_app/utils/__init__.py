@@ -1,12 +1,12 @@
-from .image_processing import fit_ellipse, find_closest_point
-from .annotation_io import save_annotations, load_annotations, get_annotation_path
+from .annotation_io import get_annotation_path, load_annotations, save_annotations
+from .image_processing import find_closest_point, fit_ellipse
 from .settings_handler import SettingsHandler
 
 __all__ = [
-    'fit_ellipse',
-    'find_closest_point',
-    'save_annotations',
-    'load_annotations',
-    'get_annotation_path',
-    'SettingsHandler'
+    "SettingsHandler",
+    "find_closest_point",
+    "fit_ellipse",
+    "get_annotation_path",
+    "load_annotations",
+    "save_annotations",
 ]

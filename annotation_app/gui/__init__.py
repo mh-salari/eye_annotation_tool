@@ -1,17 +1,17 @@
-from .main_window import MainWindow
-from .image_viewer import ImageViewer
+from .ai_assist_handler import AIAssistHandler
 from .annotation_controls import AnnotationControlPanel
+from .custom_widgets import MaterialButton
+from .image_viewer import ImageViewer
+from .main_window import MainWindow
 from .menu_handler import MenuHandler
 from .shortcut_handler import ShortcutHandler
-from .ai_assist_handler import AIAssistHandler
-from .custom_widgets import MaterialButton
 
 __all__ = [
-    "MainWindow",
-    "ImageViewer",
+    "AIAssistHandler",
     "AnnotationControlPanel",
+    "ImageViewer",
+    "MainWindow",
+    "MaterialButton",
     "MenuHandler",
     "ShortcutHandler",
-    "AIAssistHandler",
-    "MaterialButton",
 ]

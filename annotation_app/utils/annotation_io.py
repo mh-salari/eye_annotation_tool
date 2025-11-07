@@ -1,5 +1,7 @@
-import os
 import json
+import os
+from itertools import starmap
+
 from PyQt5.QtCore import QPointF, QSizeF
 
 
@@ -26,27 +28,24 @@ def save_annotations(
 
 def load_annotations(annotation_path):
     if os.path.exists(annotation_path):
-        with open(annotation_path, "r") as f:
+        with open(annotation_path) as f:
             ann = json.load(f)
         return {
-            "pupil_points": [QPointF(x, y) for x, y in ann.get("pupil_points", [])],
-            "iris_points": [QPointF(x, y) for x, y in ann.get("iris_points", [])],
-            "eyelid_contour_points": [
-                QPointF(x, y) for x, y in ann.get("eyelid_contour_points", [])
-            ],
-            "glint_points": [QPointF(x, y) for x, y in ann.get("glint_points", [])],
+            "pupil_points": list(starmap(QPointF, ann.get("pupil_points", []))),
+            "iris_points": list(starmap(QPointF, ann.get("iris_points", []))),
+            "eyelid_contour_points": list(starmap(QPointF, ann.get("eyelid_contour_points", []))),
+            "glint_points": list(starmap(QPointF, ann.get("glint_points", []))),
             "pupil_ellipse": dict_to_ellipse(ann.get("pupil_ellipse")),
             "iris_ellipse": dict_to_ellipse(ann.get("iris_ellipse")),
         }
-    else:
-        return {
-            "pupil_points": [],
-            "iris_points": [],
-            "eyelid_contour_points": [],
-            "glint_points": [],
-            "pupil_ellipse": None,
-            "iris_ellipse": None,
-        }
+    return {
+        "pupil_points": [],
+        "iris_points": [],
+        "eyelid_contour_points": [],
+        "glint_points": [],
+        "pupil_ellipse": None,
+        "iris_ellipse": None,
+    }
 
 
 def get_annotation_path(image_path):

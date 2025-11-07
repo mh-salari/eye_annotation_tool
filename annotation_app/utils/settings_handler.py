@@ -10,14 +10,12 @@ DEFAULT_SETTINGS = {
 
 class SettingsHandler:
     def __init__(self):
-        self.settings_file = os.path.join(
-            os.path.dirname(__file__), "..", "..", "ai", "settings.json"
-        )
+        self.settings_file = os.path.join(os.path.dirname(__file__), "..", "..", "ai", "settings.json")
         self.settings = self.load_settings()
 
     def load_settings(self):
         if os.path.exists(self.settings_file):
-            with open(self.settings_file, "r") as f:
+            with open(self.settings_file) as f:
                 return json.load(f)
         return DEFAULT_SETTINGS.copy()
 

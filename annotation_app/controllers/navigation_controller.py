@@ -1,5 +1,6 @@
 from PyQt5.QtWidgets import QMessageBox
 
+
 class NavigationController:
     def __init__(self, main_window):
         self.main_window = main_window
@@ -10,7 +11,7 @@ class NavigationController:
                 reply = self.show_save_dialog()
                 if reply == QMessageBox.Cancel:
                     return
-                elif reply == QMessageBox.Yes:
+                if reply == QMessageBox.Yes:
                     self.main_window.save_current_annotations()
 
             self.main_window.current_image_index += 1
@@ -23,7 +24,7 @@ class NavigationController:
                 reply = self.show_save_dialog()
                 if reply == QMessageBox.Cancel:
                     return
-                elif reply == QMessageBox.Yes:
+                if reply == QMessageBox.Yes:
                     self.main_window.save_current_annotations()
 
             self.main_window.current_image_index -= 1
@@ -38,7 +39,7 @@ class NavigationController:
                 if reply == QMessageBox.Cancel:
                     self.main_window.image_list_widget.setCurrentRow(self.main_window.current_image_index)
                     return
-                elif reply == QMessageBox.Yes:
+                if reply == QMessageBox.Yes:
                     self.main_window.save_current_annotations()
 
             self.main_window.current_image_index = selected_index
@@ -50,5 +51,5 @@ class NavigationController:
             "Save Changes",
             "Do you want to save the changes to the current image?",
             QMessageBox.Yes | QMessageBox.No | QMessageBox.Cancel,
-            QMessageBox.Yes
+            QMessageBox.Yes,
         )

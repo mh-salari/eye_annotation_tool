@@ -1,10 +1,9 @@
 import numpy as np
 from scipy import optimize
-from PyQt5.QtCore import QPointF
+
 
 def fit_ellipse(x, y):
-    """
-    Fit an ellipse to the given set of points.
+    """Fit an ellipse to the given set of points.
 
     Args:
         x (np.array): x-coordinates of the points
@@ -12,6 +11,7 @@ def fit_ellipse(x, y):
 
     Returns:
         np.array: Parameters of the fitted ellipse (xc, yc, a, b, theta)
+
     """
 
     def f(c):
@@ -39,9 +39,9 @@ def fit_ellipse(x, y):
 
     return result.x
 
+
 def find_closest_point(points, pos, factor):
-    """
-    Find the closest point to the given position.
+    """Find the closest point to the given position.
 
     Args:
         points (list): List of QPointF objects representing the points.
@@ -50,6 +50,7 @@ def find_closest_point(points, pos, factor):
 
     Returns:
         QPointF or None: The closest point if within the threshold, otherwise None.
+
     """
     min_dist = float("inf")
     closest_point = None
