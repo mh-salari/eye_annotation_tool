@@ -1,0 +1,46 @@
+[project]
+name = "eye_annotation_tool"
+version = "0.1.1"
+description = "A tool for annotating pupil and iris in eye images"
+readme = "README.md"
+authors = [
+    { name = "Mohammadhossein Salari", email = "mohammadhossein.salari@gmail.com" }
+]
+requires-python = ">=3.8"
+license = { text = "MIT" }
+keywords = ["eye", "annotation", "pupil", "iris", "eyelid", "computer vision"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+]
+
+dependencies = [
+    "PyQt5>=5.15.0",
+    "numpy>=1.20.0",
+    "opencv-python>=4.5.0",
+    "scipy>=1.7.0",
+    "pupil-detectors>=2.0.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/mh-salari/eye_annotation_tool"
+Repository = "https://github.com/mh-salari/eye_annotation_tool"
+
+[project.scripts]
+eye_annotation_tool = "annotation_app.main:run_app"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["annotation_app", "ai"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"annotation_app/resources" = "annotation_app/resources"

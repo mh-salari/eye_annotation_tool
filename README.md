@@ -17,24 +17,53 @@ EyE Annotation Tool is a tool for annotating pupil, iris and eyelid in eye image
 
 ## Installation
 
-You can install EyE Annotation Tool using pip:
+### Using uv (Recommended)
+
+First, install [uv](https://docs.astral.sh/uv/) if you haven't already:
+
+```bash
+curl -LsSf https://astral.sh/uv/install.sh | sh
+```
+
+Then install and run the tool:
+
+```bash
+# Clone the repository
+git clone https://github.com/mh-salari/eye_annotation_tool.git
+cd eye_annotation_tool
+
+# Install dependencies
+uv sync
+
+# Run the tool
+uv run eye_annotation_tool
+```
+
+### Using pip (Alternative)
+
+You can also install EyE Annotation Tool using pip:
 
 ```bash
 pip install eye_annotation_tool
 ```
 
-Or, for the latest development version, clone this repository and install:
+Or for the latest development version:
 
 ```bash
 git clone https://github.com/mh-salari/eye_annotation_tool.git
 cd eye_annotation_tool
-python setup.py sdist bdist_wheel
 pip install -e .
 ```
 
 ## Usage
 
-To run EyE Annotation Tool, use the following command:
+### With uv
+
+```bash
+uv run eye_annotation_tool
+```
+
+### With pip installation
 
 ```bash
 eye_annotation_tool
