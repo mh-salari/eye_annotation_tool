@@ -1,14 +1,24 @@
+"""Handler for AI-assisted annotation functionality."""
+
 from itertools import starmap
+from typing import TYPE_CHECKING
 
 from PyQt5.QtCore import QPointF, QSizeF
 from PyQt5.QtWidgets import QMessageBox
 
+if TYPE_CHECKING:
+    from .main_window import MainWindow
+
 
 class AIAssistHandler:
-    def __init__(self, main_window):
+    """Manages AI-assisted detection and annotation."""
+
+    def __init__(self, main_window: "MainWindow") -> None:
+        """Initialize the AIAssistHandler."""
         self.main_window = main_window
 
-    def on_ai_assist_requested(self):
+    def on_ai_assist_requested(self) -> None:
+        """Handle AI assist button click to run detectors on current image."""
         if self.main_window.current_image_index >= 0:
             image_path = self.main_window.image_paths[self.main_window.current_image_index]
 
@@ -27,7 +37,8 @@ class AIAssistHandler:
                 self.update_annotation_controls()
                 self.main_window.image_viewer.annotation_changed.emit()
 
-    def detect_and_update(self, detector_type, image_path):
+    def detect_and_update(self, detector_type: str, image_path: str) -> bool:
+        """Run a detector and update annotations."""
         changes_made = False
         detector_name = self.main_window.settings_handler.get_setting(detector_type)
         if detector_name != "disabled":
@@ -83,7 +94,8 @@ class AIAssistHandler:
             changes_made = True
         return changes_made
 
-    def update_annotation_controls(self):
+    def update_annotation_controls(self) -> None:
+        """Update annotation controls based on active detectors."""
         pupil_detector_name = self.main_window.settings_handler.get_setting("pupil_detector")
         iris_detector_name = self.main_window.settings_handler.get_setting("iris_detector")
         eyelid_detector_name = self.main_window.settings_handler.get_setting("eyelid_detector")

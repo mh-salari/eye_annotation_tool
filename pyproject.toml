@@ -1,6 +1,6 @@
 [project]
 name = "eye_annotation_tool"
-version = "0.2.1"
+version = "0.3.0"
 description = "A tool for annotating pupil and iris in eye images"
 readme = "README.md"
 authors = [
@@ -48,10 +48,6 @@ packages = ["annotation_app", "ai"]
 [tool.ruff]
 line-length = 119
 preview = true
-
-[tool.ruff.lint]
-# Allow Greek letters used in mathematical notation in this codebase
-allowed-confusables = ["α", "β", "κ"]
 
 # RUFF DEFAULTS
 # (These are all the default groups, even if you don't currently select them)

@@ -1,3 +1,5 @@
+"""Image viewer widget for displaying and annotating eye images."""
+
 from collections import deque
 
 import numpy as np
@@ -9,10 +11,13 @@ from ..utils.image_processing import find_closest_point, fit_ellipse
 
 
 class ImageViewer(QWidget):
+    """Widget for viewing and annotating eye images with pupil, iris, eyelid, and glint markers."""
+
     annotation_changed = pyqtSignal()
     annotation_type_changed = pyqtSignal(str)
 
-    def __init__(self, parent=None):
+    def __init__(self, parent: QWidget | None = None) -> None:
+        """Initialize the ImageViewer."""
         super().__init__(parent)
         self.setup_ui()
         self.setup_variables()
@@ -23,7 +28,8 @@ class ImageViewer(QWidget):
         self.setAttribute(Qt.WA_MouseTracking, True)
         self.setMouseTracking(True)
 
-    def setup_ui(self):
+    def setup_ui(self) -> None:
+        """Set up the user interface components."""
         layout = QVBoxLayout()
         self.image_label = QLabel()
         self.image_label.setAlignment(Qt.AlignCenter)
@@ -35,7 +41,8 @@ class ImageViewer(QWidget):
 
         self.scroll_area.viewport().installEventFilter(self)
 
-    def setup_variables(self):
+    def setup_variables(self) -> None:
+        """Initialize instance variables."""
         self.factor = 1.0
         self.pupil_points = []
         self.iris_points = []
@@ -55,8 +62,9 @@ class ImageViewer(QWidget):
         self.last_mouse_pos = None
         self.moving_all_points = False
 
-    def setup_colors(self):
+    def setup_colors(self) -> None:
         # Define colors with transparency
+        """Set up color definitions for annotations."""
         self.pupil_color = QColor(150, 213, 116, 255)
         self.pupil_select_color = QColor(249, 248, 113, 255)
         self.pupil_ellipse_color = QColor(0, 127, 118, 255)
@@ -72,11 +80,13 @@ class ImageViewer(QWidget):
         self.glint_color = QColor(255, 165, 0, 255)  # Orange
         self.glint_select_color = QColor(255, 215, 0, 255)  # Gold
 
-    def setup_undo_system(self):
+    def setup_undo_system(self) -> None:
+        """Initialize the undo/redo system."""
         self.undo_stack = deque(maxlen=10)
         self.undo_index = -1
 
-    def reset_undo_stack(self, initial_state=None):
+    def reset_undo_stack(self, initial_state: dict | None = None) -> None:
+        """Reset the undo stack to initial state."""
         self.undo_stack.clear()
         self.undo_index = -1
         if initial_state is None:
@@ -84,7 +94,8 @@ class ImageViewer(QWidget):
         self.undo_stack.append(initial_state)
         self.undo_index = 0
 
-    def get_current_state(self):
+    def get_current_state(self) -> dict:
+        """Get the current state of all annotations."""
         return {
             "pupil_points": self.pupil_points.copy(),
             "iris_points": self.iris_points.copy(),
@@ -94,7 +105,8 @@ class ImageViewer(QWidget):
             "iris_ellipse": self.iris_ellipse,
         }
 
-    def save_state(self):
+    def save_state(self) -> None:
+        """Save the current state to the undo stack."""
         state = self.get_current_state()
         if self.undo_index < len(self.undo_stack) - 1:
             # If we're not at the end of the stack, remove future states
@@ -102,10 +114,12 @@ class ImageViewer(QWidget):
         self.undo_stack.append(state)
         self.undo_index = len(self.undo_stack) - 1
 
-    def can_undo(self):
+    def can_undo(self) -> bool:
+        """Check if undo operation is available."""
         return self.undo_index > 0
 
-    def undo(self):
+    def undo(self) -> None:
+        """Undo the last annotation change."""
         if self.can_undo():
             self.undo_index -= 1
             state = self.undo_stack[self.undo_index]
@@ -118,7 +132,8 @@ class ImageViewer(QWidget):
             self.update_image()
             self.annotation_changed.emit()
 
-    def keyPressEvent(self, event: QKeyEvent):
+    def keyPressEvent(self, event: QKeyEvent) -> None:  # noqa: N802
+        """Handle key press events."""
         if event.key() == Qt.Key_Plus or event.key() == Qt.Key_Equal:
             self.zoom(True, self.rect().center())
         elif event.key() == Qt.Key_Minus:
@@ -130,12 +145,14 @@ class ImageViewer(QWidget):
         else:
             super().keyPressEvent(event)
 
-    def keyReleaseEvent(self, event: QKeyEvent):
+    def keyReleaseEvent(self, event: QKeyEvent) -> None:  # noqa: N802
+        """Handle key release events."""
         if event.key() == Qt.Key_Shift:
             self.shift_pressed = False
         super().keyReleaseEvent(event)
 
-    def delete_selected_point(self):
+    def delete_selected_point(self) -> None:
+        """Delete the currently selected point."""
         if self.selected_point:
             if self.current_annotation == "pupil":
                 points = self.pupil_points
@@ -153,7 +170,8 @@ class ImageViewer(QWidget):
                 self.annotation_changed.emit()
                 self.update_image()
 
-    def mousePressEvent(self, event):
+    def mousePressEvent(self, event: QEvent) -> None:  # noqa: N802
+        """Handle mouse press events."""
         if event.button() == Qt.MiddleButton:
             self.panning = True
             self.last_pan_pos = event.pos()
@@ -184,7 +202,8 @@ class ImageViewer(QWidget):
                 self.annotation_changed.emit()
                 self.update_image()
 
-    def mouseMoveEvent(self, event):
+    def mouseMoveEvent(self, event: QEvent) -> None:  # noqa: N802
+        """Handle mouse move events."""
         if self.panning:
             delta = event.pos() - self.last_pan_pos
             self.scroll_area.horizontalScrollBar().setValue(self.scroll_area.horizontalScrollBar().value() - delta.x())
@@ -225,7 +244,8 @@ class ImageViewer(QWidget):
                 self.last_mouse_pos = new_pos
                 self.update_image()
 
-    def mouseReleaseEvent(self, event):
+    def mouseReleaseEvent(self, event: QEvent) -> None:  # noqa: N802
+        """Handle mouse release events."""
         if event.button() == Qt.MiddleButton:
             self.panning = False
             self.setCursor(Qt.ArrowCursor)
@@ -235,7 +255,8 @@ class ImageViewer(QWidget):
                 self.save_state()
                 self.annotation_changed.emit()
 
-    def wheelEvent(self, event):
+    def wheelEvent(self, event: QEvent) -> None:  # noqa: N802
+        """Handle mouse wheel events for zooming."""
         if event.modifiers() == Qt.ControlModifier:
             zoom_in = event.angleDelta().y() > 0
             self.zoom(zoom_in, event.position().toPoint())
@@ -244,7 +265,8 @@ class ImageViewer(QWidget):
             # Only allow scrolling when not zooming
             super().wheelEvent(event)
 
-    def load_image(self, image_path):
+    def load_image(self, image_path: str) -> bool:
+        """Load an image from the given path."""
         self.original_pixmap = QPixmap(image_path)
         if self.original_pixmap.isNull():
             return False
@@ -256,7 +278,8 @@ class ImageViewer(QWidget):
         self.update_image()
         return True
 
-    def eventFilter(self, source, event):
+    def eventFilter(self, source: QWidget, event: QEvent) -> bool:  # noqa: N802
+        """Filter events for window state changes."""
         if (
             source == self.scroll_area.viewport()
             and event.type() == QEvent.Wheel
@@ -268,7 +291,8 @@ class ImageViewer(QWidget):
 
         return super().eventFilter(source, event)  # Propagate other events
 
-    def zoom(self, zoom_in, pos):
+    def zoom(self, zoom_in: bool, pos: QPoint) -> None:
+        """Zoom in or out at the specified position."""
         old_factor = self.factor
         if zoom_in:
             self.factor *= 1.1
@@ -290,7 +314,8 @@ class ImageViewer(QWidget):
 
         self.update_image()
 
-    def update_image(self):
+    def update_image(self) -> None:
+        """Update the displayed image with annotations."""
         if self.original_pixmap is None or self.original_pixmap.isNull():
             return
         scaled_pixmap = self.original_pixmap.scaled(
@@ -308,12 +333,14 @@ class ImageViewer(QWidget):
         self.image_label.setPixmap(self.pixmap)
         self.image_label.resize(self.pixmap.size())
 
-    def fit_annotation(self):
-        if self.current_annotation in ["pupil", "iris"]:
+    def fit_annotation(self) -> bool:
+        """Fit an ellipse to the current annotation points."""
+        if self.current_annotation in {"pupil", "iris"}:
             return self.fit_ellipse()
         return False
 
-    def draw_points(self, painter):
+    def draw_points(self, painter: QPainter) -> None:
+        """Draw annotation points on the image."""
         for points, color, annotation_type in [
             (self.pupil_points, self.pupil_color, "pupil"),
             (self.iris_points, self.iris_color, "iris"),
@@ -335,7 +362,8 @@ class ImageViewer(QWidget):
                     painter.setPen(QPen(color, 3, Qt.SolidLine))
                 painter.drawEllipse(scaled_point, 1.5, 1.5)
 
-    def draw_ellipses(self, painter):
+    def draw_ellipses(self, painter: QPainter) -> None:
+        """Draw fitted ellipses on the image."""
         if self.pupil_ellipse:
             painter.setPen(QPen(self.pupil_ellipse_color, 1, Qt.SolidLine))
             self.draw_single_ellipse(painter, self.pupil_ellipse)
@@ -343,7 +371,8 @@ class ImageViewer(QWidget):
             painter.setPen(QPen(self.iris_ellipse_color, 1, Qt.SolidLine))
             self.draw_single_ellipse(painter, self.iris_ellipse)
 
-    def draw_single_ellipse(self, painter, ellipse):
+    def draw_single_ellipse(self, painter: QPainter, ellipse: tuple | None) -> None:
+        """Draw a single ellipse on the image."""
         if ellipse is None:
             return
         center, size, angle = ellipse
@@ -355,7 +384,8 @@ class ImageViewer(QWidget):
         painter.drawEllipse(QPointF(0, 0), scaled_size.width() / 2, scaled_size.height() / 2)
         painter.restore()
 
-    def find_closest_point_and_type(self, pos):
+    def find_closest_point_and_type(self, pos: QPointF) -> tuple[QPointF | None, str | None]:
+        """Find the closest point and its annotation type."""
         pupil_point = find_closest_point(self.pupil_points, pos, self.factor)
         iris_point = find_closest_point(self.iris_points, pos, self.factor)
         eyelid_point = find_closest_point(self.eyelid_contour_points, pos, self.factor)
@@ -380,7 +410,8 @@ class ImageViewer(QWidget):
 
         return closest_point, closest_type
 
-    def get_image_position(self, pos):
+    def get_image_position(self, pos: QPoint) -> QPointF | None:
+        """Convert widget position to image coordinates."""
         if self.pixmap:
             widget_pos = self.scroll_area.mapFrom(self, pos)
             image_pos = self.image_label.mapFrom(self.scroll_area, widget_pos)
@@ -392,57 +423,66 @@ class ImageViewer(QWidget):
                 return scaled_pos
         return None
 
-    def set_current_annotation(self, annotation_type):
+    def set_current_annotation(self, annotation_type: str) -> None:
+        """Set the current annotation type."""
         if self.current_annotation != annotation_type:
             self.current_annotation = annotation_type
             self.annotation_type_changed.emit(self.current_annotation)  # Emit the new signal
         self.annotation_changed.emit()
 
-    def clear_pupil_points(self):
+    def clear_pupil_points(self) -> None:
+        """Clear all pupil annotation points."""
         self.pupil_points = []
         self.pupil_ellipse = None
         self.save_state()
         self.annotation_changed.emit()
         self.update_image()
 
-    def clear_iris_points(self):
+    def clear_iris_points(self) -> None:
+        """Clear all iris annotation points."""
         self.iris_points = []
         self.iris_ellipse = None
         self.save_state()
         self.annotation_changed.emit()
         self.update_image()
 
-    def clear_iris_ellipse(self):
+    def clear_iris_ellipse(self) -> None:
+        """Clear the fitted iris ellipse."""
         self.iris_ellipse = None
         self.save_state()
         self.annotation_changed.emit()
         self.update_image()
 
-    def clear_pupil_ellipse(self):
+    def clear_pupil_ellipse(self) -> None:
+        """Clear the fitted pupil ellipse."""
         self.pupil_ellipse = None
         self.save_state()
         self.annotation_changed.emit()
         self.update_image()
 
-    def clear_eyelid_points(self):
+    def clear_eyelid_points(self) -> None:
+        """Clear all eyelid contour points."""
         self.eyelid_contour_points = []
         self.save_state()
         self.annotation_changed.emit()
         self.update_image()
 
-    def clear_glint_points(self):
+    def clear_glint_points(self) -> None:
+        """Clear all glint points."""
         self.glint_points = []
         self.save_state()
         self.annotation_changed.emit()
         self.update_image()
 
-    def clear_all(self):
+    def clear_all(self) -> None:
+        """Clear all annotations."""
         self.clear_pupil_points()
         self.clear_iris_points()
         self.clear_eyelid_points()
         self.clear_glint_points()
 
-    def get_annotation_data(self):
+    def get_annotation_data(self) -> dict:
+        """Get all annotation data as a dictionary."""
         return {
             "pupil_points": self.pupil_points,
             "iris_points": self.iris_points,
@@ -452,7 +492,8 @@ class ImageViewer(QWidget):
             "iris_ellipse": self.iris_ellipse,
         }
 
-    def set_annotation_data(self, data):
+    def set_annotation_data(self, data: dict) -> None:
+        """Set annotation data from a dictionary."""
         self.pupil_points = data.get("pupil_points", [])
         self.iris_points = data.get("iris_points", [])
         self.eyelid_contour_points = data.get("eyelid_contour_points", [])
@@ -462,7 +503,8 @@ class ImageViewer(QWidget):
         self.reset_undo_stack(initial_state=self.get_current_state())
         self.update_image()
 
-    def fit_ellipse(self):
+    def fit_ellipse(self) -> bool:
+        """Fit an ellipse to annotation points."""
         points = self.pupil_points if self.current_annotation == "pupil" else self.iris_points
         if len(points) >= 5:
             x = np.array([p.x() for p in points])
@@ -487,13 +529,15 @@ class ImageViewer(QWidget):
             )
         return False
 
-    def clear_selected_ellipse(self):
+    def clear_selected_ellipse(self) -> None:
+        """Clear the currently selected ellipse."""
         if self.current_annotation == "pupil":
             self.clear_pupil_ellipse()
         elif self.current_annotation == "iris":
             self.clear_iris_ellipse()
 
-    def move_points_by_delta(self, points, delta_x, delta_y):
+    @staticmethod
+    def move_points_by_delta(points: list[QPointF], delta_x: float, delta_y: float) -> None:
         """Helper method to move all points in a list by a given delta."""
         for i in range(len(points)):
             points[i] = QPointF(points[i].x() + delta_x, points[i].y() + delta_y)

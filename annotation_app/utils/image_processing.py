@@ -1,8 +1,11 @@
+"""Image processing utilities for ellipse fitting and point selection."""
+
 import numpy as np
+from PyQt5.QtCore import QPointF
 from scipy import optimize
 
 
-def fit_ellipse(x, y):
+def fit_ellipse(x: np.ndarray, y: np.ndarray) -> np.ndarray:
     """Fit an ellipse to the given set of points.
 
     Args:
@@ -14,7 +17,7 @@ def fit_ellipse(x, y):
 
     """
 
-    def f(c):
+    def f(c: np.ndarray) -> np.ndarray:
         xc, yc, a, b, theta = c
         distance = (
             ((x - xc) * np.cos(theta) + (y - yc) * np.sin(theta)) ** 2 / a**2
@@ -40,7 +43,7 @@ def fit_ellipse(x, y):
     return result.x
 
 
-def find_closest_point(points, pos, factor):
+def find_closest_point(points: list[QPointF], pos: QPointF, factor: float) -> QPointF | None:
     """Find the closest point to the given position.
 
     Args:

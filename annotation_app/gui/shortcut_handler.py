@@ -1,13 +1,24 @@
+"""Handler for keyboard shortcuts."""
+
+from typing import TYPE_CHECKING
+
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QKeySequence
 from PyQt5.QtWidgets import QShortcut
 
+if TYPE_CHECKING:
+    from .main_window import MainWindow
+
 
 class ShortcutHandler:
-    def __init__(self, main_window):
+    """Manages keyboard shortcuts for the application."""
+
+    def __init__(self, main_window: "MainWindow") -> None:
+        """Initialize the ShortcutHandler."""
         self.main_window = main_window
 
-    def setup_shortcuts(self):
+    def setup_shortcuts(self) -> None:
+        """Set up keyboard shortcuts for the application."""
         # Undo shortcut
         undo_shortcut = QShortcut(QKeySequence.Undo, self.main_window)
         undo_shortcut.activated.connect(self.main_window.image_viewer.undo)
@@ -28,7 +39,8 @@ class ShortcutHandler:
         toggle_shortcut = QShortcut(QKeySequence(Qt.Key_Tab), self.main_window)
         toggle_shortcut.activated.connect(self.toggle_annotation_type)
 
-    def toggle_annotation_type(self):
+    def toggle_annotation_type(self) -> None:
+        """Toggle between different annotation types."""
         current_type = self.main_window.annotation_controls.get_current_annotation_type()
         if current_type == "pupil":
             new_type = "iris"

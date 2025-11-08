@@ -1,5 +1,8 @@
+"""Control panel for annotation type selection and actions."""
+
 from PyQt5.QtCore import pyqtSignal
 from PyQt5.QtWidgets import (
+    QAbstractButton,
     QButtonGroup,
     QRadioButton,
     QVBoxLayout,
@@ -10,6 +13,8 @@ from .custom_widgets import MaterialButton
 
 
 class AnnotationControlPanel(QWidget):
+    """Panel with controls for selecting annotation types and performing annotation actions."""
+
     annotation_changed = pyqtSignal(str)
     fit_annotation_requested = pyqtSignal()
     clear_pupil_requested = pyqtSignal()
@@ -20,11 +25,13 @@ class AnnotationControlPanel(QWidget):
     ai_assist_requested = pyqtSignal()
     clear_selected_annotation_requested = pyqtSignal()
 
-    def __init__(self, parent=None):
+    def __init__(self, parent: QWidget | None = None) -> None:
+        """Initialize the AnnotationControlPanel."""
         super().__init__(parent)
         self.setup_ui()
 
-    def setup_ui(self):
+    def setup_ui(self) -> None:
+        """Set up the user interface components."""
         layout = QVBoxLayout()
 
         # Radio buttons for selecting annotation type
@@ -83,7 +90,8 @@ class AnnotationControlPanel(QWidget):
 
         self.setLayout(layout)
 
-    def on_annotation_changed(self, button):
+    def on_annotation_changed(self, button: QAbstractButton) -> None:
+        """Handle annotation type selection change."""
         if button == self.pupil_radio:
             annotation_type = "pupil"
         elif button == self.iris_radio:
@@ -94,7 +102,8 @@ class AnnotationControlPanel(QWidget):
             annotation_type = "glint"
         self.annotation_changed.emit(annotation_type)
 
-    def set_current_annotation(self, annotation_type):
+    def set_current_annotation(self, annotation_type: str) -> None:
+        """Set the current annotation type."""
         if annotation_type == "pupil":
             self.pupil_radio.setChecked(True)
         elif annotation_type == "iris":
@@ -104,7 +113,8 @@ class AnnotationControlPanel(QWidget):
         else:  # glint
             self.glint_radio.setChecked(True)
 
-    def get_current_annotation_type(self):
+    def get_current_annotation_type(self) -> str:
+        """Get the currently selected annotation type."""
         if self.pupil_radio.isChecked():
             return "pupil"
         if self.iris_radio.isChecked():

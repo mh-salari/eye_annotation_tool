@@ -1,13 +1,26 @@
+"""Placeholder iris detector for testing purposes."""
+
 import numpy as np
 
 from ai.plugin_interface import DetectorPlugin
 
 
 class PlaceholderirisDetector(DetectorPlugin):
-    def __init__(self):
-        pass
+    """Placeholder iris detector that returns dummy ellipse data."""
 
-    def detect(self, image_path):
+    def __init__(self) -> None:
+        """Initialize the PlaceholderirisDetector."""
+
+    def detect(self, image_path: str) -> tuple[dict, list]:  # noqa: PLR6301 ARG002
+        """Detect iris in the given image (returns placeholder data).
+
+        Args:
+            image_path: Path to the image file.
+
+        Returns:
+            Tuple containing ellipse parameters dict and list of points on the ellipse.
+
+        """
         height, width = 192, 192
         center = (width // 2, height // 2)
         axes = (width // 4, height // 4)  # 50% larger than the image size
@@ -27,5 +40,6 @@ class PlaceholderirisDetector(DetectorPlugin):
         return ellipse, points.tolist()
 
     @property
-    def name(self):
+    def name(self) -> str:
+        """Get the name of the detector plugin."""
         return "test"

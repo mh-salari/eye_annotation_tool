@@ -1,5 +1,7 @@
-import os
+"""Main entry point for the eye annotation application."""
+
 import sys
+from pathlib import Path
 
 from PyQt5.QtGui import QIcon
 from PyQt5.QtWidgets import QApplication
@@ -7,11 +9,12 @@ from PyQt5.QtWidgets import QApplication
 from .gui import MainWindow
 
 
-def run_app():
+def run_app() -> None:
+    """Run the eye annotation application."""
     app = QApplication(sys.argv)
 
     # Set the application icon
-    icon_path = os.path.join(os.path.dirname(__file__), "resources", "app_icon.ico")
+    icon_path = str(Path(__file__).parent / "resources" / "app_icon.ico")
     app.setWindowIcon(QIcon(icon_path))
 
     main_window = MainWindow()

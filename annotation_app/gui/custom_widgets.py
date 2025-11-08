@@ -1,8 +1,13 @@
-from PyQt5.QtWidgets import QPushButton
+"""Custom widget components for the application."""
+
+from PyQt5.QtWidgets import QPushButton, QWidget
 
 
 class MaterialButton(QPushButton):
-    def __init__(self, text, parent=None):
+    """Custom styled button with material design appearance."""
+
+    def __init__(self, text: str, parent: QWidget | None = None) -> None:
+        """Initialize the MaterialButton."""
         super().__init__(text, parent)
         self.setStyleSheet(
             """

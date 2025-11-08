@@ -1,8 +1,10 @@
+"""Main application window for the eye annotation tool."""
+
 import ast
-import os
+from pathlib import Path
 
 from PyQt5.QtCore import QEvent, QRect, Qt
-from PyQt5.QtGui import QCloseEvent, QIcon, QPixmap
+from PyQt5.QtGui import QCloseEvent, QIcon, QPixmap, QScreen
 from PyQt5.QtWidgets import (
     QApplication,
     QFileDialog,
@@ -29,7 +31,10 @@ from .shortcut_handler import ShortcutHandler
 
 
 class MainWindow(QMainWindow):
-    def __init__(self):
+    """Main application window containing all UI components and controllers."""
+
+    def __init__(self) -> None:
+        """Initialize the MainWindow."""
         super().__init__()
         self.setWindowTitle("EyE Annotation Tool")
         self.settings_handler = SettingsHandler()
@@ -49,7 +54,7 @@ class MainWindow(QMainWindow):
         self.connect_signals()
 
         # Set the application icon
-        icon_path = os.path.join(os.path.dirname(__file__), "..", "resources", "app_icon.ico")
+        icon_path = str(Path(__file__).parent / ".." / "resources" / "app_icon.ico")
         self.setWindowIcon(QIcon(icon_path))
 
         # Store the screen size for later use
@@ -61,7 +66,8 @@ class MainWindow(QMainWindow):
         # Install event filter to catch window state changes
         self.installEventFilter(self)
 
-    def setup_ui(self):
+    def setup_ui(self) -> None:
+        """Set up the user interface components."""
         central_widget = QWidget()
         main_layout = QHBoxLayout()
 
@@ -101,18 +107,18 @@ class MainWindow(QMainWindow):
         # Set focus to the image viewer
         self.image_viewer.setFocus()
 
-    def setup_variables(self):
+    def setup_variables(self) -> None:
+        """Initialize instance variables."""
         self.image_paths = []
         self.current_image_index = -1
         self.annotation_modified = False
 
-    def set_annotation_modified(self, modified):
+    def set_annotation_modified(self, modified: bool) -> None:
+        """Set the annotation modified flag."""
         self.annotation_modified = modified
 
-    def on_annotation_changed(self):
-        self.set_annotation_modified(True)
-
-    def connect_signals(self):
+    def connect_signals(self) -> None:
+        """Connect signals and slots for UI components."""
         self.load_images_button.clicked.connect(self.load_images)
         self.prev_image_button.clicked.connect(self.navigation_controller.prev_image)
         self.next_image_button.clicked.connect(self.navigation_controller.next_image)
@@ -132,7 +138,8 @@ class MainWindow(QMainWindow):
         self.image_viewer.annotation_changed.connect(self.on_annotation_changed)
         self.image_viewer.annotation_type_changed.connect(self.annotation_controls.set_current_annotation)
 
-    def load_images(self):
+    def load_images(self) -> None:
+        """Open file dialog to load image files."""
         file_dialog = QFileDialog()
         image_files, _ = file_dialog.getOpenFileNames(
             self, "Select Image Files", "", "Image Files (*.png *.jpg *.bmp)"
@@ -143,39 +150,46 @@ class MainWindow(QMainWindow):
             self.update_image_list()
             self.load_current_image()
 
-    def update_image_list(self):
+    def update_image_list(self) -> None:
+        """Update the image list widget with current image paths."""
         self.image_list_widget.clear()
         for image_path in self.image_paths:
-            self.image_list_widget.addItem(os.path.basename(image_path))
+            self.image_list_widget.addItem(Path(image_path).name)
         if self.current_image_index >= 0:
             self.image_list_widget.setCurrentRow(self.current_image_index)
 
-    def load_current_image(self):
+    def load_current_image(self) -> None:
+        """Load and display the current image with its annotations."""
         if 0 <= self.current_image_index < len(self.image_paths):
             image_path = self.image_paths[self.current_image_index]
             if self.image_viewer.load_image(image_path):
-                self.setWindowTitle(f"EyE Annotation Tool - {os.path.basename(image_path)}")
+                self.setWindowTitle(f"EyE Annotation Tool - {Path(image_path).name}")
                 self.annotation_controller.load_annotations()
             else:
                 QMessageBox.critical(self, "Error", f"Failed to load image: {image_path}")
 
-    def save_current_annotations(self):
+    def save_current_annotations(self) -> None:
+        """Save annotations for the current image."""
         self.annotation_controller.save_current_annotations()
 
-    def on_annotation_changed(self):
+    def on_annotation_changed(self) -> None:
+        """Handle annotation change event."""
         self.set_annotation_modified(True)
 
-    def change_detector(self, detector_type, detector_name):
+    def change_detector(self, detector_type: str, detector_name: str) -> None:
+        """Change the active detector for a given type."""
         self.settings_handler.set_setting(detector_type, detector_name)
         self.menu_handler.update_menu_checks()
 
-    def get_current_screen(self):
+    def get_current_screen(self) -> QScreen | None:
         # Get the screen that contains the center of the window
+        """Get the screen that currently contains the window."""
         center = self.geometry().center()
         return QApplication.screenAt(center)
 
-    def resize_to_percentage(self, percentage):
+    def resize_to_percentage(self, percentage: float) -> None:
         # Get the current screen
+        """Resize the window to a percentage of screen size."""
         current_screen = self.get_current_screen()
 
         if current_screen:
@@ -194,7 +208,8 @@ class MainWindow(QMainWindow):
             new_geometry = QRect(new_x, new_y, new_width, new_height)
             self.setGeometry(new_geometry)
 
-    def center_window(self):
+    def center_window(self) -> None:
+        """Center the window on the current screen."""
         current_screen = self.get_current_screen()
 
         if current_screen:
@@ -209,11 +224,13 @@ class MainWindow(QMainWindow):
             frame_geometry.moveCenter(center_point)
             self.move(frame_geometry.topLeft())
 
-    def moveEvent(self, event):
+    def moveEvent(self, event: QEvent) -> None:  # noqa: N802
+        """Handle window move events."""
         # The current screen is updated automatically when the window moves
         super().moveEvent(event)
 
-    def eventFilter(self, obj, event):
+    def eventFilter(self, obj: QWidget, event: QEvent) -> bool:  # noqa: N802
+        """Filter events for window state changes."""
         if event.type() == QEvent.WindowStateChange:
             if self.windowState() & Qt.WindowMaximized:
                 # When maximized, keep it maximized (window controls visible)
@@ -223,7 +240,8 @@ class MainWindow(QMainWindow):
                 self.resize_to_percentage(0.75)
         return super().eventFilter(obj, event)
 
-    def closeEvent(self, event: QCloseEvent):
+    def closeEvent(self, event: QCloseEvent) -> None:  # noqa: N802
+        """Handle window close event."""
         if self.annotation_modified:
             reply = QMessageBox.question(
                 self,
@@ -243,9 +261,11 @@ class MainWindow(QMainWindow):
         else:
             event.accept()
 
-    def get_version_from_setup(self):
-        setup_path = os.path.join(os.path.dirname(__file__), "..", "..", "setup.py")
-        with open(setup_path) as file:
+    @staticmethod
+    def get_version_from_setup() -> str:
+        """Get the application version from setup.py."""
+        setup_path = str(Path(__file__).parent / ".." / ".." / "setup.py")
+        with Path(setup_path).open(encoding="utf-8") as file:
             tree = ast.parse(file.read())
             for node in ast.walk(tree):
                 if isinstance(node, ast.Call) and node.func.id == "setup":
@@ -254,7 +274,8 @@ class MainWindow(QMainWindow):
                             return ast.literal_eval(keyword.value)
         return "Unknown"
 
-    def show_about_dialog(self):
+    def show_about_dialog(self) -> None:
+        """Show the about dialog with application information."""
         about_text = (
             "<h3>EyE Annotation Tool</h3>"
             "<p>A tool to annotate eye images for pupil, iris and eyelid detection.</p>"
@@ -283,7 +304,7 @@ class MainWindow(QMainWindow):
 
         # Add image
         image_label = QLabel()
-        image_path = os.path.join(os.path.dirname(__file__), "..", "resources", "Funded_by_EU_Eyes4ICU.png")
+        image_path = str(Path(__file__).parent / ".." / "resources" / "Funded_by_EU_Eyes4ICU.png")
         pixmap = QPixmap(image_path)
         image_label.setPixmap(pixmap.scaled(400, 100, Qt.KeepAspectRatio, Qt.SmoothTransformation))
         image_label.setAlignment(Qt.AlignCenter)

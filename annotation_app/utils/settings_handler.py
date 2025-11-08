@@ -1,5 +1,7 @@
+"""Handler for application settings persistence."""
+
 import json
-import os
+from pathlib import Path
 
 DEFAULT_SETTINGS = {
     "pupil_detector": "Pupil Core",
@@ -9,23 +11,49 @@ DEFAULT_SETTINGS = {
 
 
 class SettingsHandler:
-    def __init__(self):
-        self.settings_file = os.path.join(os.path.dirname(__file__), "..", "..", "ai", "settings.json")
+    """Manages loading, saving, and accessing application settings."""
+
+    def __init__(self) -> None:
+        """Initialize the SettingsHandler."""
+        self.settings_file = str(Path(__file__).parent / ".." / ".." / "ai" / "settings.json")
         self.settings = self.load_settings()
 
-    def load_settings(self):
-        if os.path.exists(self.settings_file):
-            with open(self.settings_file) as f:
+    def load_settings(self) -> dict:
+        """Load settings from file or return defaults.
+
+        Returns:
+            Dictionary containing settings.
+
+        """
+        if Path(self.settings_file).exists():
+            with Path(self.settings_file).open(encoding="utf-8") as f:
                 return json.load(f)
         return DEFAULT_SETTINGS.copy()
 
-    def save_settings(self):
-        with open(self.settings_file, "w") as f:
+    def save_settings(self) -> None:
+        """Save current settings to file."""
+        with Path(self.settings_file).open("w", encoding="utf-8") as f:
             json.dump(self.settings, f, indent=4)
 
-    def get_setting(self, key):
+    def get_setting(self, key: str) -> str:
+        """Get a setting value by key.
+
+        Args:
+            key: Setting key to retrieve.
+
+        Returns:
+            The setting value.
+
+        """
         return self.settings.get(key, DEFAULT_SETTINGS.get(key))
 
-    def set_setting(self, key, value):
+    def set_setting(self, key: str, value: str) -> None:
+        """Set a setting value and save to file.
+
+        Args:
+            key: Setting key to update.
+            value: New setting value.
+
+        """
         self.settings[key] = value
         self.save_settings()

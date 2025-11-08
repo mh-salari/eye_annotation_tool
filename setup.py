@@ -1,8 +1,12 @@
+"""Setup configuration for the eye annotation tool package."""
+
+from pathlib import Path
+
 from setuptools import find_packages, setup
 
 setup(
     name="eye_annotation_tool",
-    version="0.2.1",
+    version="0.3.0",
     packages=find_packages(),
     include_package_data=True,
     package_data={
@@ -13,7 +17,6 @@ setup(
         "numpy",
         "opencv-python",
         "scipy",
-        # Add any other dependencies your project needs
     ],
     entry_points={
         "console_scripts": [
@@ -23,7 +26,7 @@ setup(
     author="Mohammadhossein Salari",
     author_email="mohammadhossein.salari@gmail.com",
     description="A tool for annotating pupil and iris in eye images",
-    long_description=open("README.md").read(),
+    long_description=Path("README.md").read_text(encoding="utf-8"),
     long_description_content_type="text/markdown",
     url="https://github.com/mh-salari/eye_annotation_tool",
     classifiers=[
