@@ -76,6 +76,23 @@ EyE Annotation Tool supports custom plugins for pupil, iris and eyelid detection
 
 For a detailed guide on creating plugins, see the [Plugin Development Guide](ai/README.md) in the `ai` directory.
 
+## Citing
+
+If you use this software, please cite it using the following BibTeX entry:
+
+```bibtex
+@software{salari2025eye,
+  author    = {Salari, Mohammadhossein},
+  title     = {{EyE Annotation Tool}},
+  year      = {2026},
+  url       = {https://github.com/mh-salari/eye_annotation_tool},
+  doi       = {10.5281/zenodo.18723470},
+  license   = {MIT}
+}
+```
+
+You can also click the "Cite this repository" button on the GitHub page for more citation formats.
+
 ## Contributing
 
 Contributions are welcome! Please feel free to submit a Pull Request.
