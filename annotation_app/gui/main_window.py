@@ -126,6 +126,7 @@ class MainWindow(QMainWindow):
         self.image_list_widget.itemClicked.connect(self.navigation_controller.on_image_selected)
 
         self.annotation_controls.annotation_changed.connect(self.image_viewer.set_current_annotation)
+        self.annotation_controls.eye_changed.connect(self.image_viewer.switch_eye)
         self.annotation_controls.fit_annotation_requested.connect(self.image_viewer.fit_annotation)
         self.annotation_controls.clear_selected_annotation_requested.connect(self.image_viewer.clear_selected_ellipse)
         self.annotation_controls.clear_pupil_requested.connect(self.image_viewer.clear_pupil_points)
@@ -134,6 +135,8 @@ class MainWindow(QMainWindow):
         self.annotation_controls.clear_glint_points_requested.connect(self.image_viewer.clear_glint_points)
         self.annotation_controls.clear_all_requested.connect(self.image_viewer.clear_all)
         self.annotation_controls.ai_assist_requested.connect(self.ai_assist_handler.on_ai_assist_requested)
+        self.annotation_controls.roi_toggle_requested.connect(self.image_viewer.toggle_roi_mode)
+        self.annotation_controls.roi_clear_requested.connect(self.image_viewer.clear_roi)
 
         self.image_viewer.annotation_changed.connect(self.on_annotation_changed)
         self.image_viewer.annotation_type_changed.connect(self.annotation_controls.set_current_annotation)

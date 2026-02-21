@@ -6,6 +6,9 @@ from typing import TYPE_CHECKING
 from PyQt5.QtCore import QPointF, QSizeF
 from PyQt5.QtWidgets import QMessageBox
 
+from ai.plugins.glint_detectors.threshold_glint_detector import ThresholdGlintDetector
+from ai.plugins.pupil_detectors.threshold_pupil_detector import ThresholdPupilDetector
+
 if TYPE_CHECKING:
     from .main_window import MainWindow
 
@@ -25,62 +28,79 @@ class AIAssistHandler:
             # Save the current state before making changes
             self.main_window.image_viewer.save_state()
 
-            changes_made = self.detect_and_update("pupil_detector", image_path)
-            changes_made |= self.detect_and_update("iris_detector", image_path)
-            changes_made |= self.detect_and_update("eyelid_detector", image_path)
+            # Get current annotation type to determine which detector to run
+            current_annotation = self.main_window.image_viewer.current_annotation
+
+            changes_made = False
+            if current_annotation == "pupil":
+                changes_made = self.detect_and_update("pupil_detector", image_path)
+            elif current_annotation == "iris":
+                changes_made = self.detect_and_update("iris_detector", image_path)
+            elif current_annotation == "eyelid_contour":
+                changes_made = self.detect_and_update("eyelid_detector", image_path)
+            elif current_annotation == "glint":
+                changes_made = self.detect_and_update_glint(image_path)
 
             if changes_made:
                 # Save the new state after making changes
                 self.main_window.image_viewer.save_state()
+                self.main_window.image_viewer.save_current_eye_data()
                 self.main_window.set_annotation_modified(True)
                 self.main_window.image_viewer.update_image()
-                self.update_annotation_controls()
                 self.main_window.image_viewer.annotation_changed.emit()
 
     def detect_and_update(self, detector_type: str, image_path: str) -> bool:
         """Run a detector and update annotations."""
         changes_made = False
         detector_name = self.main_window.settings_handler.get_setting(detector_type)
-        if detector_name != "disabled":
+
+        # Use threshold detector with ROI if available
+        roi = self.main_window.image_viewer.get_roi()
+        if roi and detector_type == "pupil_detector":
+            # Use threshold detector
+            detector = ThresholdPupilDetector(roi=roi)
+        elif detector_name != "disabled":
             if detector_type == "pupil_detector":
                 detector = self.main_window.plugin_manager.get_pupil_detector(detector_name)
             elif detector_type == "iris_detector":
                 detector = self.main_window.plugin_manager.get_iris_detector(detector_name)
             else:  # eyelid_detector
                 detector = self.main_window.plugin_manager.get_eyelid_detector(detector_name)
+        else:
+            detector = None
 
-            if detector:
-                try:
-                    if detector_type == "eyelid_detector":
-                        points = detector.detect(image_path)
-                        self.main_window.image_viewer.eyelid_contour_points = list(starmap(QPointF, points))
-                        self.main_window.image_viewer.fitted_eyelid_curve = None  # Clear the fitted curve
+        if detector:
+            try:
+                if detector_type == "eyelid_detector":
+                    points = detector.detect(image_path)
+                    self.main_window.image_viewer.eyelid_contour_points = list(starmap(QPointF, points))
+                    self.main_window.image_viewer.fitted_eyelid_curve = None  # Clear the fitted curve
+                else:
+                    ellipse, points = detector.detect(image_path)
+                    center = QPointF(ellipse["center"][0], ellipse["center"][1])
+                    size = QSizeF(ellipse["axes"][0], ellipse["axes"][1])
+                    angle = ellipse["angle"]
+                    if detector_type == "pupil_detector":
+                        self.main_window.image_viewer.pupil_ellipse = (
+                            center,
+                            size,
+                            angle,
+                        )
+                        self.main_window.image_viewer.pupil_points = list(starmap(QPointF, points))
                     else:
-                        ellipse, points = detector.detect(image_path)
-                        center = QPointF(ellipse["center"][0], ellipse["center"][1])
-                        size = QSizeF(ellipse["axes"][0], ellipse["axes"][1])
-                        angle = ellipse["angle"]
-                        if detector_type == "pupil_detector":
-                            self.main_window.image_viewer.pupil_ellipse = (
-                                center,
-                                size,
-                                angle,
-                            )
-                            self.main_window.image_viewer.pupil_points = list(starmap(QPointF, points))
-                        else:
-                            self.main_window.image_viewer.iris_ellipse = (
-                                center,
-                                size,
-                                angle,
-                            )
-                            self.main_window.image_viewer.iris_points = list(starmap(QPointF, points))
-                    changes_made = True
-                except Exception as e:
-                    QMessageBox.warning(
-                        self.main_window,
-                        f"{detector_type.split('_')[0].capitalize()} Detection Error",
-                        f"Error detecting {detector_type.split('_')[0]}: {e!s}",
-                    )
+                        self.main_window.image_viewer.iris_ellipse = (
+                            center,
+                            size,
+                            angle,
+                        )
+                        self.main_window.image_viewer.iris_points = list(starmap(QPointF, points))
+                changes_made = True
+            except Exception as e:
+                QMessageBox.warning(
+                    self.main_window,
+                    f"{detector_type.split('_')[0].capitalize()} Detection Error",
+                    f"Error detecting {detector_type.split('_')[0]}: {e!s}",
+                )
         else:
             if detector_type == "pupil_detector":
                 self.main_window.image_viewer.pupil_ellipse = None
@@ -92,6 +112,35 @@ class AIAssistHandler:
                 self.main_window.image_viewer.eyelid_contour_points = []
                 self.main_window.image_viewer.fitted_eyelid_curve = None
             changes_made = True
+        return changes_made
+
+    def detect_and_update_glint(self, image_path: str) -> bool:
+        """Run glint detector and update glint annotations."""
+        changes_made = False
+
+        # Use threshold detector with ROI if available
+        roi = self.main_window.image_viewer.get_roi()
+        if roi:
+            # Use threshold glint detector
+            detector = ThresholdGlintDetector(roi=roi)
+
+            try:
+                points = detector.detect(image_path)
+                self.main_window.image_viewer.glint_points = list(starmap(QPointF, points))
+                changes_made = True
+            except Exception as e:
+                QMessageBox.warning(
+                    self.main_window,
+                    "Glint Detection Error",
+                    f"Error detecting glints: {e!s}",
+                )
+        else:
+            QMessageBox.information(
+                self.main_window,
+                "ROI Required",
+                "Please draw an ROI first before using glint auto-detection.",
+            )
+
         return changes_made
 
     def update_annotation_controls(self) -> None:

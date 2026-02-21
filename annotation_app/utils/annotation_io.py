@@ -9,66 +9,96 @@ from PyQt5.QtCore import QPointF, QSizeF
 
 def save_annotations(
     annotation_path: str,
-    pupil_points: list[QPointF],
-    iris_points: list[QPointF],
-    eyelid_contour_points: list[QPointF],
-    glint_points: list[QPointF],
-    pupil_ellipse: tuple | None,
-    iris_ellipse: tuple | None,
+    eye_data: dict,
 ) -> None:
-    """Save annotation data to a JSON file.
+    """Save annotation data for both eyes to a JSON file.
 
     Args:
         annotation_path: Path where the annotation file will be saved.
-        pupil_points: List of pupil annotation points.
-        iris_points: List of iris annotation points.
-        eyelid_contour_points: List of eyelid contour points.
-        glint_points: List of glint points.
-        pupil_ellipse: Pupil ellipse parameters or None.
-        iris_ellipse: Iris ellipse parameters or None.
+        eye_data: Dictionary containing annotation data for both left and right eyes.
 
     """
-    current_annotation = {
-        "pupil_points": [(p.x(), p.y()) for p in pupil_points],
-        "iris_points": [(p.x(), p.y()) for p in iris_points],
-        "eyelid_contour_points": [(p.x(), p.y()) for p in eyelid_contour_points],
-        "glint_points": [(p.x(), p.y()) for p in glint_points],
-        "pupil_ellipse": ellipse_to_dict(pupil_ellipse),
-        "iris_ellipse": ellipse_to_dict(iris_ellipse),
-    }
+    # Convert eye_data to serializable format
+    serializable_data = {}
+    for eye in ["left", "right"]:
+        serializable_data[eye] = {
+            "pupil_points": [(p.x(), p.y()) for p in eye_data[eye]["pupil_points"]],
+            "iris_points": [(p.x(), p.y()) for p in eye_data[eye]["iris_points"]],
+            "eyelid_contour_points": [(p.x(), p.y()) for p in eye_data[eye]["eyelid_contour_points"]],
+            "glint_points": [(p.x(), p.y()) for p in eye_data[eye]["glint_points"]],
+            "pupil_ellipse": ellipse_to_dict(eye_data[eye]["pupil_ellipse"]),
+            "iris_ellipse": ellipse_to_dict(eye_data[eye]["iris_ellipse"]),
+            "roi": eye_data[eye].get("roi"),
+        }
+
     with Path(annotation_path).open("w", encoding="utf-8") as f:
-        json.dump(current_annotation, f, indent=2)
+        json.dump(serializable_data, f, indent=2)
 
 
 def load_annotations(annotation_path: str) -> dict:
-    """Load annotation data from a JSON file.
+    """Load annotation data for both eyes from a JSON file.
 
     Args:
         annotation_path: Path to the annotation file.
 
     Returns:
-        Dictionary containing annotation data.
+        Dictionary containing annotation data for both eyes.
 
     """
-    if Path(annotation_path).exists():
-        with Path(annotation_path).open(encoding="utf-8") as f:
-            ann = json.load(f)
-        return {
-            "pupil_points": list(starmap(QPointF, ann.get("pupil_points", []))),
-            "iris_points": list(starmap(QPointF, ann.get("iris_points", []))),
-            "eyelid_contour_points": list(starmap(QPointF, ann.get("eyelid_contour_points", []))),
-            "glint_points": list(starmap(QPointF, ann.get("glint_points", []))),
-            "pupil_ellipse": dict_to_ellipse(ann.get("pupil_ellipse")),
-            "iris_ellipse": dict_to_ellipse(ann.get("iris_ellipse")),
-        }
-    return {
+    empty_eye_data = {
         "pupil_points": [],
         "iris_points": [],
         "eyelid_contour_points": [],
         "glint_points": [],
         "pupil_ellipse": None,
         "iris_ellipse": None,
+        "roi": None,
     }
+
+    if Path(annotation_path).exists():
+        with Path(annotation_path).open(encoding="utf-8") as f:
+            ann = json.load(f)
+
+        # Check if this is new format (with left/right) or old format (single eye)
+        if "left" in ann or "right" in ann:
+            # New format with both eyes
+            eye_data = {}
+            for eye in ["left", "right"]:
+                if eye in ann:
+                    roi_data = ann[eye].get("roi")
+                    if roi_data and isinstance(roi_data, (list, tuple)) and len(roi_data) == 4:
+                        roi = tuple(roi_data)
+                    else:
+                        roi = None
+
+                    eye_data[eye] = {
+                        "pupil_points": list(starmap(QPointF, ann[eye].get("pupil_points", []))),
+                        "iris_points": list(starmap(QPointF, ann[eye].get("iris_points", []))),
+                        "eyelid_contour_points": list(
+                            starmap(QPointF, ann[eye].get("eyelid_contour_points", []))
+                        ),
+                        "glint_points": list(starmap(QPointF, ann[eye].get("glint_points", []))),
+                        "pupil_ellipse": dict_to_ellipse(ann[eye].get("pupil_ellipse")),
+                        "iris_ellipse": dict_to_ellipse(ann[eye].get("iris_ellipse")),
+                        "roi": roi,
+                    }
+                else:
+                    eye_data[eye] = empty_eye_data.copy()
+            return eye_data
+        # Old format (single eye) - migrate to left eye
+        return {
+            "left": {
+                "pupil_points": list(starmap(QPointF, ann.get("pupil_points", []))),
+                "iris_points": list(starmap(QPointF, ann.get("iris_points", []))),
+                "eyelid_contour_points": list(starmap(QPointF, ann.get("eyelid_contour_points", []))),
+                "glint_points": list(starmap(QPointF, ann.get("glint_points", []))),
+                "pupil_ellipse": dict_to_ellipse(ann.get("pupil_ellipse")),
+                "iris_ellipse": dict_to_ellipse(ann.get("iris_ellipse")),
+                "roi": None,  # Old format doesn't have ROI
+            },
+            "right": empty_eye_data.copy(),
+        }
+    return {"left": empty_eye_data.copy(), "right": empty_eye_data.copy()}
 
 
 def get_annotation_path(image_path: str) -> str:

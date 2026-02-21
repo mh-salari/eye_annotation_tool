@@ -50,8 +50,8 @@ class AnnotationController:
                 if reply == QMessageBox.No:
                     return
 
-            annotation_data = self.main_window.image_viewer.get_annotation_data()
-            save_annotations(annotation_path, **annotation_data)
+            eye_data = self.main_window.image_viewer.get_annotation_data()
+            save_annotations(annotation_path, eye_data)
             self.main_window.set_annotation_modified(False)
             # QMessageBox.information(self.main_window, "Success", "Annotations saved successfully.")
 

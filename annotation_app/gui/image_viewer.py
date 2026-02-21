@@ -44,12 +44,39 @@ class ImageViewer(QWidget):
     def setup_variables(self) -> None:
         """Initialize instance variables."""
         self.factor = 1.0
+        self.current_eye = "left"
+
+        # Store annotations for both eyes separately
+        self.eye_data = {
+            "left": {
+                "pupil_points": [],
+                "iris_points": [],
+                "eyelid_contour_points": [],
+                "glint_points": [],
+                "pupil_ellipse": None,
+                "iris_ellipse": None,
+                "roi": None,  # (x, y, width, height)
+            },
+            "right": {
+                "pupil_points": [],
+                "iris_points": [],
+                "eyelid_contour_points": [],
+                "glint_points": [],
+                "pupil_ellipse": None,
+                "iris_ellipse": None,
+                "roi": None,  # (x, y, width, height)
+            },
+        }
+
+        # Current working data (references to current eye data)
         self.pupil_points = []
         self.iris_points = []
         self.eyelid_contour_points = []
         self.glint_points = []
         self.pupil_ellipse = None
         self.iris_ellipse = None
+        self.roi = None  # Current eye's ROI
+
         self.current_annotation = "pupil"
         self.original_pixmap = None
         self.selected_point = None
@@ -61,6 +88,14 @@ class ImageViewer(QWidget):
         self.shift_pressed = False
         self.last_mouse_pos = None
         self.moving_all_points = False
+
+        # ROI drawing variables
+        self.roi_drawing_mode = False
+        self.drawing_roi = False
+        self.roi_start_pos = None
+        self.moving_roi = False
+        self.resizing_roi = False
+        self.roi_resize_handle = None  # 'tl', 'tr', 'bl', 'br' for corners
 
     def setup_colors(self) -> None:
         # Define colors with transparency
@@ -80,10 +115,84 @@ class ImageViewer(QWidget):
         self.glint_color = QColor(255, 165, 0, 255)  # Orange
         self.glint_select_color = QColor(255, 215, 0, 255)  # Gold
 
+        self.roi_color = QColor(0, 188, 212, 255)  # Cyan
+
     def setup_undo_system(self) -> None:
         """Initialize the undo/redo system."""
         self.undo_stack = deque(maxlen=10)
         self.undo_index = -1
+
+    def save_current_eye_data(self) -> None:
+        """Save the current working data back to the eye_data dictionary."""
+        self.eye_data[self.current_eye]["pupil_points"] = self.pupil_points.copy()
+        self.eye_data[self.current_eye]["iris_points"] = self.iris_points.copy()
+        self.eye_data[self.current_eye]["eyelid_contour_points"] = self.eyelid_contour_points.copy()
+        self.eye_data[self.current_eye]["glint_points"] = self.glint_points.copy()
+        self.eye_data[self.current_eye]["pupil_ellipse"] = self.pupil_ellipse
+        self.eye_data[self.current_eye]["iris_ellipse"] = self.iris_ellipse
+        self.eye_data[self.current_eye]["roi"] = self.roi
+
+    def load_current_eye_data(self) -> None:
+        """Load the data for the current eye into working variables."""
+        self.pupil_points = self.eye_data[self.current_eye]["pupil_points"].copy()
+        self.iris_points = self.eye_data[self.current_eye]["iris_points"].copy()
+        self.eyelid_contour_points = self.eye_data[self.current_eye]["eyelid_contour_points"].copy()
+        self.glint_points = self.eye_data[self.current_eye]["glint_points"].copy()
+        self.pupil_ellipse = self.eye_data[self.current_eye]["pupil_ellipse"]
+        self.iris_ellipse = self.eye_data[self.current_eye]["iris_ellipse"]
+        self.roi = self.eye_data[self.current_eye]["roi"]
+
+    def switch_eye(self, eye: str) -> None:
+        """Switch between left and right eye annotations."""
+        if eye not in {"left", "right"}:
+            return
+
+        # Save current eye data before switching
+        self.save_current_eye_data()
+
+        # Switch to new eye
+        self.current_eye = eye
+
+        # Load new eye data
+        self.load_current_eye_data()
+
+        # Update display
+        self.update_image()
+        self.annotation_changed.emit()
+
+    def get_all_eye_data(self) -> dict:
+        """Get annotation data for both eyes."""
+        # Save current working data first
+        self.save_current_eye_data()
+        return self.eye_data.copy()
+
+    def set_all_eye_data(self, eye_data: dict) -> None:
+        """Set annotation data for both eyes."""
+        self.eye_data = eye_data.copy()
+        self.load_current_eye_data()
+        self.update_image()
+
+    def toggle_roi_mode(self) -> None:
+        """Toggle ROI drawing mode on/off."""
+        self.roi_drawing_mode = not self.roi_drawing_mode
+        if not self.roi_drawing_mode:
+            # Reset ROI drawing state when exiting mode
+            self.drawing_roi = False
+            self.moving_roi = False
+            self.resizing_roi = False
+            self.roi_resize_handle = None
+        self.update_image()
+
+    def get_roi(self) -> tuple | None:
+        """Get the current eye's ROI."""
+        return self.roi
+
+    def clear_roi(self) -> None:
+        """Clear the current eye's ROI."""
+        self.roi = None
+        self.save_current_eye_data()
+        self.annotation_changed.emit()
+        self.update_image()
 
     def reset_undo_stack(self, initial_state: dict | None = None) -> None:
         """Reset the undo stack to initial state."""
@@ -129,6 +238,7 @@ class ImageViewer(QWidget):
             self.glint_points = state.get("glint_points", []).copy()
             self.pupil_ellipse = state["pupil_ellipse"]
             self.iris_ellipse = state["iris_ellipse"]
+            self.save_current_eye_data()
             self.update_image()
             self.annotation_changed.emit()
 
@@ -167,6 +277,7 @@ class ImageViewer(QWidget):
                 points.remove(self.selected_point)
                 self.selected_point = None
                 self.save_state()
+                self.save_current_eye_data()
                 self.annotation_changed.emit()
                 self.update_image()
 
@@ -179,6 +290,26 @@ class ImageViewer(QWidget):
         elif event.button() == Qt.LeftButton:
             image_pos = self.get_image_position(event.pos())
             if image_pos:
+                # Handle ROI mode first
+                if self.roi_drawing_mode:
+                    # Check if clicking on ROI for moving/resizing
+                    if self.roi:
+                        handle = self.get_roi_handle_at_pos(image_pos)
+                        if handle:
+                            self.resizing_roi = True
+                            self.roi_resize_handle = handle
+                            self.roi_start_pos = image_pos
+                            return
+                        if self.is_point_in_roi(image_pos):
+                            self.moving_roi = True
+                            self.roi_start_pos = image_pos
+                            return
+                    # Start drawing new ROI
+                    self.drawing_roi = True
+                    self.roi_start_pos = image_pos
+                    self.roi = None  # Clear existing ROI
+                    return
+
                 self.selected_point, selected_annotation = self.find_closest_point_and_type(image_pos)
 
                 if self.selected_point:
@@ -199,6 +330,7 @@ class ImageViewer(QWidget):
                     self.glint_points.append(image_pos)
 
                 self.save_state()
+                self.save_current_eye_data()
                 self.annotation_changed.emit()
                 self.update_image()
 
@@ -209,6 +341,40 @@ class ImageViewer(QWidget):
             self.scroll_area.horizontalScrollBar().setValue(self.scroll_area.horizontalScrollBar().value() - delta.x())
             self.scroll_area.verticalScrollBar().setValue(self.scroll_area.verticalScrollBar().value() - delta.y())
             self.last_pan_pos = event.pos()
+        elif self.drawing_roi or self.moving_roi or self.resizing_roi:
+            new_pos = self.get_image_position(event.pos())
+            if new_pos and self.roi_start_pos:
+                if self.drawing_roi:
+                    # Update ROI as user drags
+                    x = min(self.roi_start_pos.x(), new_pos.x())
+                    y = min(self.roi_start_pos.y(), new_pos.y())
+                    w = abs(new_pos.x() - self.roi_start_pos.x())
+                    h = abs(new_pos.y() - self.roi_start_pos.y())
+                    self.roi = (x, y, w, h)
+                elif self.moving_roi and self.roi:
+                    # Move entire ROI
+                    delta_x = new_pos.x() - self.roi_start_pos.x()
+                    delta_y = new_pos.y() - self.roi_start_pos.y()
+                    x, y, w, h = self.roi
+                    self.roi = (x + delta_x, y + delta_y, w, h)
+                    self.roi_start_pos = new_pos
+                elif self.resizing_roi and self.roi:
+                    # Resize ROI based on handle
+                    x, y, w, h = self.roi
+                    if "t" in self.roi_resize_handle:  # top
+                        delta_y = new_pos.y() - y
+                        y = new_pos.y()
+                        h -= delta_y
+                    if "b" in self.roi_resize_handle:  # bottom
+                        h = new_pos.y() - y
+                    if "l" in self.roi_resize_handle:  # left
+                        delta_x = new_pos.x() - x
+                        x = new_pos.x()
+                        w -= delta_x
+                    if "r" in self.roi_resize_handle:  # right
+                        w = new_pos.x() - x
+                    self.roi = (x, y, max(10, w), max(10, h))  # Minimum size 10x10
+                self.update_image()
         elif self.moving_point and self.selected_point:
             new_pos = self.get_image_position(event.pos())
             if new_pos and self.last_mouse_pos:
@@ -242,6 +408,7 @@ class ImageViewer(QWidget):
 
                 self.selected_point = new_pos
                 self.last_mouse_pos = new_pos
+                self.save_current_eye_data()
                 self.update_image()
 
     def mouseReleaseEvent(self, event: QEvent) -> None:  # noqa: N802
@@ -250,9 +417,21 @@ class ImageViewer(QWidget):
             self.panning = False
             self.setCursor(Qt.ArrowCursor)
         elif event.button() == Qt.LeftButton:
+            # Handle ROI operations
+            if self.drawing_roi or self.moving_roi or self.resizing_roi:
+                self.drawing_roi = False
+                self.moving_roi = False
+                self.resizing_roi = False
+                self.roi_resize_handle = None
+                if self.roi:
+                    self.save_current_eye_data()
+                    self.annotation_changed.emit()
+                return
+
             self.moving_point = False
             if self.selected_point:
                 self.save_state()
+                self.save_current_eye_data()
                 self.annotation_changed.emit()
 
     def wheelEvent(self, event: QEvent) -> None:  # noqa: N802
@@ -327,11 +506,115 @@ class ImageViewer(QWidget):
         self.pixmap.fill(Qt.transparent)
         painter = QPainter(self.pixmap)
         painter.drawPixmap(0, 0, scaled_pixmap)
-        self.draw_points(painter)
-        self.draw_ellipses(painter)
+
+        # Draw both eyes' annotations
+        self.draw_eye_annotations(painter, "left")
+        self.draw_eye_annotations(painter, "right")
+
+        # Draw ROI if it exists and we're in ROI mode or it's defined
+        if self.roi:
+            self.draw_roi(painter)
+
         painter.end()
         self.image_label.setPixmap(self.pixmap)
         self.image_label.resize(self.pixmap.size())
+
+    def draw_eye_annotations(self, painter: QPainter, eye: str) -> None:
+        """Draw all annotations for a specific eye with eye label.
+
+        Args:
+            painter: QPainter object to draw with
+            eye: "left" or "right"
+
+        """
+        eye_data = self.eye_data[eye]
+
+        # Draw points for this eye
+        self.draw_points_for_eye(painter, eye_data, eye)
+
+        # Draw ellipses for this eye
+        self.draw_ellipses_for_eye(painter, eye_data)
+
+    def draw_points_for_eye(self, painter: QPainter, eye_data: dict, eye: str) -> None:
+        """Draw annotation points for a specific eye."""
+        is_active = eye == self.current_eye
+        eye_label = "L" if eye == "left" else "R"
+
+        for points, color, annotation_type in [
+            (eye_data["pupil_points"], self.pupil_color, "pupil"),
+            (eye_data["iris_points"], self.iris_color, "iris"),
+            (eye_data["eyelid_contour_points"], self.eyelid_color, "eyelid_contour"),
+            (eye_data["glint_points"], self.glint_color, "glint"),
+        ]:
+            for point in points:
+                scaled_point = QPointF(point.x() * self.factor, point.y() * self.factor)
+                # Only show selection highlight for active eye
+                if is_active and point == self.selected_point and self.current_annotation == annotation_type:
+                    if annotation_type == "pupil":
+                        painter.setPen(QPen(self.pupil_select_color, 3, Qt.SolidLine))
+                    elif annotation_type == "iris":
+                        painter.setPen(QPen(self.iris_select_color, 3, Qt.SolidLine))
+                    elif annotation_type == "eyelid_contour":
+                        painter.setPen(QPen(self.eyelid_select_color, 3, Qt.SolidLine))
+                    else:  # glint
+                        painter.setPen(QPen(self.glint_select_color, 3, Qt.SolidLine))
+                else:
+                    painter.setPen(QPen(color, 3, Qt.SolidLine))
+                painter.drawEllipse(scaled_point, 1.5, 1.5)
+
+                # Draw small eye label next to the point
+                font = painter.font()
+                font.setPointSize(8)
+                painter.setFont(font)
+                painter.setPen(QPen(color, 1, Qt.SolidLine))
+                text_pos = QPointF(scaled_point.x() + 6, scaled_point.y() - 4)
+                painter.drawText(text_pos, eye_label)
+
+    def draw_ellipses_for_eye(self, painter: QPainter, eye_data: dict) -> None:
+        """Draw fitted ellipses for a specific eye."""
+        if eye_data["pupil_ellipse"]:
+            painter.setPen(QPen(self.pupil_ellipse_color, 1, Qt.SolidLine))
+            self.draw_single_ellipse(painter, eye_data["pupil_ellipse"])
+        if eye_data["iris_ellipse"]:
+            painter.setPen(QPen(self.iris_ellipse_color, 1, Qt.SolidLine))
+            self.draw_single_ellipse(painter, eye_data["iris_ellipse"])
+
+    def draw_roi(self, painter: QPainter) -> None:
+        """Draw the ROI rectangle with dashed lines and corner handles."""
+        if not self.roi:
+            return
+
+        x, y, w, h = self.roi
+        scaled_x = x * self.factor
+        scaled_y = y * self.factor
+        scaled_w = w * self.factor
+        scaled_h = h * self.factor
+
+        # Draw dashed rectangle
+        pen = QPen(self.roi_color, 2, Qt.DashLine)
+        painter.setPen(pen)
+        painter.drawRect(int(scaled_x), int(scaled_y), int(scaled_w), int(scaled_h))
+
+        # Draw corner handles if in ROI drawing mode
+        if self.roi_drawing_mode:
+            handle_size = 8
+            painter.setPen(QPen(self.roi_color, 2, Qt.SolidLine))
+            painter.setBrush(self.roi_color)
+
+            # Draw corner handles
+            corners = [
+                (scaled_x, scaled_y),  # top-left
+                (scaled_x + scaled_w, scaled_y),  # top-right
+                (scaled_x, scaled_y + scaled_h),  # bottom-left
+                (scaled_x + scaled_w, scaled_y + scaled_h),  # bottom-right
+            ]
+            for cx, cy in corners:
+                painter.drawRect(
+                    int(cx - handle_size / 2),
+                    int(cy - handle_size / 2),
+                    handle_size,
+                    handle_size,
+                )
 
     def fit_annotation(self) -> bool:
         """Fit an ellipse to the current annotation points."""
@@ -435,6 +718,7 @@ class ImageViewer(QWidget):
         self.pupil_points = []
         self.pupil_ellipse = None
         self.save_state()
+        self.save_current_eye_data()
         self.annotation_changed.emit()
         self.update_image()
 
@@ -443,6 +727,7 @@ class ImageViewer(QWidget):
         self.iris_points = []
         self.iris_ellipse = None
         self.save_state()
+        self.save_current_eye_data()
         self.annotation_changed.emit()
         self.update_image()
 
@@ -450,6 +735,7 @@ class ImageViewer(QWidget):
         """Clear the fitted iris ellipse."""
         self.iris_ellipse = None
         self.save_state()
+        self.save_current_eye_data()
         self.annotation_changed.emit()
         self.update_image()
 
@@ -457,6 +743,7 @@ class ImageViewer(QWidget):
         """Clear the fitted pupil ellipse."""
         self.pupil_ellipse = None
         self.save_state()
+        self.save_current_eye_data()
         self.annotation_changed.emit()
         self.update_image()
 
@@ -464,6 +751,7 @@ class ImageViewer(QWidget):
         """Clear all eyelid contour points."""
         self.eyelid_contour_points = []
         self.save_state()
+        self.save_current_eye_data()
         self.annotation_changed.emit()
         self.update_image()
 
@@ -471,6 +759,7 @@ class ImageViewer(QWidget):
         """Clear all glint points."""
         self.glint_points = []
         self.save_state()
+        self.save_current_eye_data()
         self.annotation_changed.emit()
         self.update_image()
 
@@ -482,26 +771,13 @@ class ImageViewer(QWidget):
         self.clear_glint_points()
 
     def get_annotation_data(self) -> dict:
-        """Get all annotation data as a dictionary."""
-        return {
-            "pupil_points": self.pupil_points,
-            "iris_points": self.iris_points,
-            "eyelid_contour_points": self.eyelid_contour_points,
-            "glint_points": self.glint_points,
-            "pupil_ellipse": self.pupil_ellipse,
-            "iris_ellipse": self.iris_ellipse,
-        }
+        """Get all annotation data for both eyes."""
+        return self.get_all_eye_data()
 
     def set_annotation_data(self, data: dict) -> None:
-        """Set annotation data from a dictionary."""
-        self.pupil_points = data.get("pupil_points", [])
-        self.iris_points = data.get("iris_points", [])
-        self.eyelid_contour_points = data.get("eyelid_contour_points", [])
-        self.glint_points = data.get("glint_points", [])
-        self.pupil_ellipse = data.get("pupil_ellipse")
-        self.iris_ellipse = data.get("iris_ellipse")
+        """Set annotation data for both eyes."""
+        self.set_all_eye_data(data)
         self.reset_undo_stack(initial_state=self.get_current_state())
-        self.update_image()
 
     def fit_ellipse(self) -> bool:
         """Fit an ellipse to annotation points."""
@@ -518,6 +794,7 @@ class ImageViewer(QWidget):
             else:
                 self.iris_ellipse = (center, size, angle)
             self.save_state()
+            self.save_current_eye_data()
             self.annotation_changed.emit()
             self.update_image()
             return True
@@ -541,3 +818,30 @@ class ImageViewer(QWidget):
         """Helper method to move all points in a list by a given delta."""
         for i in range(len(points)):
             points[i] = QPointF(points[i].x() + delta_x, points[i].y() + delta_y)
+
+    def is_point_in_roi(self, point: QPointF) -> bool:
+        """Check if a point is inside the ROI."""
+        if not self.roi:
+            return False
+        x, y, w, h = self.roi
+        return x <= point.x() <= x + w and y <= point.y() <= y + h
+
+    def get_roi_handle_at_pos(self, point: QPointF) -> str | None:
+        """Get the ROI resize handle at the given position."""
+        if not self.roi:
+            return None
+
+        x, y, w, h = self.roi
+        handle_size = 8 / self.factor  # Handle size in image coordinates
+
+        # Check corners (priority order: tl, tr, bl, br)
+        if abs(point.x() - x) < handle_size and abs(point.y() - y) < handle_size:
+            return "tl"
+        if abs(point.x() - (x + w)) < handle_size and abs(point.y() - y) < handle_size:
+            return "tr"
+        if abs(point.x() - x) < handle_size and abs(point.y() - (y + h)) < handle_size:
+            return "bl"
+        if abs(point.x() - (x + w)) < handle_size and abs(point.y() - (y + h)) < handle_size:
+            return "br"
+
+        return None

@@ -9,64 +9,52 @@ EyE Annotation Tool is a tool for annotating pupil, iris and eyelid in eye image
 ## Features
 
 - Load and navigate through multiple eye images
-- Manual annotation of pupil, iris and eyelid
-- AI-assisted detection of pupil, iris and eyelid
+- Manual annotation of pupil, iris, eyelid, and glints
+- AI-assisted detection of pupil, iris, eyelid, and glints
 - Undo functionality for annotations
 - Save and load annotations
 - Extensible plugin system for custom detectors
 
 ## Installation
 
-### Using uv (Recommended)
-
-First, install [uv](https://docs.astral.sh/uv/) if you haven't already:
-
-```bash
-curl -LsSf https://astral.sh/uv/install.sh | sh
-```
-
-Then install and run the tool:
-
-```bash
-# Clone the repository
-git clone https://github.com/mh-salari/eye_annotation_tool.git
-cd eye_annotation_tool
-
-# Install dependencies
-uv sync
-
-# Run the tool
-uv run eye_annotation_tool
-```
-
-### Using pip (Alternative)
-
-You can also install EyE Annotation Tool using pip:
-
 ```bash
 pip install eye_annotation_tool
 ```
 
-Or for the latest development version:
+For the latest development version:
+
+```bash
+pip install git+https://github.com/mh-salari/eye_annotation_tool.git
+```
+
+### Using uv
+
+If you prefer [uv](https://docs.astral.sh/uv/):
 
 ```bash
 git clone https://github.com/mh-salari/eye_annotation_tool.git
 cd eye_annotation_tool
-pip install -e .
+uv sync
 ```
+
+> **Apple Silicon (M1/M2/M3) Note:** The `pupil-detectors` dependency only provides pre-built wheels for x86_64. On Apple Silicon Macs, you need to use an x86_64 Python via Rosetta 2:
+>
+> ```bash
+> uv python install cpython-3.11-macos-x86_64
+> uv python pin cpython-3.11-macos-x86_64
+> uv sync
+> ```
 
 ## Usage
 
-### With uv
+```bash
+eye_annotation_tool
+```
+
+Or with uv:
 
 ```bash
 uv run eye_annotation_tool
-```
-
-### With pip installation
-
-```bash
-eye_annotation_tool
 ```
 
 Or run it as a module:

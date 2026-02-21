@@ -1,21 +1,16 @@
 """Control panel for annotation type selection and actions."""
 
 from PyQt5.QtCore import pyqtSignal
-from PyQt5.QtWidgets import (
-    QAbstractButton,
-    QButtonGroup,
-    QRadioButton,
-    QVBoxLayout,
-    QWidget,
-)
+from PyQt5.QtWidgets import QButtonGroup, QHBoxLayout, QLabel, QVBoxLayout, QWidget
 
-from .custom_widgets import MaterialButton
+from .custom_widgets import AnnotationGroup, EyeSelector, MaterialButton
 
 
 class AnnotationControlPanel(QWidget):
     """Panel with controls for selecting annotation types and performing annotation actions."""
 
     annotation_changed = pyqtSignal(str)
+    eye_changed = pyqtSignal(str)
     fit_annotation_requested = pyqtSignal()
     clear_pupil_requested = pyqtSignal()
     clear_iris_requested = pyqtSignal()
@@ -24,6 +19,8 @@ class AnnotationControlPanel(QWidget):
     clear_all_requested = pyqtSignal()
     ai_assist_requested = pyqtSignal()
     clear_selected_annotation_requested = pyqtSignal()
+    roi_toggle_requested = pyqtSignal()
+    roi_clear_requested = pyqtSignal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
         """Initialize the AnnotationControlPanel."""
@@ -34,91 +31,106 @@ class AnnotationControlPanel(QWidget):
         """Set up the user interface components."""
         layout = QVBoxLayout()
 
-        # Radio buttons for selecting annotation type
-        self.pupil_radio = QRadioButton("Pupil")
-        self.iris_radio = QRadioButton("iris")
-        self.eyelid_contour_radio = QRadioButton("Eyelid Contour")
-        self.glint_radio = QRadioButton("Glint")
-        self.pupil_radio.setChecked(True)
+        self.eye_selector = EyeSelector()
+        self.eye_selector.eye_changed.connect(self.eye_changed.emit)
+        layout.addWidget(self.eye_selector)
+
+        # ROI buttons
+        roi_layout = QHBoxLayout()
+        self.roi_toggle_button = MaterialButton("ROI Mode")
+        self.roi_toggle_button.setCheckable(True)
+        self.roi_toggle_button.clicked.connect(self.roi_toggle_requested.emit)
+        roi_layout.addWidget(self.roi_toggle_button)
+
+        self.roi_clear_button = MaterialButton("Clear ROI")
+        self.roi_clear_button.clicked.connect(self.roi_clear_requested.emit)
+        roi_layout.addWidget(self.roi_clear_button)
+        layout.addLayout(roi_layout)
+
+        title_label = QLabel("Annotation Types")
+        title_label.setStyleSheet(
+            """
+            QLabel {
+                font-size: 16px;
+                font-weight: bold;
+                color: #00bcd4;
+                padding: 10px 0;
+            }
+        """
+        )
+        layout.addWidget(title_label)
+
+        self.pupil_group = AnnotationGroup("Pupil", has_fit=True, has_ai_assist=True)
+        self.pupil_group.selected.connect(lambda: self.annotation_changed.emit("pupil"))
+        self.pupil_group.fit_requested.connect(self.on_fit_requested)
+        self.pupil_group.clear_requested.connect(self.clear_pupil_requested.emit)
+        self.pupil_group.ai_assist_requested.connect(self.ai_assist_requested.emit)
+        self.pupil_group.set_checked(True)
+
+        self.iris_group = AnnotationGroup("Iris", has_fit=True, has_ai_assist=True)
+        self.iris_group.selected.connect(lambda: self.annotation_changed.emit("iris"))
+        self.iris_group.fit_requested.connect(self.on_fit_requested)
+        self.iris_group.clear_requested.connect(self.clear_iris_requested.emit)
+        self.iris_group.ai_assist_requested.connect(self.ai_assist_requested.emit)
+
+        self.eyelid_group = AnnotationGroup("Eyelid Contour", has_fit=False, has_ai_assist=True)
+        self.eyelid_group.selected.connect(lambda: self.annotation_changed.emit("eyelid_contour"))
+        self.eyelid_group.clear_requested.connect(self.clear_eyelid_points_requested.emit)
+        self.eyelid_group.ai_assist_requested.connect(self.ai_assist_requested.emit)
+
+        self.glint_group = AnnotationGroup("Glint", has_fit=False, has_ai_assist=True)
+        self.glint_group.selected.connect(lambda: self.annotation_changed.emit("glint"))
+        self.glint_group.clear_requested.connect(self.clear_glint_points_requested.emit)
+        self.glint_group.ai_assist_requested.connect(self.ai_assist_requested.emit)
 
         self.button_group = QButtonGroup()
-        self.button_group.addButton(self.pupil_radio)
-        self.button_group.addButton(self.iris_radio)
-        self.button_group.addButton(self.eyelid_contour_radio)
-        self.button_group.addButton(self.glint_radio)
-        self.button_group.buttonClicked.connect(self.on_annotation_changed)
+        self.button_group.addButton(self.pupil_group.radio)
+        self.button_group.addButton(self.iris_group.radio)
+        self.button_group.addButton(self.eyelid_group.radio)
+        self.button_group.addButton(self.glint_group.radio)
 
-        # Buttons for fit annotation
-        self.fit_button = MaterialButton("Fit Selected Annotation")
-        self.fit_button.clicked.connect(self.fit_annotation_requested.emit)
+        layout.addWidget(self.pupil_group)
+        layout.addWidget(self.iris_group)
+        layout.addWidget(self.eyelid_group)
+        layout.addWidget(self.glint_group)
 
-        self.clear_selected_button = MaterialButton("Clear Selected Annotation")
-        self.clear_selected_button.clicked.connect(self.clear_selected_annotation_requested.emit)
-
-        self.clear_pupil_button = MaterialButton("Clear Pupil Points")
-        self.clear_pupil_button.clicked.connect(self.clear_pupil_requested.emit)
-
-        self.clear_iris_button = MaterialButton("Clear iris Points")
-        self.clear_iris_button.clicked.connect(self.clear_iris_requested.emit)
-
-        self.clear_eyelid_points_button = MaterialButton("Clear Eyelid Points")
-        self.clear_eyelid_points_button.clicked.connect(self.clear_eyelid_points_requested.emit)
-
-        self.clear_glint_points_button = MaterialButton("Clear Glint Points")
-        self.clear_glint_points_button.clicked.connect(self.clear_glint_points_requested.emit)
+        layout.addStretch(1)
 
         self.clear_all_button = MaterialButton("Clear All")
         self.clear_all_button.clicked.connect(self.clear_all_requested.emit)
-
-        self.ai_assist_button = MaterialButton("AI Assist")
-        self.ai_assist_button.clicked.connect(self.ai_assist_requested.emit)
-
-        # Add widgets to layout
-        layout.addWidget(self.pupil_radio)
-        layout.addWidget(self.iris_radio)
-        layout.addWidget(self.eyelid_contour_radio)
-        layout.addWidget(self.glint_radio)
-        layout.addWidget(self.fit_button)
-        layout.addWidget(self.clear_selected_button)
-        layout.addWidget(self.clear_pupil_button)
-        layout.addWidget(self.clear_iris_button)
-        layout.addWidget(self.clear_eyelid_points_button)
-        layout.addWidget(self.clear_glint_points_button)
         layout.addWidget(self.clear_all_button)
-        layout.addWidget(self.ai_assist_button)
-        layout.addStretch(1)
 
         self.setLayout(layout)
 
-    def on_annotation_changed(self, button: QAbstractButton) -> None:
-        """Handle annotation type selection change."""
-        if button == self.pupil_radio:
-            annotation_type = "pupil"
-        elif button == self.iris_radio:
-            annotation_type = "iris"
-        elif button == self.eyelid_contour_radio:
-            annotation_type = "eyelid_contour"
-        else:  # glint_radio
-            annotation_type = "glint"
-        self.annotation_changed.emit(annotation_type)
+    def on_fit_requested(self) -> None:
+        """Handle fit annotation request."""
+        self.fit_annotation_requested.emit()
 
     def set_current_annotation(self, annotation_type: str) -> None:
         """Set the current annotation type."""
         if annotation_type == "pupil":
-            self.pupil_radio.setChecked(True)
+            self.pupil_group.set_checked(True)
         elif annotation_type == "iris":
-            self.iris_radio.setChecked(True)
+            self.iris_group.set_checked(True)
         elif annotation_type == "eyelid_contour":
-            self.eyelid_contour_radio.setChecked(True)
-        else:  # glint
-            self.glint_radio.setChecked(True)
+            self.eyelid_group.set_checked(True)
+        else:
+            self.glint_group.set_checked(True)
 
     def get_current_annotation_type(self) -> str:
         """Get the currently selected annotation type."""
-        if self.pupil_radio.isChecked():
+        if self.pupil_group.is_checked():
             return "pupil"
-        if self.iris_radio.isChecked():
+        if self.iris_group.is_checked():
             return "iris"
-        if self.eyelid_contour_radio.isChecked():
+        if self.eyelid_group.is_checked():
             return "eyelid_contour"
         return "glint"
+
+    def get_current_eye(self) -> str:
+        """Get the currently selected eye."""
+        return self.eye_selector.get_current_eye()
+
+    def set_current_eye(self, eye: str) -> None:
+        """Set the currently selected eye."""
+        self.eye_selector.set_current_eye(eye)
