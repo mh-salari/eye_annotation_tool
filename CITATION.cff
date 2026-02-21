@@ -1,0 +1,12 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below."
+type: software
+title: "EyE Annotation Tool"
+authors:
+  - family-names: Salari
+    given-names: Mohammadhossein
+    email: mohammadhossein.salari@gmail.com
+    orcid: "https://orcid.org/0000-0003-2031-5765"
+repository-code: "https://github.com/mh-salari/eye_annotation_tool"
+license: MIT
+doi: "10.5281/zenodo.18723470"

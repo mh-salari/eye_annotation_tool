@@ -1,5 +1,8 @@
 # EyE Annotation Tool
 
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.18723581.svg)](https://doi.org/10.5281/zenodo.18723581)
+[![PyPI](https://img.shields.io/pypi/v/eye_annotation_tool)](https://pypi.org/project/eye_annotation_tool/)
+
 EyE Annotation Tool is a tool for annotating pupil, iris and eyelid in eye images. It provides a user-friendly interface for manual annotation and supports AI-assisted detection.
 
 <p align="center">
