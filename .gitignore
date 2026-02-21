@@ -1,6 +1,7 @@
 .vscode
 ai/settings.json
 .DS_Store
+annotation_app/_version.py
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

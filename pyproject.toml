@@ -1,6 +1,6 @@
 [project]
 name = "eye_annotation_tool"
-version = "0.3.0"
+dynamic = ["version"]
 description = "A tool for annotating pupil and iris in eye images"
 readme = "README.md"
 authors = [
@@ -31,19 +31,23 @@ dependencies = [
 [project.urls]
 Homepage = "https://github.com/mh-salari/eye_annotation_tool"
 Repository = "https://github.com/mh-salari/eye_annotation_tool"
+Issues = "https://github.com/mh-salari/eye_annotation_tool/issues"
 
 [project.scripts]
 eye_annotation_tool = "annotation_app.main:run_app"
 
 [build-system]
-requires = ["hatchling"]
+requires = ["hatchling", "hatch-vcs"]
 build-backend = "hatchling.build"
+
+[tool.hatch.version]
+source = "vcs"
+
+[tool.hatch.build.hooks.vcs]
+version-file = "annotation_app/_version.py"
 
 [tool.hatch.build.targets.wheel]
 packages = ["annotation_app", "ai"]
-
-[tool.hatch.build.targets.wheel.force-include]
-"annotation_app/resources" = "annotation_app/resources"
 
 [tool.ruff]
 line-length = 119
