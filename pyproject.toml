@@ -6,13 +6,11 @@ readme = "README.md"
 authors = [
     { name = "Mohammadhossein Salari", email = "mohammadhossein.salari@gmail.com" }
 ]
-requires-python = ">=3.8"
+requires-python = ">=3.10"
 license = { text = "MIT" }
 keywords = ["eye", "annotation", "pupil", "iris", "eyelid", "computer vision"]
 classifiers = [
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.8",
-    "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
@@ -26,6 +24,7 @@ dependencies = [
     "opencv-python>=4.5.0",
     "scipy>=1.7.0",
     "pupil-detectors>=2.0.0",
+    "daugman-derived-boundary-detectors",
 ]
 
 [project.urls]
@@ -36,9 +35,21 @@ Issues = "https://github.com/mh-salari/eye_annotation_tool/issues"
 [project.scripts]
 eye_annotation_tool = "annotation_app.main:run_app"
 
+# Local editable install of daugman-derived-boundary-detectors during
+# development. When that package gets published to PyPI (before we publish
+# eye-annotation-tool), this source override can be removed and the public
+# wheel will be used instead.
+[tool.uv.sources]
+daugman-derived-boundary-detectors = { path = "../daugman-derived-boundary-detectors", editable = true }
+
 [build-system]
 requires = ["hatchling", "hatch-vcs"]
 build-backend = "hatchling.build"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.3",
+]
 
 [tool.hatch.version]
 source = "vcs"
