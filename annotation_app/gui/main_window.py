@@ -17,13 +17,12 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
-from ai import PluginManager
-
+from ..auto_detectors import PluginManager
 from ..controllers.annotation_controller import AnnotationController
 from ..controllers.navigation_controller import NavigationController
 from ..utils.settings_handler import SettingsHandler
-from .ai_assist_handler import AIAssistHandler
 from .annotation_controls import AnnotationControlPanel
+from .auto_detectors_handler import AutoDetectorsHandler
 from .custom_widgets import MaterialButton
 from .image_viewer import ImageViewer
 from .menu_handler import MenuHandler
@@ -47,7 +46,7 @@ class MainWindow(QMainWindow):
         self.navigation_controller = NavigationController(self)
         self.menu_handler = MenuHandler(self)
         self.shortcut_handler = ShortcutHandler(self)
-        self.ai_assist_handler = AIAssistHandler(self)
+        self.auto_detectors_handler = AutoDetectorsHandler(self)
 
         self.menu_handler.setup_menu()
         self.shortcut_handler.setup_shortcuts()
@@ -134,7 +133,7 @@ class MainWindow(QMainWindow):
         self.annotation_controls.clear_eyelid_points_requested.connect(self.image_viewer.clear_eyelid_points)
         self.annotation_controls.clear_glint_points_requested.connect(self.image_viewer.clear_glint_points)
         self.annotation_controls.clear_all_requested.connect(self.image_viewer.clear_all)
-        self.annotation_controls.ai_assist_requested.connect(self.ai_assist_handler.on_ai_assist_requested)
+        self.annotation_controls.auto_detector_requested.connect(self.auto_detectors_handler.on_auto_detector_requested)
         self.annotation_controls.roi_toggle_requested.connect(self.image_viewer.toggle_roi_mode)
         self.annotation_controls.roi_clear_requested.connect(self.image_viewer.clear_roi)
 

@@ -23,9 +23,9 @@ class MenuHandler:
         file_menu = menubar.addMenu("File")
         self.add_file_menu_actions(file_menu)
 
-        # AI Configuration menu
-        ai_menu = menubar.addMenu("AI Configuration")
-        self.add_ai_menu_actions(ai_menu)
+        # Auto Detectors menu
+        auto_menu = menubar.addMenu("Auto Detectors")
+        self.add_auto_detectors_menu_actions(auto_menu)
 
         # Help menu
         help_menu = menubar.addMenu("Help")
@@ -45,18 +45,18 @@ class MenuHandler:
         exit_action.triggered.connect(self.main_window.close)
         file_menu.addAction(exit_action)
 
-    def add_ai_menu_actions(self, ai_menu: QMenu) -> None:
-        """Add actions to the AI Configuration menu."""
+    def add_auto_detectors_menu_actions(self, menu: QMenu) -> None:
+        """Add actions to the Auto Detectors menu."""
         pupil_menu = QMenu("Pupil Detector", self.main_window)
-        ai_menu.addMenu(pupil_menu)
+        menu.addMenu(pupil_menu)
         self.add_detector_actions(pupil_menu, "pupil_detector")
 
-        iris_menu = QMenu("iris Detector", self.main_window)
-        ai_menu.addMenu(iris_menu)
+        iris_menu = QMenu("Iris Detector", self.main_window)
+        menu.addMenu(iris_menu)
         self.add_detector_actions(iris_menu, "iris_detector")
 
         eyelid_menu = QMenu("Eyelid Detector", self.main_window)
-        ai_menu.addMenu(eyelid_menu)
+        menu.addMenu(eyelid_menu)
         self.add_detector_actions(eyelid_menu, "eyelid_detector")
 
     def add_detector_actions(self, menu: QMenu, detector_type: str) -> None:
@@ -85,10 +85,10 @@ class MenuHandler:
 
     def update_menu_checks(self) -> None:
         """Update menu item checked states."""
-        ai_menu = self.main_window.menuBar().actions()[1].menu()
-        pupil_menu = ai_menu.actions()[0].menu()
-        iris_menu = ai_menu.actions()[1].menu()
-        eyelid_menu = ai_menu.actions()[2].menu()
+        auto_menu = self.main_window.menuBar().actions()[1].menu()
+        pupil_menu = auto_menu.actions()[0].menu()
+        iris_menu = auto_menu.actions()[1].menu()
+        eyelid_menu = auto_menu.actions()[2].menu()
 
         self.update_detector_menu_checks(pupil_menu, "pupil_detector")
         self.update_detector_menu_checks(iris_menu, "iris_detector")

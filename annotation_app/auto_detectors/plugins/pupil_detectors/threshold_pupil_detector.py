@@ -3,7 +3,7 @@
 import cv2
 import numpy as np
 
-from ai.plugin_interface import DetectorPlugin
+from annotation_app.auto_detectors.plugin_interface import DetectorPlugin
 
 
 class ThresholdPupilDetector(DetectorPlugin):

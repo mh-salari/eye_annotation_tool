@@ -5,13 +5,13 @@ This guide explains how to create a new pupil, iris or eyelid detector plugin fo
 ## Steps to Create a New Plugin
 
 1. Create a new Python file in the appropriate directory:
-   - For pupil detectors: `ai/plugins/pupil_detectors/`
-   - For iris detectors: `ai/plugins/iris_detectors/`
-   - For eyelid detectors: `ai/plugins/eyelid_detectors/`
+   - For pupil detectors: `annotation_app/auto_detectors/plugins/pupil_detectors/`
+   - For iris detectors: `annotation_app/auto_detectors/plugins/iris_detectors/`
+   - For eyelid detectors: `annotation_app/auto_detectors/plugins/eyelid_detectors/`
 
 2. Import the necessary modules:
    ```python
-   from ai.plugin_interface import DetectorPlugin
+   from annotation_app.auto_detectors.plugin_interface import DetectorPlugin
    import numpy as np
    ```
 

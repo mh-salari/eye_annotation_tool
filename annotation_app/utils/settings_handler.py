@@ -15,7 +15,7 @@ class SettingsHandler:
 
     def __init__(self) -> None:
         """Initialize the SettingsHandler."""
-        self.settings_file = str(Path(__file__).parent / ".." / ".." / "ai" / "settings.json")
+        self.settings_file = str(Path(__file__).parent / ".." / "auto_detectors" / "settings.json")
         self.settings = self.load_settings()
 
     def load_settings(self) -> dict:

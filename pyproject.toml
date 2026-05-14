@@ -47,7 +47,7 @@ source = "vcs"
 version-file = "annotation_app/_version.py"
 
 [tool.hatch.build.targets.wheel]
-packages = ["annotation_app", "ai"]
+packages = ["annotation_app"]
 
 [tool.ruff]
 line-length = 119

@@ -1,4 +1,4 @@
-"""Handler for AI-assisted annotation functionality."""
+"""Handler for auto-detector annotation functionality."""
 
 from itertools import starmap
 from typing import TYPE_CHECKING
@@ -6,22 +6,22 @@ from typing import TYPE_CHECKING
 from PyQt5.QtCore import QPointF, QSizeF
 from PyQt5.QtWidgets import QMessageBox
 
-from ai.plugins.glint_detectors.threshold_glint_detector import ThresholdGlintDetector
-from ai.plugins.pupil_detectors.threshold_pupil_detector import ThresholdPupilDetector
+from annotation_app.auto_detectors.plugins.glint_detectors.threshold_glint_detector import ThresholdGlintDetector
+from annotation_app.auto_detectors.plugins.pupil_detectors.threshold_pupil_detector import ThresholdPupilDetector
 
 if TYPE_CHECKING:
     from .main_window import MainWindow
 
 
-class AIAssistHandler:
-    """Manages AI-assisted detection and annotation."""
+class AutoDetectorsHandler:
+    """Runs the active auto-detector plugins against the current image."""
 
     def __init__(self, main_window: "MainWindow") -> None:
-        """Initialize the AIAssistHandler."""
+        """Initialize the AutoDetectorsHandler."""
         self.main_window = main_window
 
-    def on_ai_assist_requested(self) -> None:
-        """Handle AI assist button click to run detectors on current image."""
+    def on_auto_detector_requested(self) -> None:
+        """Handle the Auto Detect button click to run detectors on the current image."""
         if self.main_window.current_image_index >= 0:
             image_path = self.main_window.image_paths[self.main_window.current_image_index]
 

@@ -105,20 +105,20 @@ class AnnotationGroup(QGroupBox):
     selected = pyqtSignal()
     fit_requested = pyqtSignal()
     clear_requested = pyqtSignal()
-    ai_assist_requested = pyqtSignal()
+    auto_detector_requested = pyqtSignal()
     roi_requested = pyqtSignal()
 
     def __init__(
         self,
         title: str,
         has_fit: bool = True,
-        has_ai_assist: bool = True,
+        has_auto_detector: bool = True,
         parent: QWidget | None = None,
     ) -> None:
         """Initialize the AnnotationGroup."""
         super().__init__(parent)
         self.has_fit = has_fit
-        self.has_ai_assist = has_ai_assist
+        self.has_auto_detector = has_auto_detector
         self.setup_ui(title)
 
     def setup_ui(self, title: str) -> None:
@@ -174,10 +174,10 @@ class AnnotationGroup(QGroupBox):
             self.fit_button.clicked.connect(self.fit_requested.emit)
             button_layout.addWidget(self.fit_button)
 
-        if self.has_ai_assist:
-            self.ai_assist_button = IconButton("auto", "AI Assist")
-            self.ai_assist_button.clicked.connect(self.ai_assist_requested.emit)
-            button_layout.addWidget(self.ai_assist_button)
+        if self.has_auto_detector:
+            self.auto_detector_button = IconButton("auto", "Auto Detect")
+            self.auto_detector_button.clicked.connect(self.auto_detector_requested.emit)
+            button_layout.addWidget(self.auto_detector_button)
 
         self.clear_button = ClearIconButton()
         self.clear_button.clicked.connect(self.clear_requested.emit)
