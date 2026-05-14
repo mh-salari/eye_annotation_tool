@@ -20,24 +20,36 @@ from PyQt5.QtWidgets import (
 from ..auto_detectors import PluginManager
 from ..controllers.annotation_controller import AnnotationController
 from ..controllers.navigation_controller import NavigationController
+from ..utils.project_settings import PROJECT_DETECTOR_KEYS, load_project_settings, save_project_settings
 from ..utils.settings_handler import SettingsHandler
 from .annotation_controls import AnnotationControlPanel
 from .auto_detectors_handler import AutoDetectorsHandler
 from .custom_widgets import MaterialButton
 from .image_viewer import ImageViewer
 from .menu_handler import MenuHandler
+from .preferences_dialog import PreferencesDialog
 from .shortcut_handler import ShortcutHandler
 
 
 class MainWindow(QMainWindow):
     """Main application window containing all UI components and controllers."""
 
-    def __init__(self) -> None:
-        """Initialize the MainWindow."""
+    def __init__(self, cli_single_eye: bool = False) -> None:
+        """Initialize the MainWindow.
+
+        Args:
+            cli_single_eye: When True, force single-eye mode on for this
+                session regardless of any per-project setting. Equivalent to
+                checking the Preferences dialog checkbox at startup.
+
+        """
         super().__init__()
         self.setWindowTitle("EyE Annotation Tool")
         self.settings_handler = SettingsHandler()
         self.plugin_manager = PluginManager()
+        self._cli_single_eye = bool(cli_single_eye)
+        self.single_eye_mode = self._cli_single_eye
+        self.project_dir: str | None = None
 
         self.setup_ui()
         self.setup_variables()
@@ -74,11 +86,13 @@ class MainWindow(QMainWindow):
         left_panel = QWidget()
         left_layout = QVBoxLayout()
         self.load_images_button = MaterialButton("Load Images")
+        self.load_folder_button = MaterialButton("Load Folder")
         self.prev_image_button = MaterialButton("Previous Image")
         self.next_image_button = MaterialButton("Next Image")
         self.save_annotations_button = MaterialButton("Save Annotations")
 
         left_layout.addWidget(self.load_images_button)
+        left_layout.addWidget(self.load_folder_button)
         left_layout.addWidget(self.prev_image_button)
         left_layout.addWidget(self.next_image_button)
         left_layout.addWidget(self.save_annotations_button)
@@ -119,6 +133,7 @@ class MainWindow(QMainWindow):
     def connect_signals(self) -> None:
         """Connect signals and slots for UI components."""
         self.load_images_button.clicked.connect(self.load_images)
+        self.load_folder_button.clicked.connect(self.load_folder)
         self.prev_image_button.clicked.connect(self.navigation_controller.prev_image)
         self.next_image_button.clicked.connect(self.navigation_controller.next_image)
         self.save_annotations_button.clicked.connect(self.annotation_controller.save_annotations)
@@ -140,6 +155,8 @@ class MainWindow(QMainWindow):
         self.image_viewer.annotation_changed.connect(self.on_annotation_changed)
         self.image_viewer.annotation_type_changed.connect(self.annotation_controls.set_current_annotation)
 
+    IMAGE_SUFFIXES = (".png", ".jpg", ".jpeg", ".bmp")
+
     def load_images(self) -> None:
         """Open file dialog to load image files."""
         file_dialog = QFileDialog()
@@ -149,14 +166,115 @@ class MainWindow(QMainWindow):
         if image_files:
             self.image_paths = image_files
             self.current_image_index = 0
+            self._load_project_settings_from(image_files[0])
             self.update_image_list()
             self.load_current_image()
 
+    def load_folder(self) -> None:
+        """Pick a folder and recursively load every supported image inside it.
+
+        The chosen folder is the project root (project settings live here),
+        not whichever subdir an image happens to be in. Useful for the
+        psa-mechanisms layout where per-eye images are split across phase
+        subdirs (``cal_dark/``, ``cal_bright/``, ...).
+        """
+        folder = QFileDialog.getExistingDirectory(self, "Select Image Folder", "")
+        if not folder:
+            return
+        folder_path = Path(folder)
+        image_paths = sorted(
+            str(p) for p in folder_path.rglob("*") if p.is_file() and p.suffix.lower() in self.IMAGE_SUFFIXES
+        )
+        if not image_paths:
+            QMessageBox.warning(
+                self,
+                "No Images Found",
+                f"No image files found under {folder_path}.",
+            )
+            return
+        self.image_paths = image_paths
+        self.current_image_index = 0
+        self._apply_project_settings(str(folder_path))
+        self.update_image_list()
+        self.load_current_image()
+
+    def _load_project_settings_from(self, image_path: str) -> None:
+        """Read the project settings file in the image's folder and apply it."""
+        self._apply_project_settings(str(Path(image_path).parent))
+
+    def _apply_project_settings(self, project_dir: str) -> None:
+        """Set the active project directory and apply every value in its file.
+
+        Applies both ``single_eye_mode`` (CLI ``--single-eye`` still wins so
+        an explicit invocation override is never silently downgraded) and
+        the per-project auto-detector choices. Detector overrides are pushed
+        into ``settings_handler`` so the rest of the app sees them, and the
+        Auto Detectors menu is refreshed.
+        """
+        self.project_dir = project_dir
+        project_settings = load_project_settings(project_dir)
+        effective_single_eye = self._cli_single_eye or bool(project_settings.get("single_eye_mode", False))
+        self._apply_single_eye_mode(effective_single_eye)
+        detectors_changed = False
+        for key in PROJECT_DETECTOR_KEYS:
+            if key in project_settings:
+                self.settings_handler.set_setting(key, project_settings[key])
+                detectors_changed = True
+        if detectors_changed:
+            self.menu_handler.update_menu_checks()
+
+    def _apply_single_eye_mode(self, enabled: bool) -> None:
+        """Propagate the single-eye flag to the dependent widgets."""
+        self.single_eye_mode = enabled
+        self.image_viewer.set_single_eye_mode(enabled)
+        self.annotation_controls.set_single_eye_mode(enabled)
+
+    def show_preferences_dialog(self) -> None:
+        """Open the per-project Preferences dialog."""
+        current = {"single_eye_mode": self.single_eye_mode}
+        dialog = PreferencesDialog(current, self)
+        dialog.settings_changed.connect(self._on_preferences_changed)
+        dialog.exec_()
+
+    def _on_preferences_changed(self, new_settings: dict) -> None:
+        """Persist the dialog's settings and apply them to the GUI.
+
+        When no project folder is loaded yet (user opened Preferences before
+        loading images), the in-memory mode is still updated so it takes
+        effect immediately; the project file is written the next time
+        images are loaded.
+
+        Merges into the existing project file so detector overrides written
+        by ``change_detector`` (and any future per-project keys) survive a
+        Preferences save.
+        """
+        enabled = bool(new_settings.get("single_eye_mode", False))
+        self._apply_single_eye_mode(enabled)
+        if self.project_dir is not None:
+            merged = load_project_settings(self.project_dir)
+            merged["single_eye_mode"] = enabled
+            save_project_settings(self.project_dir, merged)
+
     def update_image_list(self) -> None:
-        """Update the image list widget with current image paths."""
+        """Update the image list widget with current image paths.
+
+        When a project folder is set, display each entry as its path relative
+        to that root so files with the same basename in different subdirs are
+        distinguishable (e.g. ``cal_dark/left_eye_target_0.png`` vs
+        ``cal_bright/left_eye_target_0.png``).
+        """
         self.image_list_widget.clear()
+        project_root = Path(self.project_dir) if self.project_dir else None
         for image_path in self.image_paths:
-            self.image_list_widget.addItem(Path(image_path).name)
+            p = Path(image_path)
+            if project_root is not None:
+                try:
+                    label = str(p.relative_to(project_root))
+                except ValueError:
+                    label = p.name
+            else:
+                label = p.name
+            self.image_list_widget.addItem(label)
         if self.current_image_index >= 0:
             self.image_list_widget.setCurrentRow(self.current_image_index)
 
@@ -179,8 +297,18 @@ class MainWindow(QMainWindow):
         self.set_annotation_modified(True)
 
     def change_detector(self, detector_type: str, detector_name: str) -> None:
-        """Change the active detector for a given type."""
+        """Change the active detector for a given type.
+
+        Updates the global settings file (so the choice persists across
+        sessions when no project is loaded) and, if a project is loaded,
+        mirrors the choice into the per-project settings file so opening
+        the same project later restores the same detectors.
+        """
         self.settings_handler.set_setting(detector_type, detector_name)
+        if self.project_dir is not None and detector_type in PROJECT_DETECTOR_KEYS:
+            project_settings = load_project_settings(self.project_dir)
+            project_settings[detector_type] = detector_name
+            save_project_settings(self.project_dir, project_settings)
         self.menu_handler.update_menu_checks()
 
     def get_current_screen(self) -> QScreen | None:

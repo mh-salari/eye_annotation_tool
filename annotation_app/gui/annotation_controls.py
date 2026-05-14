@@ -134,3 +134,14 @@ class AnnotationControlPanel(QWidget):
     def set_current_eye(self, eye: str) -> None:
         """Set the currently selected eye."""
         self.eye_selector.set_current_eye(eye)
+
+    def set_single_eye_mode(self, enabled: bool) -> None:
+        """Hide the Left/Right eye selector when single-eye mode is active.
+
+        In single-eye mode the left/right distinction is meaningless (the image
+        already contains exactly one eye), so the selector is removed from the
+        UI and the active eye is pinned to ``"left"`` internally.
+        """
+        self.eye_selector.setVisible(not enabled)
+        if enabled:
+            self.eye_selector.set_current_eye("left")

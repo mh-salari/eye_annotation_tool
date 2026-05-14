@@ -41,6 +41,14 @@ class MenuHandler:
         save_action.triggered.connect(self.main_window.annotation_controller.save_annotations)
         file_menu.addAction(save_action)
 
+        file_menu.addSeparator()
+
+        preferences_action = QAction("Preferences…", self.main_window)
+        preferences_action.triggered.connect(self.main_window.show_preferences_dialog)
+        file_menu.addAction(preferences_action)
+
+        file_menu.addSeparator()
+
         exit_action = QAction("Exit", self.main_window)
         exit_action.triggered.connect(self.main_window.close)
         file_menu.addAction(exit_action)

@@ -97,6 +97,11 @@ class ImageViewer(QWidget):
         self.resizing_roi = False
         self.roi_resize_handle = None  # 'tl', 'tr', 'bl', 'br' for corners
 
+        # Single-eye mode: when True, the right-eye block is never drawn and
+        # current_eye is pinned to "left". Toggled by MainWindow based on the
+        # per-project setting or the --single-eye CLI flag.
+        self.single_eye_mode = False
+
     def setup_colors(self) -> None:
         # Define colors with transparency
         """Set up color definitions for annotations."""
@@ -147,6 +152,12 @@ class ImageViewer(QWidget):
         if eye not in {"left", "right"}:
             return
 
+        # In single-eye mode the selector is hidden, but defend against
+        # programmatic callers requesting "right" — keep the active block
+        # pinned to "left" so it stays in sync with what we save.
+        if self.single_eye_mode and eye != "left":
+            return
+
         # Save current eye data before switching
         self.save_current_eye_data()
 
@@ -159,6 +170,15 @@ class ImageViewer(QWidget):
         # Update display
         self.update_image()
         self.annotation_changed.emit()
+
+    def set_single_eye_mode(self, enabled: bool) -> None:
+        """Toggle single-eye mode and re-render."""
+        self.single_eye_mode = enabled
+        if enabled and self.current_eye != "left":
+            self.save_current_eye_data()
+            self.current_eye = "left"
+            self.load_current_eye_data()
+        self.update_image()
 
     def get_all_eye_data(self) -> dict:
         """Get annotation data for both eyes."""
@@ -507,9 +527,12 @@ class ImageViewer(QWidget):
         painter = QPainter(self.pixmap)
         painter.drawPixmap(0, 0, scaled_pixmap)
 
-        # Draw both eyes' annotations
+        # Draw the active eye's annotations. In single-eye mode the right
+        # block is unused and we skip it to avoid drawing stale data carried
+        # over from a multi-eye file loaded earlier.
         self.draw_eye_annotations(painter, "left")
-        self.draw_eye_annotations(painter, "right")
+        if not self.single_eye_mode:
+            self.draw_eye_annotations(painter, "right")
 
         # Draw ROI if it exists and we're in ROI mode or it's defined
         if self.roi:
@@ -562,13 +585,15 @@ class ImageViewer(QWidget):
                     painter.setPen(QPen(color, 3, Qt.SolidLine))
                 painter.drawEllipse(scaled_point, 1.5, 1.5)
 
-                # Draw small eye label next to the point
-                font = painter.font()
-                font.setPointSize(8)
-                painter.setFont(font)
-                painter.setPen(QPen(color, 1, Qt.SolidLine))
-                text_pos = QPointF(scaled_point.x() + 6, scaled_point.y() - 4)
-                painter.drawText(text_pos, eye_label)
+                # In single-eye mode the L/R distinction is meaningless, so
+                # the per-point eye label is suppressed entirely.
+                if not self.single_eye_mode:
+                    font = painter.font()
+                    font.setPointSize(8)
+                    painter.setFont(font)
+                    painter.setPen(QPen(color, 1, Qt.SolidLine))
+                    text_pos = QPointF(scaled_point.x() + 6, scaled_point.y() - 4)
+                    painter.drawText(text_pos, eye_label)
 
     def draw_ellipses_for_eye(self, painter: QPainter, eye_data: dict) -> None:
         """Draw fitted ellipses for a specific eye."""

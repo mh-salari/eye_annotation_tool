@@ -51,7 +51,7 @@ class AnnotationController:
                     return
 
             eye_data = self.main_window.image_viewer.get_annotation_data()
-            save_annotations(annotation_path, eye_data)
+            save_annotations(annotation_path, eye_data, single_eye_mode=self.main_window.single_eye_mode)
             self.main_window.set_annotation_modified(False)
             # QMessageBox.information(self.main_window, "Success", "Annotations saved successfully.")
 

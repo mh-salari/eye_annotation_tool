@@ -7,45 +7,44 @@ from pathlib import Path
 from PyQt5.QtCore import QPointF, QSizeF
 
 
+def _serialize_eye_block(block: dict) -> dict:
+    """Convert one in-memory eye block to its JSON-serialisable form."""
+    return {
+        "pupil_points": [(p.x(), p.y()) for p in block["pupil_points"]],
+        "iris_points": [(p.x(), p.y()) for p in block["iris_points"]],
+        "eyelid_contour_points": [(p.x(), p.y()) for p in block["eyelid_contour_points"]],
+        "glint_points": [(p.x(), p.y()) for p in block["glint_points"]],
+        "pupil_ellipse": ellipse_to_dict(block["pupil_ellipse"]),
+        "iris_ellipse": ellipse_to_dict(block["iris_ellipse"]),
+        "roi": block.get("roi"),
+    }
+
+
 def save_annotations(
     annotation_path: str,
     eye_data: dict,
+    single_eye_mode: bool = False,
 ) -> None:
-    """Save annotation data for both eyes to a JSON file.
+    """Save annotation data to a JSON file.
 
     Args:
         annotation_path: Path where the annotation file will be saved.
         eye_data: Dictionary containing annotation data for both left and right eyes.
+        single_eye_mode: When True, write a flat schema (no ``left`` / ``right``
+            keys) using the ``left`` block as the canonical single-eye source.
 
     """
-    # Convert eye_data to serializable format
-    serializable_data = {}
-    for eye in ["left", "right"]:
-        serializable_data[eye] = {
-            "pupil_points": [(p.x(), p.y()) for p in eye_data[eye]["pupil_points"]],
-            "iris_points": [(p.x(), p.y()) for p in eye_data[eye]["iris_points"]],
-            "eyelid_contour_points": [(p.x(), p.y()) for p in eye_data[eye]["eyelid_contour_points"]],
-            "glint_points": [(p.x(), p.y()) for p in eye_data[eye]["glint_points"]],
-            "pupil_ellipse": ellipse_to_dict(eye_data[eye]["pupil_ellipse"]),
-            "iris_ellipse": ellipse_to_dict(eye_data[eye]["iris_ellipse"]),
-            "roi": eye_data[eye].get("roi"),
-        }
+    if single_eye_mode:
+        serializable_data = _serialize_eye_block(eye_data["left"])
+    else:
+        serializable_data = {eye: _serialize_eye_block(eye_data[eye]) for eye in ("left", "right")}
 
     with Path(annotation_path).open("w", encoding="utf-8") as f:
         json.dump(serializable_data, f, indent=2)
 
 
-def load_annotations(annotation_path: str) -> dict:
-    """Load annotation data for both eyes from a JSON file.
-
-    Args:
-        annotation_path: Path to the annotation file.
-
-    Returns:
-        Dictionary containing annotation data for both eyes.
-
-    """
-    empty_eye_data = {
+def _empty_eye_block() -> dict:
+    return {
         "pupil_points": [],
         "iris_points": [],
         "eyelid_contour_points": [],
@@ -55,50 +54,53 @@ def load_annotations(annotation_path: str) -> dict:
         "roi": None,
     }
 
-    if Path(annotation_path).exists():
-        with Path(annotation_path).open(encoding="utf-8") as f:
-            ann = json.load(f)
 
-        # Check if this is new format (with left/right) or old format (single eye)
-        if "left" in ann or "right" in ann:
-            # New format with both eyes
-            eye_data = {}
-            for eye in ["left", "right"]:
-                if eye in ann:
-                    roi_data = ann[eye].get("roi")
-                    if roi_data and isinstance(roi_data, (list, tuple)) and len(roi_data) == 4:
-                        roi = tuple(roi_data)
-                    else:
-                        roi = None
+def _deserialize_eye_block(block: dict) -> dict:
+    """Convert one on-disk eye block (or a flat schema dict) back to in-memory form."""
+    roi_data = block.get("roi")
+    roi = tuple(roi_data) if roi_data and isinstance(roi_data, (list, tuple)) and len(roi_data) == 4 else None
+    return {
+        "pupil_points": list(starmap(QPointF, block.get("pupil_points", []))),
+        "iris_points": list(starmap(QPointF, block.get("iris_points", []))),
+        "eyelid_contour_points": list(starmap(QPointF, block.get("eyelid_contour_points", []))),
+        "glint_points": list(starmap(QPointF, block.get("glint_points", []))),
+        "pupil_ellipse": dict_to_ellipse(block.get("pupil_ellipse")),
+        "iris_ellipse": dict_to_ellipse(block.get("iris_ellipse")),
+        "roi": roi,
+    }
 
-                    eye_data[eye] = {
-                        "pupil_points": list(starmap(QPointF, ann[eye].get("pupil_points", []))),
-                        "iris_points": list(starmap(QPointF, ann[eye].get("iris_points", []))),
-                        "eyelid_contour_points": list(
-                            starmap(QPointF, ann[eye].get("eyelid_contour_points", []))
-                        ),
-                        "glint_points": list(starmap(QPointF, ann[eye].get("glint_points", []))),
-                        "pupil_ellipse": dict_to_ellipse(ann[eye].get("pupil_ellipse")),
-                        "iris_ellipse": dict_to_ellipse(ann[eye].get("iris_ellipse")),
-                        "roi": roi,
-                    }
-                else:
-                    eye_data[eye] = empty_eye_data.copy()
-            return eye_data
-        # Old format (single eye) - migrate to left eye
+
+def load_annotations(annotation_path: str) -> dict:
+    """Load annotation data from a JSON file.
+
+    Handles three on-disk schemas transparently:
+
+    - **Multi-eye** (current default): top-level keys ``"left"`` and/or
+      ``"right"`` map to per-eye blocks.
+    - **Flat single-eye**: top-level keys are the annotation fields
+      (``"pupil_points"``, ...). Loaded into the ``"left"`` block; the
+      ``"right"`` block is left empty.
+    - **Legacy single-eye** (pre-multi-eye refactor): same shape as the flat
+      single-eye format. Treated identically.
+
+    Returns:
+        ``{"left": {...}, "right": {...}}`` regardless of on-disk schema, so
+        the rest of the app sees a uniform structure.
+
+    """
+    if not Path(annotation_path).exists():
+        return {"left": _empty_eye_block(), "right": _empty_eye_block()}
+
+    with Path(annotation_path).open(encoding="utf-8") as f:
+        ann = json.load(f)
+
+    if "left" in ann or "right" in ann:
         return {
-            "left": {
-                "pupil_points": list(starmap(QPointF, ann.get("pupil_points", []))),
-                "iris_points": list(starmap(QPointF, ann.get("iris_points", []))),
-                "eyelid_contour_points": list(starmap(QPointF, ann.get("eyelid_contour_points", []))),
-                "glint_points": list(starmap(QPointF, ann.get("glint_points", []))),
-                "pupil_ellipse": dict_to_ellipse(ann.get("pupil_ellipse")),
-                "iris_ellipse": dict_to_ellipse(ann.get("iris_ellipse")),
-                "roi": None,  # Old format doesn't have ROI
-            },
-            "right": empty_eye_data.copy(),
+            "left": _deserialize_eye_block(ann["left"]) if "left" in ann else _empty_eye_block(),
+            "right": _deserialize_eye_block(ann["right"]) if "right" in ann else _empty_eye_block(),
         }
-    return {"left": empty_eye_data.copy(), "right": empty_eye_data.copy()}
+    # Flat single-eye schema (or legacy pre-multi-eye file). Load into left.
+    return {"left": _deserialize_eye_block(ann), "right": _empty_eye_block()}
 
 
 def get_annotation_path(image_path: str) -> str:
