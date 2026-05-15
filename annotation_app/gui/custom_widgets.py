@@ -196,6 +196,11 @@ class AnnotationGroup(QGroupBox):
         """Set the checked state of the annotation type."""
         self.radio.setChecked(checked)
 
+    def set_auto_detector_enabled(self, enabled: bool) -> None:
+        """Show or hide the Auto Detect button (only visible when a detector is configured)."""
+        if hasattr(self, "auto_detector_button"):
+            self.auto_detector_button.setVisible(enabled)
+
 
 class EyeSelector(QGroupBox):
     """Widget for selecting between left and right eye annotations."""

@@ -64,6 +64,20 @@ class AutoDetectorsHandler:
                 detector = self.main_window.plugin_manager.get_pupil_detector(detector_name)
             elif detector_type == "limbus_detector":
                 detector = self.main_window.plugin_manager.get_limbus_detector(detector_name)
+                # Limbus detection needs a pupil to seed the IDO; refuse if
+                # the pupil isn't already annotated for the current eye.
+                pupil_ellipse = self.main_window.image_viewer.pupil_ellipse
+                if pupil_ellipse is None:
+                    QMessageBox.information(
+                        self.main_window,
+                        "Pupil required",
+                        "Annotate or auto-detect the pupil first — the limbus search uses it as a seed.",
+                    )
+                    return False
+                if detector is not None and hasattr(detector, "set_pupil_seed"):
+                    center, size, _ = pupil_ellipse
+                    pupil_radius = max(size.width(), size.height()) / 2
+                    detector.set_pupil_seed((center.x(), center.y()), pupil_radius)
             else:  # eyelid_detector
                 detector = self.main_window.plugin_manager.get_eyelid_detector(detector_name)
         else:

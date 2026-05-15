@@ -92,6 +92,7 @@ class MainWindow(QMainWindow):
         self.menu_handler.setup_menu()
         self.shortcut_handler.setup_shortcuts()
         self.connect_signals()
+        self._sync_auto_detector_buttons()
 
         # Set the application icon
         icon_path = str(Path(__file__).parent / ".." / "resources" / "app_icon.ico")
@@ -299,6 +300,7 @@ class MainWindow(QMainWindow):
                 detectors_changed = True
         if detectors_changed:
             self.menu_handler.update_menu_checks()
+        self._sync_auto_detector_buttons()
         # Restore the last used mode for this project; setChecked fires the
         # button's toggled signal which drives the full _on_mode_changed flow.
         saved_mode = project_settings.get("current_mode", MODE_ANNOTATE)
@@ -561,6 +563,18 @@ class MainWindow(QMainWindow):
             project_settings[detector_type] = detector_name
             save_project_settings(self.project_dir, project_settings)
         self.menu_handler.update_menu_checks()
+        self._sync_auto_detector_buttons()
+
+    def _sync_auto_detector_buttons(self) -> None:
+        """Hide each Auto Detect button when its detector setting is ``disabled``."""
+        panel = self.annotation_controls
+        for setting_key, group in (
+            ("pupil_detector", panel.pupil_group),
+            ("limbus_detector", panel.limbus_group),
+            ("eyelid_detector", panel.eyelid_group),
+        ):
+            enabled = self.settings_handler.get_setting(setting_key) != "disabled"
+            group.set_auto_detector_enabled(enabled)
 
     def get_current_screen(self) -> QScreen | None:
         # Get the screen that contains the center of the window
