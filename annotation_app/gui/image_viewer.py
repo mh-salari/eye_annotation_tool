@@ -2,6 +2,7 @@
 
 from collections import deque
 
+import cv2
 import numpy as np
 from PyQt5.QtCore import QEvent, QPoint, QPointF, QSizeF, Qt, pyqtSignal
 from PyQt5.QtGui import QColor, QKeyEvent, QPainter, QPen, QPixmap
@@ -15,6 +16,13 @@ class ImageViewer(QWidget):
 
     annotation_changed = pyqtSignal()
     annotation_type_changed = pyqtSignal(str)
+    # Emitted after a new image is loaded; MainWindow uses it to re-trigger
+    # live detection when Manual Threshold mode is enabled.
+    image_loaded = pyqtSignal()
+    # Manual Threshold ROIs: emitted whenever the user finishes drawing /
+    # moving / resizing a pupil or glint ROI. Payload is (x, y, w, h) or None.
+    pupil_roi_changed = pyqtSignal(object)
+    glint_roi_changed = pyqtSignal(object)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         """Initialize the ImageViewer."""
@@ -96,11 +104,27 @@ class ImageViewer(QWidget):
         self.moving_roi = False
         self.resizing_roi = False
         self.roi_resize_handle = None  # 'tl', 'tr', 'bl', 'br' for corners
+        # Which ROI attribute the active drag mutates: "roi", "pupil_roi" or
+        # "glint_roi". Reset between drags.
+        self._drag_roi_attr: str = "roi"
 
         # Single-eye mode: when True, the right-eye block is never drawn and
         # current_eye is pinned to "left". Toggled by MainWindow based on the
         # per-project setting or the --single-eye CLI flag.
         self.single_eye_mode = False
+
+        # Manual Threshold live detection: the grayscale numpy array of the
+        # currently loaded image (consumed by the off-thread DetectionWorker)
+        # and the most recent detection result for overlay rendering. Cleared
+        # when the panel is disabled or a new image is loaded.
+        self.image_grayscale: np.ndarray | None = None
+        self.manual_threshold_detection: dict | None = None
+
+        # Manual Threshold per-image ROIs. ``_mt_active_roi`` names which one
+        # (if any) is currently in drag-edit mode — toggled via the panel.
+        self.pupil_roi: tuple | None = None
+        self.glint_roi: tuple | None = None
+        self._mt_active_roi: str | None = None  # None | "pupil" | "glint"
 
     def setup_colors(self) -> None:
         # Define colors with transparency
@@ -118,6 +142,16 @@ class ImageViewer(QWidget):
         self.eyelid_ellipse_color = QColor(0, 118, 195, 255)
 
         self.glint_color = QColor(255, 165, 0, 255)  # Orange
+
+        # Manual Threshold detection overlay: bright cyan ellipse + center
+        # dot for the pupil, magenta dots for each glint. Distinct from the
+        # manual annotation colors so the live preview is unambiguous.
+        self.mt_pupil_color = QColor(0, 230, 255, 255)
+        self.mt_glint_color = QColor(255, 80, 180, 255)
+        # Manual Threshold ROIs: yellow rectangle for the pupil search region,
+        # orange-red for the glint search region.
+        self.pupil_roi_color = QColor(255, 220, 0, 255)
+        self.glint_roi_color = QColor(255, 100, 60, 255)
         self.glint_select_color = QColor(255, 215, 0, 255)  # Gold
 
         self.roi_color = QColor(0, 188, 212, 255)  # Cyan
@@ -196,7 +230,6 @@ class ImageViewer(QWidget):
         """Toggle ROI drawing mode on/off."""
         self.roi_drawing_mode = not self.roi_drawing_mode
         if not self.roi_drawing_mode:
-            # Reset ROI drawing state when exiting mode
             self.drawing_roi = False
             self.moving_roi = False
             self.resizing_roi = False
@@ -213,6 +246,52 @@ class ImageViewer(QWidget):
         self.save_current_eye_data()
         self.annotation_changed.emit()
         self.update_image()
+
+    # ----- Manual Threshold ROIs -----
+
+    def set_mt_active_roi(self, target: str | None) -> None:
+        """Activate draw/edit on the Manual Threshold pupil/glint ROI, or none."""
+        if target not in (None, "pupil", "glint"):
+            raise ValueError(f"unknown mt roi target: {target!r}")
+        self._mt_active_roi = target
+        if target is None:
+            self.drawing_roi = False
+            self.moving_roi = False
+            self.resizing_roi = False
+            self.roi_resize_handle = None
+        self.update_image()
+
+    def set_pupil_roi(self, roi: tuple | None) -> None:
+        """Replace the pupil ROI (without emitting ``pupil_roi_changed``)."""
+        self.pupil_roi = roi
+        self.update_image()
+
+    def set_glint_roi(self, roi: tuple | None) -> None:
+        """Replace the glint ROI (without emitting ``glint_roi_changed``)."""
+        self.glint_roi = roi
+        self.update_image()
+
+    def clear_pupil_roi(self) -> None:
+        """Clear the pupil ROI and emit the change."""
+        self.pupil_roi = None
+        self.pupil_roi_changed.emit(None)
+        self.update_image()
+
+    def clear_glint_roi(self) -> None:
+        """Clear the glint ROI and emit the change."""
+        self.glint_roi = None
+        self.glint_roi_changed.emit(None)
+        self.update_image()
+
+    def _active_drag_roi_attr(self) -> str | None:
+        """Pick the ROI attribute the next drag should mutate, or ``None`` if no drag mode is on."""
+        if self.roi_drawing_mode:
+            return "roi"
+        if self._mt_active_roi == "pupil":
+            return "pupil_roi"
+        if self._mt_active_roi == "glint":
+            return "glint_roi"
+        return None
 
     def reset_undo_stack(self, initial_state: dict | None = None) -> None:
         """Reset the undo stack to initial state."""
@@ -310,24 +389,28 @@ class ImageViewer(QWidget):
         elif event.button() == Qt.LeftButton:
             image_pos = self.get_image_position(event.pos())
             if image_pos:
-                # Handle ROI mode first
-                if self.roi_drawing_mode:
-                    # Check if clicking on ROI for moving/resizing
-                    if self.roi:
-                        handle = self.get_roi_handle_at_pos(image_pos)
+                # Active ROI drag (Annotate-mode self.roi or one of the
+                # Manual Threshold pupil/glint ROIs). Mutually exclusive
+                # with the annotation-point flow below.
+                roi_attr = self._active_drag_roi_attr()
+                if roi_attr is not None:
+                    self._drag_roi_attr = roi_attr
+                    current = getattr(self, roi_attr)
+                    if current:
+                        handle = self.get_roi_handle_at_pos(image_pos, current)
                         if handle:
                             self.resizing_roi = True
                             self.roi_resize_handle = handle
                             self.roi_start_pos = image_pos
                             return
-                        if self.is_point_in_roi(image_pos):
+                        if self.is_point_in_roi(image_pos, current):
                             self.moving_roi = True
                             self.roi_start_pos = image_pos
                             return
-                    # Start drawing new ROI
+                    # Start drawing a new rectangle, replacing any existing one.
                     self.drawing_roi = True
                     self.roi_start_pos = image_pos
-                    self.roi = None  # Clear existing ROI
+                    setattr(self, roi_attr, None)
                     return
 
                 self.selected_point, selected_annotation = self.find_closest_point_and_type(image_pos)
@@ -364,36 +447,35 @@ class ImageViewer(QWidget):
         elif self.drawing_roi or self.moving_roi or self.resizing_roi:
             new_pos = self.get_image_position(event.pos())
             if new_pos and self.roi_start_pos:
+                attr = self._drag_roi_attr
+                current = getattr(self, attr)
                 if self.drawing_roi:
-                    # Update ROI as user drags
                     x = min(self.roi_start_pos.x(), new_pos.x())
                     y = min(self.roi_start_pos.y(), new_pos.y())
                     w = abs(new_pos.x() - self.roi_start_pos.x())
                     h = abs(new_pos.y() - self.roi_start_pos.y())
-                    self.roi = (x, y, w, h)
-                elif self.moving_roi and self.roi:
-                    # Move entire ROI
+                    setattr(self, attr, (x, y, w, h))
+                elif self.moving_roi and current:
                     delta_x = new_pos.x() - self.roi_start_pos.x()
                     delta_y = new_pos.y() - self.roi_start_pos.y()
-                    x, y, w, h = self.roi
-                    self.roi = (x + delta_x, y + delta_y, w, h)
+                    x, y, w, h = current
+                    setattr(self, attr, (x + delta_x, y + delta_y, w, h))
                     self.roi_start_pos = new_pos
-                elif self.resizing_roi and self.roi:
-                    # Resize ROI based on handle
-                    x, y, w, h = self.roi
-                    if "t" in self.roi_resize_handle:  # top
+                elif self.resizing_roi and current:
+                    x, y, w, h = current
+                    if "t" in self.roi_resize_handle:
                         delta_y = new_pos.y() - y
                         y = new_pos.y()
                         h -= delta_y
-                    if "b" in self.roi_resize_handle:  # bottom
+                    if "b" in self.roi_resize_handle:
                         h = new_pos.y() - y
-                    if "l" in self.roi_resize_handle:  # left
+                    if "l" in self.roi_resize_handle:
                         delta_x = new_pos.x() - x
                         x = new_pos.x()
                         w -= delta_x
-                    if "r" in self.roi_resize_handle:  # right
+                    if "r" in self.roi_resize_handle:
                         w = new_pos.x() - x
-                    self.roi = (x, y, max(10, w), max(10, h))  # Minimum size 10x10
+                    setattr(self, attr, (x, y, max(10, w), max(10, h)))
                 self.update_image()
         elif self.moving_point and self.selected_point:
             new_pos = self.get_image_position(event.pos())
@@ -437,15 +519,21 @@ class ImageViewer(QWidget):
             self.panning = False
             self.setCursor(Qt.ArrowCursor)
         elif event.button() == Qt.LeftButton:
-            # Handle ROI operations
             if self.drawing_roi or self.moving_roi or self.resizing_roi:
                 self.drawing_roi = False
                 self.moving_roi = False
                 self.resizing_roi = False
                 self.roi_resize_handle = None
-                if self.roi:
-                    self.save_current_eye_data()
-                    self.annotation_changed.emit()
+                attr = self._drag_roi_attr
+                current = getattr(self, attr)
+                if attr == "roi":
+                    if current:
+                        self.save_current_eye_data()
+                        self.annotation_changed.emit()
+                elif attr == "pupil_roi":
+                    self.pupil_roi_changed.emit(current)
+                elif attr == "glint_roi":
+                    self.glint_roi_changed.emit(current)
                 return
 
             self.moving_point = False
@@ -465,17 +553,44 @@ class ImageViewer(QWidget):
             super().wheelEvent(event)
 
     def load_image(self, image_path: str) -> bool:
-        """Load an image from the given path."""
+        """Load an image from the given path.
+
+        Reads both the Qt pixmap (for display) and a grayscale numpy array
+        (for the off-thread Manual Threshold worker). Failing to decode the
+        grayscale array is non-fatal — the pixmap path is the user-visible
+        source of truth and Manual Threshold mode just stays disabled.
+        """
         self.original_pixmap = QPixmap(image_path)
         if self.original_pixmap.isNull():
             return False
+        self.image_grayscale = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
+        self.manual_threshold_detection = None
+        # Manual Threshold ROIs are per-image; Phase A6 will restore them from
+        # the annotation JSON. Until then, clear on every load.
+        self.pupil_roi = None
+        self.glint_roi = None
         self.pupil_points = []
         self.iris_points = []
         self.pupil_ellipse = None
         self.iris_ellipse = None
         self.reset_undo_stack()  # This will now save the empty state
         self.update_image()
+        self.image_loaded.emit()
         return True
+
+    def get_current_image_grayscale(self) -> np.ndarray | None:
+        """Return the grayscale numpy view of the current image (or None)."""
+        return self.image_grayscale
+
+    def set_manual_threshold_detection(self, detection: dict | None) -> None:
+        """Store and render the latest live-detection result from the worker.
+
+        ``detection`` carries ``pupil_ellipse``, ``pupil_center``, and
+        ``glints`` keys (the JSON-serialisable subset the worker emits).
+        Passing ``None`` clears the overlay.
+        """
+        self.manual_threshold_detection = detection
+        self.update_image()
 
     def eventFilter(self, source: QWidget, event: QEvent) -> bool:  # noqa: N802
         """Filter events for window state changes."""
@@ -537,6 +652,17 @@ class ImageViewer(QWidget):
         # Draw ROI if it exists and we're in ROI mode or it's defined
         if self.roi:
             self.draw_roi(painter)
+
+        # Manual Threshold pupil/glint ROIs (always visible when set).
+        if self.pupil_roi:
+            self._draw_named_roi(painter, self.pupil_roi, self.pupil_roi_color, "pupil")
+        if self.glint_roi:
+            self._draw_named_roi(painter, self.glint_roi, self.glint_roi_color, "glint")
+
+        # Manual Threshold live detection overlay (on top of everything else
+        # so the user can see it against any manual annotation underneath).
+        if self.manual_threshold_detection is not None:
+            self.draw_manual_threshold_overlay(painter)
 
         painter.end()
         self.image_label.setPixmap(self.pixmap)
@@ -640,6 +766,77 @@ class ImageViewer(QWidget):
                     handle_size,
                     handle_size,
                 )
+
+    def _draw_named_roi(self, painter: QPainter, roi: tuple, color: QColor, name: str) -> None:
+        """Render a Manual Threshold ROI with dashed lines + corner handles when active."""
+        x, y, w, h = roi
+        scaled_x = x * self.factor
+        scaled_y = y * self.factor
+        scaled_w = w * self.factor
+        scaled_h = h * self.factor
+
+        painter.setPen(QPen(color, 2, Qt.DashLine))
+        painter.setBrush(Qt.NoBrush)
+        painter.drawRect(int(scaled_x), int(scaled_y), int(scaled_w), int(scaled_h))
+
+        # Corner handles are only drawn when this ROI is the active drag target.
+        if self._mt_active_roi == name:
+            handle_size = 8
+            painter.setPen(QPen(color, 2, Qt.SolidLine))
+            painter.setBrush(color)
+            corners = [
+                (scaled_x, scaled_y),
+                (scaled_x + scaled_w, scaled_y),
+                (scaled_x, scaled_y + scaled_h),
+                (scaled_x + scaled_w, scaled_y + scaled_h),
+            ]
+            for cx, cy in corners:
+                painter.drawRect(
+                    int(cx - handle_size / 2),
+                    int(cy - handle_size / 2),
+                    handle_size,
+                    handle_size,
+                )
+
+    def draw_manual_threshold_overlay(self, painter: QPainter) -> None:
+        """Render the live detection from the Manual Threshold worker.
+
+        Expects ``self.manual_threshold_detection`` shaped like the
+        ``DetectionWorker.detection_ready`` payload: ``pupil_ellipse``
+        ``((cx, cy), (w, h), angle)``, ``pupil_center`` ``(cx, cy)``, and
+        ``glints`` ``[(gx, gy), ...]``. Coordinates are in original image
+        space and are scaled by ``self.factor`` to match the displayed pixmap.
+        """
+        det = self.manual_threshold_detection
+        pupil_ellipse = det.get("pupil_ellipse")
+        pupil_center = det.get("pupil_center")
+        glints = det.get("glints") or []
+
+        # Pupil ellipse: dashed cyan outline. No fill — the painter's brush
+        # may still be set from prior ROI corner-handle draws.
+        if pupil_ellipse is not None:
+            (cx, cy), (w, h), angle = pupil_ellipse
+            painter.save()
+            painter.setPen(QPen(self.mt_pupil_color, 2, Qt.DashLine))
+            painter.setBrush(Qt.NoBrush)
+            painter.translate(QPointF(cx * self.factor, cy * self.factor))
+            painter.rotate(angle)
+            painter.drawEllipse(QPointF(0, 0), (w / 2) * self.factor, (h / 2) * self.factor)
+            painter.restore()
+
+        # Pupil center: filled cyan dot with a thin contrasting ring.
+        if pupil_center is not None:
+            pcx, pcy = pupil_center
+            scaled = QPointF(pcx * self.factor, pcy * self.factor)
+            painter.setBrush(self.mt_pupil_color)
+            painter.setPen(QPen(self.mt_pupil_color, 1, Qt.SolidLine))
+            painter.drawEllipse(scaled, 4, 4)
+
+        # Each glint: filled magenta dot.
+        painter.setBrush(self.mt_glint_color)
+        painter.setPen(QPen(self.mt_glint_color, 1, Qt.SolidLine))
+        for gx, gy in glints:
+            painter.drawEllipse(QPointF(gx * self.factor, gy * self.factor), 3, 3)
 
     def fit_annotation(self) -> bool:
         """Fit an ellipse to the current annotation points."""
@@ -844,22 +1041,23 @@ class ImageViewer(QWidget):
         for i in range(len(points)):
             points[i] = QPointF(points[i].x() + delta_x, points[i].y() + delta_y)
 
-    def is_point_in_roi(self, point: QPointF) -> bool:
-        """Check if a point is inside the ROI."""
-        if not self.roi:
+    def is_point_in_roi(self, point: QPointF, roi: tuple | None = None) -> bool:
+        """Check if a point is inside the given rectangle (defaults to ``self.roi``)."""
+        rect = roi if roi is not None else self.roi
+        if not rect:
             return False
-        x, y, w, h = self.roi
+        x, y, w, h = rect
         return x <= point.x() <= x + w and y <= point.y() <= y + h
 
-    def get_roi_handle_at_pos(self, point: QPointF) -> str | None:
-        """Get the ROI resize handle at the given position."""
-        if not self.roi:
+    def get_roi_handle_at_pos(self, point: QPointF, roi: tuple | None = None) -> str | None:
+        """Get the corner-handle name (tl/tr/bl/br) at ``point`` for the given rectangle."""
+        rect = roi if roi is not None else self.roi
+        if not rect:
             return None
 
-        x, y, w, h = self.roi
-        handle_size = 8 / self.factor  # Handle size in image coordinates
+        x, y, w, h = rect
+        handle_size = 8 / self.factor  # in image coordinates
 
-        # Check corners (priority order: tl, tr, bl, br)
         if abs(point.x() - x) < handle_size and abs(point.y() - y) < handle_size:
             return "tl"
         if abs(point.x() - (x + w)) < handle_size and abs(point.y() - y) < handle_size:

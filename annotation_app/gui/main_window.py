@@ -3,7 +3,7 @@
 import ast
 from pathlib import Path
 
-from PyQt5.QtCore import QEvent, QRect, Qt
+from PyQt5.QtCore import QEvent, QRect, Qt, QThread, QTimer, pyqtSignal
 from PyQt5.QtGui import QCloseEvent, QIcon, QPixmap, QScreen
 from PyQt5.QtWidgets import (
     QApplication,
@@ -13,6 +13,8 @@ from PyQt5.QtWidgets import (
     QListWidget,
     QMainWindow,
     QMessageBox,
+    QScrollArea,
+    QStatusBar,
     QVBoxLayout,
     QWidget,
 )
@@ -22,25 +24,34 @@ from ..controllers.annotation_controller import AnnotationController
 from ..controllers.navigation_controller import NavigationController
 from ..utils.project_settings import PROJECT_DETECTOR_KEYS, load_project_settings, save_project_settings
 from ..utils.settings_handler import SettingsHandler
-from .annotation_controls import AnnotationControlPanel
+from .annotation_controls import MODE_ANNOTATE, MODE_MANUAL_THRESHOLD, AnnotationControlPanel
 from .auto_detectors_handler import AutoDetectorsHandler
 from .custom_widgets import MaterialButton
 from .image_viewer import ImageViewer
+from .manual_threshold_worker import DetectionWorker
 from .menu_handler import MenuHandler
-from .preferences_dialog import PreferencesDialog
 from .shortcut_handler import ShortcutHandler
+
+# Slider drags fire one params_changed per pixel. Collapse the resulting burst
+# to a single detection ~100 ms after the last change so the worker isn't
+# flooded with stale intermediates.
+MANUAL_THRESHOLD_DEBOUNCE_MS = 100
 
 
 class MainWindow(QMainWindow):
     """Main application window containing all UI components and controllers."""
 
+    # Queued-connection bridge into the off-thread DetectionWorker. Emitted
+    # after the debounce timer fires; carries the grayscale image and the
+    # latest parameter dict from ManualThresholdPanel.
+    manual_threshold_detect_requested = pyqtSignal(object, object)
+
     def __init__(self, cli_single_eye: bool = False) -> None:
         """Initialize the MainWindow.
 
         Args:
-            cli_single_eye: When True, force single-eye mode on for this
-                session regardless of any per-project setting. Equivalent to
-                checking the Preferences dialog checkbox at startup.
+            cli_single_eye: When True, force single-eye mode on at startup
+                regardless of any per-project setting.
 
         """
         super().__init__()
@@ -59,6 +70,19 @@ class MainWindow(QMainWindow):
         self.menu_handler = MenuHandler(self)
         self.shortcut_handler = ShortcutHandler(self)
         self.auto_detectors_handler = AutoDetectorsHandler(self)
+
+        # Manual Threshold mode runs detect_pupil_and_glints on a background
+        # thread so the GUI stays responsive while the user drags sliders.
+        # The worker lives for the whole MainWindow lifetime; we feed it
+        # (image, params) tuples and it emits results back.
+        self._mt_thread = QThread(self)
+        self._mt_worker = DetectionWorker()
+        self._mt_worker.moveToThread(self._mt_thread)
+        self._mt_thread.start()
+        self._mt_debounce = QTimer(self)
+        self._mt_debounce.setSingleShot(True)
+        self._mt_debounce.setInterval(MANUAL_THRESHOLD_DEBOUNCE_MS)
+        self._mt_pending_params: dict | None = None
 
         self.menu_handler.setup_menu()
         self.shortcut_handler.setup_shortcuts()
@@ -107,15 +131,26 @@ class MainWindow(QMainWindow):
         # Central area for image viewer
         self.image_viewer = ImageViewer()
 
-        # Right panel for annotation controls
+        # Right panel for annotation controls. Wrapped in a QScrollArea so
+        # taller Annotate-mode content can't push the window past the screen.
         self.annotation_controls = AnnotationControlPanel()
+        right_scroll = QScrollArea()
+        right_scroll.setWidget(self.annotation_controls)
+        right_scroll.setWidgetResizable(True)
+        right_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        right_scroll.setFixedWidth(360)  # 340 panel + room for the vertical scrollbar
+        right_scroll.setFrameShape(QScrollArea.NoFrame)
 
         main_layout.addWidget(left_panel)
         main_layout.addWidget(self.image_viewer, 1)
-        main_layout.addWidget(self.annotation_controls)
+        main_layout.addWidget(right_scroll)
 
         central_widget.setLayout(main_layout)
         self.setCentralWidget(central_widget)
+
+        # Status bar surfaces non-blocking messages such as Manual Threshold
+        # detection failures (no dark contour, no glints, etc.).
+        self.setStatusBar(QStatusBar())
 
         # Set focus to the image viewer
         self.image_viewer.setFocus()
@@ -140,7 +175,7 @@ class MainWindow(QMainWindow):
         self.image_list_widget.itemClicked.connect(self.navigation_controller.on_image_selected)
 
         self.annotation_controls.annotation_changed.connect(self.image_viewer.set_current_annotation)
-        self.annotation_controls.eye_changed.connect(self.image_viewer.switch_eye)
+        self.annotation_controls.eye_changed.connect(self._on_eye_changed)
         self.annotation_controls.fit_annotation_requested.connect(self.image_viewer.fit_annotation)
         self.annotation_controls.clear_selected_annotation_requested.connect(self.image_viewer.clear_selected_ellipse)
         self.annotation_controls.clear_pupil_requested.connect(self.image_viewer.clear_pupil_points)
@@ -154,6 +189,35 @@ class MainWindow(QMainWindow):
 
         self.image_viewer.annotation_changed.connect(self.on_annotation_changed)
         self.image_viewer.annotation_type_changed.connect(self.annotation_controls.set_current_annotation)
+
+        # Manual Threshold live-detection signal graph:
+        #   slider drag -> ManualThresholdPanel.params_changed
+        #     -> debounce timer
+        #       -> manual_threshold_detect_requested  (queued, cross-thread)
+        #         -> DetectionWorker.detect
+        #           -> detection_ready / detection_failed
+        #             -> ImageViewer.set_manual_threshold_detection / status bar
+        # Top-of-panel mode switcher (Annotate / Manual Threshold) drives the
+        # detector on/off via annotation_controls.mode_changed.
+        panel = self.annotation_controls.manual_threshold_panel
+        panel.params_changed.connect(self._on_manual_threshold_params_changed)
+        self.annotation_controls.mode_changed.connect(self._on_mode_changed)
+        self._mt_debounce.timeout.connect(self._on_manual_threshold_debounce_fired)
+        self.manual_threshold_detect_requested.connect(
+            self._mt_worker.detect, Qt.QueuedConnection,
+        )
+        self._mt_worker.detection_ready.connect(self._on_manual_threshold_detection_ready)
+        self._mt_worker.detection_failed.connect(self._on_manual_threshold_detection_failed)
+        self.image_viewer.image_loaded.connect(self._on_image_loaded_for_manual_threshold)
+
+        # Pupil/Glint ROI flow: panel toggle -> viewer drag-edit mode; viewer
+        # roi changes -> re-trigger detection with the new ROI.
+        panel.pupil_roi_mode_changed.connect(self._on_pupil_roi_mode_changed)
+        panel.glint_roi_mode_changed.connect(self._on_glint_roi_mode_changed)
+        panel.clear_pupil_roi_requested.connect(self._on_clear_pupil_roi)
+        panel.clear_glint_roi_requested.connect(self._on_clear_glint_roi)
+        self.image_viewer.pupil_roi_changed.connect(self._on_mt_roi_changed)
+        self.image_viewer.glint_roi_changed.connect(self._on_mt_roi_changed)
 
     IMAGE_SUFFIXES = (".png", ".jpg", ".jpeg", ".bmp")
 
@@ -222,6 +286,13 @@ class MainWindow(QMainWindow):
                 detectors_changed = True
         if detectors_changed:
             self.menu_handler.update_menu_checks()
+        # Restore the last used mode for this project; setChecked fires the
+        # button's toggled signal which drives the full _on_mode_changed flow.
+        saved_mode = project_settings.get("current_mode", MODE_ANNOTATE)
+        if saved_mode == MODE_MANUAL_THRESHOLD:
+            self.annotation_controls.mode_manual_threshold_button.setChecked(True)
+        else:
+            self.annotation_controls.mode_annotate_button.setChecked(True)
 
     def _apply_single_eye_mode(self, enabled: bool) -> None:
         """Propagate the single-eye flag to the dependent widgets."""
@@ -229,31 +300,18 @@ class MainWindow(QMainWindow):
         self.image_viewer.set_single_eye_mode(enabled)
         self.annotation_controls.set_single_eye_mode(enabled)
 
-    def show_preferences_dialog(self) -> None:
-        """Open the per-project Preferences dialog."""
-        current = {"single_eye_mode": self.single_eye_mode}
-        dialog = PreferencesDialog(current, self)
-        dialog.settings_changed.connect(self._on_preferences_changed)
-        dialog.exec_()
-
-    def _on_preferences_changed(self, new_settings: dict) -> None:
-        """Persist the dialog's settings and apply them to the GUI.
-
-        When no project folder is loaded yet (user opened Preferences before
-        loading images), the in-memory mode is still updated so it takes
-        effect immediately; the project file is written the next time
-        images are loaded.
-
-        Merges into the existing project file so detector overrides written
-        by ``change_detector`` (and any future per-project keys) survive a
-        Preferences save.
-        """
-        enabled = bool(new_settings.get("single_eye_mode", False))
-        self._apply_single_eye_mode(enabled)
+    def _on_eye_changed(self, eye: str) -> None:
+        """Translate the eye radio into single-eye mode and viewer state."""
+        if eye == "single":
+            self._apply_single_eye_mode(True)
+        else:
+            if self.single_eye_mode:
+                self._apply_single_eye_mode(False)
+            self.image_viewer.switch_eye(eye)
         if self.project_dir is not None:
-            merged = load_project_settings(self.project_dir)
-            merged["single_eye_mode"] = enabled
-            save_project_settings(self.project_dir, merged)
+            settings = load_project_settings(self.project_dir)
+            settings["single_eye_mode"] = self.single_eye_mode
+            save_project_settings(self.project_dir, settings)
 
     def update_image_list(self) -> None:
         """Update the image list widget with current image paths.
@@ -295,6 +353,100 @@ class MainWindow(QMainWindow):
     def on_annotation_changed(self) -> None:
         """Handle annotation change event."""
         self.set_annotation_modified(True)
+
+    # ----- Manual Threshold mode -----
+
+    def _on_manual_threshold_params_changed(self, params: dict) -> None:
+        """Buffer the new parameters and (re)start the debounce timer.
+
+        Sliders fire one ``params_changed`` per pixel of drag. We collapse
+        the burst by storing only the most recent payload and resetting the
+        single-shot timer, so a steady drag results in one detection at the
+        end of the drag rather than dozens.
+        """
+        self._mt_pending_params = params
+        self._mt_debounce.start()
+
+    def _on_manual_threshold_debounce_fired(self) -> None:
+        """Dispatch the buffered detection to the worker.
+
+        Skipped silently if no image / grayscale / params are available.
+        ROIs are pulled from the image viewer at dispatch time so they're
+        always in sync with the drawn rectangles.
+        """
+        if self._mt_pending_params is None:
+            return
+        image = self.image_viewer.get_current_image_grayscale()
+        if image is None:
+            return
+        params = dict(self._mt_pending_params)
+        params["pupil_roi"] = self.image_viewer.pupil_roi
+        params["glint_roi"] = self.image_viewer.glint_roi
+        self.manual_threshold_detect_requested.emit(image, params)
+
+    def _on_mode_changed(self, mode: str) -> None:
+        """React to the Annotate / Manual Threshold mode switcher."""
+        panel = self.annotation_controls.manual_threshold_panel
+        if mode == MODE_MANUAL_THRESHOLD:
+            params = panel.current_params()
+            self._mt_pending_params = params
+            self._mt_debounce.start()
+        else:
+            self.image_viewer.set_manual_threshold_detection(None)
+            # Leaving Manual Threshold mode also clears the ROI drag-edit state.
+            panel.deactivate_roi_buttons()
+            self.image_viewer.set_mt_active_roi(None)
+        # Persist the new mode for this project.
+        if self.project_dir is not None:
+            project_settings = load_project_settings(self.project_dir)
+            project_settings["current_mode"] = mode
+            save_project_settings(self.project_dir, project_settings)
+
+    def _on_pupil_roi_mode_changed(self, active: bool) -> None:
+        """Activate or deactivate pupil-ROI drag editing on the image viewer."""
+        self.image_viewer.set_mt_active_roi("pupil" if active else None)
+
+    def _on_glint_roi_mode_changed(self, active: bool) -> None:
+        """Activate or deactivate glint-ROI drag editing on the image viewer."""
+        self.image_viewer.set_mt_active_roi("glint" if active else None)
+
+    def _on_clear_pupil_roi(self) -> None:
+        """Clear the pupil ROI and re-run detection without it."""
+        self.image_viewer.clear_pupil_roi()
+        self._kick_detection_if_active()
+
+    def _on_clear_glint_roi(self) -> None:
+        """Clear the glint ROI and re-run detection without it."""
+        self.image_viewer.clear_glint_roi()
+        self._kick_detection_if_active()
+
+    def _on_mt_roi_changed(self, _roi: object) -> None:
+        """Re-trigger detection after the user finishes dragging a Pupil/Glint ROI."""
+        self._kick_detection_if_active()
+
+    def _kick_detection_if_active(self) -> None:
+        """Schedule a debounced detection if Manual Threshold mode is on."""
+        if self.annotation_controls.current_mode() != MODE_MANUAL_THRESHOLD:
+            return
+        self._mt_pending_params = self.annotation_controls.manual_threshold_panel.current_params()
+        self._mt_debounce.start()
+
+    def _on_image_loaded_for_manual_threshold(self) -> None:
+        """Re-detect on the freshly loaded image if we're in Manual Threshold mode."""
+        if self.annotation_controls.current_mode() != MODE_MANUAL_THRESHOLD:
+            return
+        self._mt_pending_params = self.annotation_controls.manual_threshold_panel.current_params()
+        self._mt_debounce.start()
+
+    def _on_manual_threshold_detection_ready(self, payload: dict) -> None:
+        """Forward the worker's detection result into the image viewer."""
+        self.image_viewer.set_manual_threshold_detection(payload)
+        self.statusBar().clearMessage()
+
+    def _on_manual_threshold_detection_failed(self, message: str) -> None:
+        """Surface a non-blocking detection error in the status bar."""
+        self.image_viewer.set_manual_threshold_detection(None)
+        self.statusBar().showMessage(f"Manual Threshold: {message}", 5000)
 
     def change_detector(self, detector_type: str, detector_name: str) -> None:
         """Change the active detector for a given type.
@@ -383,13 +535,15 @@ class MainWindow(QMainWindow):
 
             if reply == QMessageBox.Save:
                 self.annotation_controller.save_annotations()
-                event.accept()
-            elif reply == QMessageBox.Discard:
-                event.accept()
-            else:
+            elif reply == QMessageBox.Cancel:
                 event.ignore()
-        else:
-            event.accept()
+                return
+
+        # Stop the Manual Threshold worker thread before exiting so Qt
+        # doesn't print "QThread: Destroyed while thread is still running".
+        self._mt_thread.quit()
+        self._mt_thread.wait()
+        event.accept()
 
     @staticmethod
     def get_version_from_setup() -> str:

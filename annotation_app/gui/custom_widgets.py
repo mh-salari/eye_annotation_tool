@@ -252,28 +252,36 @@ class EyeSelector(QGroupBox):
 
         self.left_eye_radio = QRadioButton("Left Eye")
         self.right_eye_radio = QRadioButton("Right Eye")
+        self.single_eye_radio = QRadioButton("Single Eye")
         self.left_eye_radio.setChecked(True)
 
         self.button_group = QButtonGroup()
         self.button_group.addButton(self.left_eye_radio)
         self.button_group.addButton(self.right_eye_radio)
+        self.button_group.addButton(self.single_eye_radio)
 
         self.left_eye_radio.clicked.connect(lambda: self.eye_changed.emit("left"))
         self.right_eye_radio.clicked.connect(lambda: self.eye_changed.emit("right"))
+        self.single_eye_radio.clicked.connect(lambda: self.eye_changed.emit("single"))
 
         layout.addWidget(self.left_eye_radio)
         layout.addWidget(self.right_eye_radio)
+        layout.addWidget(self.single_eye_radio)
         layout.addStretch()
 
         self.setLayout(layout)
 
     def get_current_eye(self) -> str:
-        """Get the currently selected eye."""
+        """Return ``"left"``, ``"right"``, or ``"single"`` based on the active radio."""
+        if self.single_eye_radio.isChecked():
+            return "single"
         return "left" if self.left_eye_radio.isChecked() else "right"
 
     def set_current_eye(self, eye: str) -> None:
-        """Set the currently selected eye."""
-        if eye == "left":
-            self.left_eye_radio.setChecked(True)
-        else:
+        """Set the currently selected eye (``"left"`` / ``"right"`` / ``"single"``)."""
+        if eye == "single":
+            self.single_eye_radio.setChecked(True)
+        elif eye == "right":
             self.right_eye_radio.setChecked(True)
+        else:
+            self.left_eye_radio.setChecked(True)

@@ -10,6 +10,7 @@ Current schema::
 
     {
       "single_eye_mode": true,
+      "current_mode": "annotate",
       "pupil_detector": "Threshold",
       "iris_detector": "disabled",
       "eyelid_detector": "disabled"
@@ -30,6 +31,7 @@ PROJECT_DETECTOR_KEYS = ("pupil_detector", "iris_detector", "eyelid_detector")
 
 DEFAULT_PROJECT_SETTINGS = {
     "single_eye_mode": False,
+    "current_mode": "annotate",
 }
 
 

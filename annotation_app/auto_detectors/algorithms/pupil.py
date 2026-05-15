@@ -140,6 +140,18 @@ def pupil_center_of_mass(
     return (m["m10"] / m["m00"], m["m01"] / m["m00"])
 
 
+def _roi_mask(shape: tuple[int, ...], roi: tuple[int, int, int, int]) -> np.ndarray:
+    """Build a uint8 mask with the ``(x, y, w, h)`` rectangle set to 255."""
+    h, w = shape[:2]
+    mask = np.zeros((h, w), dtype=np.uint8)
+    rx, ry, rw, rh = (int(v) for v in roi)
+    rx, ry = max(rx, 0), max(ry, 0)
+    rw, rh = max(min(rw, w - rx), 0), max(min(rh, h - ry), 0)
+    if rw and rh:
+        mask[ry : ry + rh, rx : rx + rw] = 255
+    return mask
+
+
 def detect_pupil_and_glints(
     img: np.ndarray,
     pupil_threshold: int = 30,
@@ -148,6 +160,8 @@ def detect_pupil_and_glints(
     glints_target: int = 1,
     glint_max_area_ratio: float = 0.1,
     pupil_center_method: str = "convex_hull_centroid",
+    pupil_roi: tuple[int, int, int, int] | None = None,
+    glint_roi: tuple[int, int, int, int] | None = None,
 ) -> dict:
     """Detect the pupil contour/centroid and glint contours in a grayscale eye image.
 
@@ -179,8 +193,16 @@ def detect_pupil_and_glints(
     this fraction of the detected pupil area. The IR glint is a tiny specular
     highlight, so anything close to pupil-sized is almost certainly skin /
     eyelid bleeding through above ``glint_threshold``.
+
+    ``pupil_roi`` and ``glint_roi`` are optional ``(x, y, w, h)`` rectangles.
+    When set, the pupil contour search is confined to ``pupil_roi`` and the
+    glint search to ``glint_roi`` (overriding the default pupil-mask + margin
+    constraint). Passing both as ``None`` produces output byte-identical to
+    the no-ROI baseline.
     """
     _, pupil_mask = cv2.threshold(img, pupil_threshold, 255, cv2.THRESH_BINARY_INV)
+    if pupil_roi is not None:
+        pupil_mask = cv2.bitwise_and(pupil_mask, _roi_mask(img.shape, pupil_roi))
     contours, _ = cv2.findContours(pupil_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     interior = [c for c in contours if not _touches_border(c, img.shape)]
     if not interior:
@@ -227,18 +249,23 @@ def detect_pupil_and_glints(
     # Glints: bright regions inside (or near the edge of) the pupil
     _, glint_mask = cv2.threshold(img, glint_threshold, 255, cv2.THRESH_BINARY)
 
-    if glints_target == 1:
-        # Single-LED rig: confine the search to bright pixels inside the pupil
-        # (optionally dilated by glint_margin so reflections right at the pupil
-        # edge still count). Centroid-based filtering on the raw bright contours
-        # is unreliable when a huge skin/eyelid blob has its centroid inside the
-        # pupil while extending far outside it.
-        pupil_fill = np.zeros_like(glint_mask)
-        cv2.drawContours(pupil_fill, [pupil_contour], -1, 255, thickness=cv2.FILLED)
+    # Glint search region: explicit ROI overrides the pupil-mask + dilation default.
+    if glint_roi is not None:
+        glint_search_mask = _roi_mask(img.shape, glint_roi)
+    else:
+        glint_search_mask = np.zeros_like(glint_mask)
+        cv2.drawContours(glint_search_mask, [pupil_contour], -1, 255, thickness=cv2.FILLED)
         if glint_margin > 0:
             k = 2 * int(glint_margin) + 1
-            pupil_fill = cv2.dilate(pupil_fill, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k, k)))
-        inside_mask = cv2.bitwise_and(glint_mask, pupil_fill)
+            glint_search_mask = cv2.dilate(
+                glint_search_mask, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k, k)),
+            )
+
+    if glints_target == 1:
+        # Single-LED rig: union every bright blob inside the search region into
+        # one centroid (a saturated, irregular reflection can split into multiple
+        # contours that still belong to the same physical LED).
+        inside_mask = cv2.bitwise_and(glint_mask, glint_search_mask)
         inside_contours, _ = cv2.findContours(inside_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         inside_contours = [c for c in inside_contours if cv2.contourArea(c) <= glint_max_area]
         if inside_contours:
@@ -249,8 +276,8 @@ def detect_pupil_and_glints(
         else:
             filtered = []
     else:
-        # Multi-LED: keep every bright blob whose centroid is inside or within
-        # ``glint_margin`` pixels of the pupil, and whose area is below the max.
+        # Multi-LED: keep every bright blob whose centroid lands inside the
+        # search region and whose area is below the max.
         glint_contours, _ = cv2.findContours(glint_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         filtered = []
         for c in glint_contours:
@@ -260,8 +287,11 @@ def detect_pupil_and_glints(
             if gm["m00"] > 0:
                 cx = int(gm["m10"] / gm["m00"])
                 cy = int(gm["m01"] / gm["m00"])
-                dist = cv2.pointPolygonTest(pupil_contour, (cx, cy), True)
-                if dist >= -glint_margin:
+                if (
+                    0 <= cy < glint_search_mask.shape[0]
+                    and 0 <= cx < glint_search_mask.shape[1]
+                    and glint_search_mask[cy, cx] == 255
+                ):
                     filtered.append(c)
 
     if glints_target == 4 and len(filtered) == 3:
