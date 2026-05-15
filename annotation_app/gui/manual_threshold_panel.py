@@ -100,12 +100,17 @@ class ManualThresholdPanel(QGroupBox):
         self.glint_threshold_slider, self.glint_threshold_label = self._add_int_slider(
             layout, "Glint threshold", 0, 255, self._params["glint_threshold"],
         )
+        initial_pct = int(round(self._params["glint_margin_ratio"] * 100))
         self.glint_margin_slider, self.glint_margin_label = self._add_int_slider(
-            layout,
-            "Glint margin (%)",
-            0,
-            100,
-            int(round(self._params["glint_margin_ratio"] * 100)),
+            layout, "Glint margin (%)", -100, 300, initial_pct,
+        )
+        self.glint_margin_label.setText(f"{initial_pct:+d}%")
+        self.glint_margin_slider.setToolTip(
+            "Glint search region relative to the pupil.\n"
+            "  0%   = pupil boundary\n"
+            "+100% = expand outward to the limbus\n"
+            ">100% = keep extending past the limbus onto the sclera\n"
+            "-100% = shrink inward to the pupil centre",
         )
 
         # Glint count target + area ratio in one row to save space.
@@ -196,7 +201,7 @@ class ManualThresholdPanel(QGroupBox):
 
     def _on_slider_changed(self, title: str, value: int, value_label: QLabel) -> None:
         if title == "Glint margin (%)":
-            value_label.setText(f"{value}%")
+            value_label.setText(f"{value:+d}%")
             self._params["glint_margin_ratio"] = value / 100.0
         else:
             value_label.setText(str(value))
@@ -267,7 +272,7 @@ class ManualThresholdPanel(QGroupBox):
             if "glint_margin_ratio" in params:
                 pct = int(round(float(params["glint_margin_ratio"]) * 100))
                 self.glint_margin_slider.setValue(pct)
-                self.glint_margin_label.setText(f"{pct}%")
+                self.glint_margin_label.setText(f"{pct:+d}%")
                 self._params["glint_margin_ratio"] = float(params["glint_margin_ratio"])
             if "glints_target" in params:
                 self.glints_target_spin.setValue(int(params["glints_target"]))

@@ -1,11 +1,15 @@
-"""Pupil + glint detection: thresholding, contour fitting, marker selection.
+"""Pupil + glint + limbus detection.
 
 Public surface:
 
-  - :func:`detect_pupil_and_glints` — main entry point: takes a grayscale eye image,
-    returns ``{pupil_contour, pupil_center, pupil_ellipse, glints: [{contour, center, ellipse}, ...]}``.
-  - :func:`pupil_center_of_mass` — centre-of-mass of the thresholded pupil area.
-  - :func:`fit_convex_hull_spline` — periodic cubic B-spline through the convex hull of a contour.
+  - :func:`detect_pupil_and_glints` — main entry point: takes a grayscale eye
+    image, returns ``{pupil_contour, pupil_center, pupil_ellipse, glints,
+    limbus}``. ``glints`` is a list of ``{contour, center, ellipse}`` dicts;
+    ``limbus`` is ``{center, radius}`` or ``None`` if detection failed.
+  - :func:`pupil_center_of_mass` — centre-of-mass of the thresholded pupil
+    area, with glint holes preserved.
+  - :func:`fit_convex_hull_spline` — periodic cubic B-spline through the
+    convex hull of a contour.
 """
 
 import operator
@@ -13,6 +17,8 @@ import operator
 import cv2
 import numpy as np
 from scipy.interpolate import splev, splprep
+
+from .limbus import detect_limbus
 
 
 def fit_convex_hull_spline(contour: np.ndarray, n_points: int = 200) -> dict:
@@ -163,42 +169,45 @@ def detect_pupil_and_glints(
     pupil_roi: tuple[int, int, int, int] | None = None,
     glint_roi: tuple[int, int, int, int] | None = None,
 ) -> dict:
-    """Detect the pupil contour/centroid and glint contours in a grayscale eye image.
+    """Detect the pupil contour, the limbus circle, and glint contours in a grayscale eye image.
 
-    Contours touching the image border are rejected — the pupil is always an
-    interior feature, so any border-touching dark region (vignette, black
-    padding strip, eyelashes at the edge) cannot be the pupil.
+    Returns ``{pupil_contour, pupil_center, pupil_ellipse, glints, limbus}``.
+    ``pupil_ellipse`` is ``((cx, cy), (w, h), angle)``; the centre is chosen
+    by ``pupil_center_method`` and ``(w, h, angle)`` come from
+    ``cv2.fitEllipse`` on the convex hull of the pupil contour. Border-
+    touching dark contours are rejected so the pupil is always an interior
+    region. ``limbus`` is ``{"center": [lx, ly], "radius": r}`` or ``None``
+    if Daugman IDO did not converge.
 
-    ``pupil_center_method`` selects the pupil-centre estimator:
-      - ``"convex_hull_centroid"`` (default): Green's-theorem centroid of the
-        cubic B-spline through the convex hull of the pupil contour.
+    ``pupil_center_method``:
+      - ``"convex_hull_centroid"`` (default): centroid of the cubic B-spline
+        fitted through the convex hull of the pupil contour.
       - ``"center_of_mass"``: moment-based centre of the thresholded pupil
         area, with glint holes preserved (matches EyeLink Centroid mode).
-      - ``"ellipse_fit_center"``: centre returned by ``cv2.fitEllipse`` on the
-        convex hull of the pupil contour. Requires the hull to have at least
-        5 points.
+      - ``"ellipse_fit_center"``: centre from ``cv2.fitEllipse`` on the hull.
+        Requires the hull to have at least 5 points.
 
-    ``pupil_ellipse`` is returned as ``((cx, cy), (w, h), angle)`` where the
-    centre is the value chosen by ``pupil_center_method`` and ``(w, h, angle)``
-    come from ``cv2.fitEllipse`` on the hull. When the hull has fewer than 5
-    points the axes fall back to the spline's area-equivalent diameter and
-    angle is 0.
+    ``glint_margin_ratio`` is signed: positive expands the glint search
+    region outward into the iris, negative shrinks it inward.
+      - 0.0  -> search region = pupil boundary
+      - +X   -> dilate by ``X * (limbus_radius - pupil_radius)`` pixels,
+                so +1.0 reaches the limbus. Falls back to scaling by
+                ``pupil_radius`` when limbus detection fails.
+      - -X   -> erode by ``X * pupil_radius`` pixels, so -1.0 collapses
+                to the pupil centre.
 
-    ``glints_target`` is the number of physical IR LEDs in the rig. When it's
-    1 (default — single LED on the EyeLink camera bar), all filtered bright
-    blobs are unioned into one centroid so a saturated, irregular reflection
-    doesn't get split across multiple contours.
+    ``glints_target`` is the number of physical IR LEDs in the rig. When 1
+    (default), every bright blob inside the search region is unioned into a
+    single centroid so a saturated reflection split across contours still
+    yields one glint.
 
-    ``glint_max_area_ratio`` rejects any candidate contour whose area exceeds
-    this fraction of the detected pupil area. The IR glint is a tiny specular
-    highlight, so anything close to pupil-sized is almost certainly skin /
-    eyelid bleeding through above ``glint_threshold``.
+    ``glint_max_area_ratio`` rejects bright contours whose area exceeds this
+    fraction of the pupil area — a guard against skin / eyelid bleed-through
+    above ``glint_threshold``.
 
     ``pupil_roi`` and ``glint_roi`` are optional ``(x, y, w, h)`` rectangles.
-    When set, the pupil contour search is confined to ``pupil_roi`` and the
-    glint search to ``glint_roi`` (overriding the default pupil-mask + margin
-    constraint). Passing both as ``None`` produces output byte-identical to
-    the no-ROI baseline.
+    When set, the corresponding search is confined to that rectangle;
+    ``glint_roi`` also overrides the pupil-mask + margin constraint.
     """
     _, pupil_mask = cv2.threshold(img, pupil_threshold, 255, cv2.THRESH_BINARY_INV)
     if pupil_roi is not None:
@@ -252,18 +261,44 @@ def detect_pupil_and_glints(
     # Glint search region: explicit ROI overrides the pupil-mask + dilation default.
     # Dilation is expressed as a fraction of the detected pupil radius so the
     # tuning value transfers across image resolutions.
+    # Limbus detection: needed for the positive glint_margin_ratio direction
+    # (scaling by iris ring width). Best-effort — failure leaves limbus=None
+    # and falls back to a pupil-radius scale for any positive margin.
+    pupil_radius = max(w, h) / 2
+    limbus = None
+    try:
+        (lcx, lcy), lr = detect_limbus(img, (cx, cy), pupil_radius)
+        limbus = {"center": [float(lcx), float(lcy)], "radius": float(lr)}
+    except Exception:
+        pass
+
     if glint_roi is not None:
         glint_search_mask = _roi_mask(img.shape, glint_roi)
     else:
         glint_search_mask = np.zeros_like(glint_mask)
         cv2.drawContours(glint_search_mask, [pupil_contour], -1, 255, thickness=cv2.FILLED)
-        pupil_radius = max(w, h) / 2
-        glint_margin_px = int(round(glint_margin_ratio * pupil_radius))
-        if glint_margin_px > 0:
-            k = 2 * glint_margin_px + 1
-            glint_search_mask = cv2.dilate(
-                glint_search_mask, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k, k)),
+        if glint_margin_ratio > 0:
+            # Expand outward in iris-ring units so +100% reaches the limbus.
+            # If limbus detection failed, fall back to pupil_radius as the scale.
+            ring_px = (
+                max(limbus["radius"] - pupil_radius, 0.0)
+                if limbus is not None
+                else pupil_radius
             )
+            glint_margin_px = int(round(glint_margin_ratio * ring_px))
+            if glint_margin_px > 0:
+                k = 2 * glint_margin_px + 1
+                glint_search_mask = cv2.dilate(
+                    glint_search_mask, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k, k)),
+                )
+        elif glint_margin_ratio < 0:
+            # Shrink inward in pupil-radius units so -100% collapses to the centre.
+            erosion_px = int(round(-glint_margin_ratio * pupil_radius))
+            if erosion_px > 0:
+                k = 2 * erosion_px + 1
+                glint_search_mask = cv2.erode(
+                    glint_search_mask, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k, k)),
+                )
 
     if glints_target == 1:
         # Single-LED rig: union every bright blob inside the search region into
@@ -332,4 +367,5 @@ def detect_pupil_and_glints(
         "pupil_center": pupil_center,
         "pupil_ellipse": pupil_ellipse,
         "glints": glints,
+        "limbus": limbus,
     }

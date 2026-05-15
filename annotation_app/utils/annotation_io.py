@@ -104,21 +104,17 @@ def _deserialize_eye_block(block: dict) -> dict:
 def load_annotations(annotation_path: str) -> tuple[dict, dict | None]:
     """Load annotation data from a JSON file.
 
-    Handles three on-disk schemas transparently:
+    Accepts two on-disk shapes:
 
-    - **Multi-eye** (current default): top-level keys ``"left"`` and/or
-      ``"right"`` map to per-eye blocks.
+    - **Multi-eye**: top-level keys ``"left"`` and/or ``"right"`` mapping to
+      per-eye blocks.
     - **Flat single-eye**: top-level keys are the annotation fields
-      (``"pupil_points"``, ...). Loaded into the ``"left"`` block; the
-      ``"right"`` block is left empty.
-    - **Legacy single-eye** (pre-multi-eye refactor): same shape as the flat
-      single-eye format. Treated identically.
+      themselves (``"pupil_points"``, ...). Loaded into the ``"left"`` block;
+      ``"right"`` stays empty.
 
-    Returns:
-        ``(eye_data, tuning)``. ``eye_data`` is ``{"left": ..., "right": ...}``
-        regardless of on-disk schema. ``tuning`` is the deserialised
-        Manual-Threshold state (or ``None`` if absent).
-
+    Returns ``(eye_data, tuning)``. ``eye_data`` is always ``{"left": ...,
+    "right": ...}``; ``tuning`` is the deserialised Manual-Threshold state
+    or ``None`` when the file has no ``"tuning"`` key.
     """
     if not Path(annotation_path).exists():
         return {"left": _empty_eye_block(), "right": _empty_eye_block()}, None
@@ -139,7 +135,8 @@ def load_annotations(annotation_path: str) -> tuple[dict, dict | None]:
             "right": _deserialize_eye_block(ann["right"]) if "right" in ann else _empty_eye_block(),
         }
     else:
-        # Flat single-eye schema (or legacy pre-multi-eye file). Load into left.
+        # Flat single-eye schema: top-level keys ARE the annotation fields.
+        # Load the whole document into the left block; right stays empty.
         eye_data = {"left": _deserialize_eye_block(ann), "right": _empty_eye_block()}
     return eye_data, tuning
 
