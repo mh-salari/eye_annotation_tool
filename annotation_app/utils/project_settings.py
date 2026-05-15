@@ -32,6 +32,7 @@ PROJECT_DETECTOR_KEYS = ("pupil_detector", "iris_detector", "eyelid_detector")
 DEFAULT_PROJECT_SETTINGS = {
     "single_eye_mode": False,
     "current_mode": "annotate",
+    "autosave": False,
 }
 
 

@@ -230,6 +230,9 @@ class EyeSelector(QGroupBox):
                 spacing: 5px;
                 padding: 5px;
             }
+            QRadioButton:disabled {
+                color: #666;
+            }
             QRadioButton::indicator {
                 width: 16px;
                 height: 16px;
@@ -243,6 +246,10 @@ class EyeSelector(QGroupBox):
                 border: 2px solid #00bcd4;
                 background: #00bcd4;
                 border-radius: 8px;
+            }
+            QRadioButton::indicator:disabled {
+                border: 2px solid #3a3a3a;
+                background: #2b2b2b;
             }
         """
         )

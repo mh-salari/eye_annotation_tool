@@ -233,3 +233,55 @@ class ManualThresholdPanel(QGroupBox):
     def current_params(self) -> dict:
         """Return a copy of the current parameter dict."""
         return dict(self._params)
+
+    def set_params(self, params: dict) -> None:
+        """Apply saved threshold/method values to the widgets.
+
+        Block widget signals while restoring so a single ``params_changed`` is
+        emitted at the end instead of one per slider/spin/radio assignment.
+        """
+        for widget in (
+            self.pupil_threshold_slider,
+            self.glint_threshold_slider,
+            self.glint_margin_slider,
+            self.glints_target_spin,
+            self.area_ratio_spin,
+        ):
+            widget.blockSignals(True)
+        try:
+            if "pupil_threshold" in params:
+                self.pupil_threshold_slider.setValue(int(params["pupil_threshold"]))
+                self.pupil_threshold_label.setText(str(int(params["pupil_threshold"])))
+                self._params["pupil_threshold"] = int(params["pupil_threshold"])
+            if "glint_threshold" in params:
+                self.glint_threshold_slider.setValue(int(params["glint_threshold"]))
+                self.glint_threshold_label.setText(str(int(params["glint_threshold"])))
+                self._params["glint_threshold"] = int(params["glint_threshold"])
+            if "glint_margin" in params:
+                self.glint_margin_slider.setValue(int(params["glint_margin"]))
+                self.glint_margin_label.setText(str(int(params["glint_margin"])))
+                self._params["glint_margin"] = int(params["glint_margin"])
+            if "glints_target" in params:
+                self.glints_target_spin.setValue(int(params["glints_target"]))
+                self._params["glints_target"] = int(params["glints_target"])
+            if "glint_max_area_ratio" in params:
+                self.area_ratio_spin.setValue(float(params["glint_max_area_ratio"]))
+                self._params["glint_max_area_ratio"] = float(params["glint_max_area_ratio"])
+        finally:
+            for widget in (
+                self.pupil_threshold_slider,
+                self.glint_threshold_slider,
+                self.glint_margin_slider,
+                self.glints_target_spin,
+                self.area_ratio_spin,
+            ):
+                widget.blockSignals(False)
+        # Method radios use a QButtonGroup; click the right one so the others untoggle.
+        method = params.get("pupil_center_method")
+        if method and method in self.method_buttons:
+            btn = self.method_buttons[method]
+            btn.blockSignals(True)
+            btn.setChecked(True)
+            btn.blockSignals(False)
+            self._params["pupil_center_method"] = method
+        self.params_changed.emit(dict(self._params))

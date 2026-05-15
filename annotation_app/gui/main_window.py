@@ -7,6 +7,7 @@ from PyQt5.QtCore import QEvent, QRect, Qt, QThread, QTimer, pyqtSignal
 from PyQt5.QtGui import QCloseEvent, QIcon, QPixmap, QScreen
 from PyQt5.QtWidgets import (
     QApplication,
+    QCheckBox,
     QFileDialog,
     QHBoxLayout,
     QLabel,
@@ -60,6 +61,7 @@ class MainWindow(QMainWindow):
         self.plugin_manager = PluginManager()
         self._cli_single_eye = bool(cli_single_eye)
         self.single_eye_mode = self._cli_single_eye
+        self.autosave_enabled = False
         self.project_dir: str | None = None
 
         self.setup_ui()
@@ -83,6 +85,9 @@ class MainWindow(QMainWindow):
         self._mt_debounce.setSingleShot(True)
         self._mt_debounce.setInterval(MANUAL_THRESHOLD_DEBOUNCE_MS)
         self._mt_pending_params: dict | None = None
+        # Set true by apply_tuning so the next detection_ready (which is the
+        # re-run after a saved load) doesn't mark the annotation as modified.
+        self._mt_skip_next_modified_mark = False
 
         self.menu_handler.setup_menu()
         self.shortcut_handler.setup_shortcuts()
@@ -114,12 +119,15 @@ class MainWindow(QMainWindow):
         self.prev_image_button = MaterialButton("Previous Image")
         self.next_image_button = MaterialButton("Next Image")
         self.save_annotations_button = MaterialButton("Save Annotations")
+        self.autosave_checkbox = QCheckBox("Autosave on image change")
+        self.autosave_checkbox.toggled.connect(self._on_autosave_changed)
 
         left_layout.addWidget(self.load_images_button)
         left_layout.addWidget(self.load_folder_button)
         left_layout.addWidget(self.prev_image_button)
         left_layout.addWidget(self.next_image_button)
         left_layout.addWidget(self.save_annotations_button)
+        left_layout.addWidget(self.autosave_checkbox)
 
         self.image_list_widget = QListWidget()
         left_layout.addWidget(QLabel("Loaded Images:"))
@@ -235,16 +243,18 @@ class MainWindow(QMainWindow):
             self.load_current_image()
 
     def load_folder(self) -> None:
-        """Pick a folder and recursively load every supported image inside it.
-
-        The chosen folder is the project root (project settings live here),
-        not whichever subdir an image happens to be in. Useful for the
-        psa-mechanisms layout where per-eye images are split across phase
-        subdirs (``cal_dark/``, ``cal_bright/``, ...).
-        """
+        """Pick a folder via dialog and load every supported image recursively."""
         folder = QFileDialog.getExistingDirectory(self, "Select Image Folder", "")
-        if not folder:
-            return
+        if folder:
+            self.load_folder_path(folder)
+
+    def load_folder_path(self, folder: str) -> None:
+        """Recursively load every supported image under ``folder``.
+
+        Used by both the Load Folder dialog and the ``--folder`` CLI flag.
+        The chosen folder is the project root (project settings live here),
+        not whichever subdir an image happens to be in.
+        """
         folder_path = Path(folder)
         image_paths = sorted(
             str(p) for p in folder_path.rglob("*") if p.is_file() and p.suffix.lower() in self.IMAGE_SUFFIXES
@@ -293,6 +303,12 @@ class MainWindow(QMainWindow):
             self.annotation_controls.mode_manual_threshold_button.setChecked(True)
         else:
             self.annotation_controls.mode_annotate_button.setChecked(True)
+        # Restore autosave toggle from the project file.
+        autosave = bool(project_settings.get("autosave", False))
+        self.autosave_enabled = autosave
+        self.autosave_checkbox.blockSignals(True)
+        self.autosave_checkbox.setChecked(autosave)
+        self.autosave_checkbox.blockSignals(False)
 
     def _apply_single_eye_mode(self, enabled: bool) -> None:
         """Propagate the single-eye flag to the dependent widgets."""
@@ -354,6 +370,56 @@ class MainWindow(QMainWindow):
         """Handle annotation change event."""
         self.set_annotation_modified(True)
 
+    def _on_autosave_changed(self, enabled: bool) -> None:
+        """Persist the autosave toggle in project settings."""
+        self.autosave_enabled = enabled
+        if self.project_dir is not None:
+            project_settings = load_project_settings(self.project_dir)
+            project_settings["autosave"] = enabled
+            save_project_settings(self.project_dir, project_settings)
+
+    def get_current_tuning(self) -> dict | None:
+        """Collect Manual-Threshold state for persistence; ``None`` if nothing to save."""
+        viewer = self.image_viewer
+        panel = self.annotation_controls.manual_threshold_panel
+        has_state = (
+            viewer.manual_threshold_detection is not None
+            or viewer.pupil_roi is not None
+            or viewer.glint_roi is not None
+        )
+        if not has_state:
+            return None
+        return {
+            "thresholds": panel.current_params(),
+            "pupil_roi": viewer.pupil_roi,
+            "glint_roi": viewer.glint_roi,
+            "detection": viewer.manual_threshold_detection,
+        }
+
+    def apply_tuning(self, tuning: dict | None) -> None:
+        """Restore Manual-Threshold state after loading an annotation file.
+
+        When we restored a tuning from disk, set ``_mt_skip_next_modified_mark``
+        so the worker's re-run (triggered by ``image_loaded``) doesn't flip
+        the modified flag back on. With no tuning on disk, the next detection
+        is genuinely unsaved state and we *do* want the modified flag set.
+        """
+        viewer = self.image_viewer
+        panel = self.annotation_controls.manual_threshold_panel
+        if tuning is None:
+            viewer.set_pupil_roi(None)
+            viewer.set_glint_roi(None)
+            viewer.set_manual_threshold_detection(None)
+            self._mt_skip_next_modified_mark = False
+            return
+        thresholds = tuning.get("thresholds")
+        if thresholds:
+            panel.set_params(thresholds)
+        viewer.set_pupil_roi(tuning.get("pupil_roi"))
+        viewer.set_glint_roi(tuning.get("glint_roi"))
+        viewer.set_manual_threshold_detection(tuning.get("detection"))
+        self._mt_skip_next_modified_mark = True
+
     # ----- Manual Threshold mode -----
 
     def _on_manual_threshold_params_changed(self, params: dict) -> None:
@@ -366,6 +432,7 @@ class MainWindow(QMainWindow):
         """
         self._mt_pending_params = params
         self._mt_debounce.start()
+        self.set_annotation_modified(True)
 
     def _on_manual_threshold_debounce_fired(self) -> None:
         """Dispatch the buffered detection to the worker.
@@ -387,15 +454,34 @@ class MainWindow(QMainWindow):
     def _on_mode_changed(self, mode: str) -> None:
         """React to the Annotate / Manual Threshold mode switcher."""
         panel = self.annotation_controls.manual_threshold_panel
+        eye_selector = self.annotation_controls.eye_selector
         if mode == MODE_MANUAL_THRESHOLD:
+            # Manual Threshold is inherently single-eye: detection runs on the
+            # whole image, ROIs aren't eye-scoped. Force single-eye and disable
+            # only the L/R radios so the Single Eye selection stays interactive.
+            self._mt_saved_single_eye = self.single_eye_mode
+            if not self.single_eye_mode:
+                self._apply_single_eye_mode(True)
+            eye_selector.left_eye_radio.setEnabled(False)
+            eye_selector.right_eye_radio.setEnabled(False)
             params = panel.current_params()
             self._mt_pending_params = params
+            # The detection that runs on mode entry just reflects the current
+            # in-memory state — no user edit happened. Don't promote the
+            # modified flag (it stays at whatever the user's prior edits set).
+            self._mt_skip_next_modified_mark = True
             self._mt_debounce.start()
         else:
             self.image_viewer.set_manual_threshold_detection(None)
             # Leaving Manual Threshold mode also clears the ROI drag-edit state.
             panel.deactivate_roi_buttons()
             self.image_viewer.set_mt_active_roi(None)
+            # Restore the eye-mode the user had before entering Manual Threshold.
+            eye_selector.left_eye_radio.setEnabled(True)
+            eye_selector.right_eye_radio.setEnabled(True)
+            saved = getattr(self, "_mt_saved_single_eye", None)
+            if saved is not None and saved != self.single_eye_mode:
+                self._apply_single_eye_mode(saved)
         # Persist the new mode for this project.
         if self.project_dir is not None:
             project_settings = load_project_settings(self.project_dir)
@@ -423,6 +509,7 @@ class MainWindow(QMainWindow):
     def _on_mt_roi_changed(self, _roi: object) -> None:
         """Re-trigger detection after the user finishes dragging a Pupil/Glint ROI."""
         self._kick_detection_if_active()
+        self.set_annotation_modified(True)
 
     def _kick_detection_if_active(self) -> None:
         """Schedule a debounced detection if Manual Threshold mode is on."""
@@ -439,9 +526,18 @@ class MainWindow(QMainWindow):
         self._mt_debounce.start()
 
     def _on_manual_threshold_detection_ready(self, payload: dict) -> None:
-        """Forward the worker's detection result into the image viewer."""
+        """Forward the worker's detection result into the image viewer.
+
+        Mark the annotation as modified so navigating away triggers the
+        save prompt (or autosave). Skipped exactly once after a tuning was
+        restored from disk — that first re-run is in sync with the file.
+        """
         self.image_viewer.set_manual_threshold_detection(payload)
         self.statusBar().clearMessage()
+        if self._mt_skip_next_modified_mark:
+            self._mt_skip_next_modified_mark = False
+        else:
+            self.set_annotation_modified(True)
 
     def _on_manual_threshold_detection_failed(self, message: str) -> None:
         """Surface a non-blocking detection error in the status bar."""

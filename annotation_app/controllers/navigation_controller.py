@@ -20,16 +20,25 @@ class NavigationController:
         """
         self.main_window = main_window
 
+    def _handle_unsaved_before_switch(self) -> bool:
+        """Save / prompt / cancel based on autosave; return True to proceed with the switch."""
+        if not self.main_window.annotation_modified:
+            return True
+        if self.main_window.autosave_enabled:
+            self.main_window.annotation_controller.save_current_annotations(silent=True)
+            return True
+        reply = self.show_save_dialog()
+        if reply == QMessageBox.Cancel:
+            return False
+        if reply == QMessageBox.Yes:
+            self.main_window.save_current_annotations()
+        return True
+
     def next_image(self) -> None:
         """Navigate to the next image in the list."""
         if self.main_window.current_image_index < len(self.main_window.image_paths) - 1:
-            if self.main_window.annotation_modified:
-                reply = self.show_save_dialog()
-                if reply == QMessageBox.Cancel:
-                    return
-                if reply == QMessageBox.Yes:
-                    self.main_window.save_current_annotations()
-
+            if not self._handle_unsaved_before_switch():
+                return
             self.main_window.current_image_index += 1
             self.main_window.load_current_image()
             self.main_window.image_list_widget.setCurrentRow(self.main_window.current_image_index)
@@ -37,34 +46,19 @@ class NavigationController:
     def prev_image(self) -> None:
         """Navigate to the previous image in the list."""
         if self.main_window.current_image_index > 0:
-            if self.main_window.annotation_modified:
-                reply = self.show_save_dialog()
-                if reply == QMessageBox.Cancel:
-                    return
-                if reply == QMessageBox.Yes:
-                    self.main_window.save_current_annotations()
-
+            if not self._handle_unsaved_before_switch():
+                return
             self.main_window.current_image_index -= 1
             self.main_window.load_current_image()
             self.main_window.image_list_widget.setCurrentRow(self.main_window.current_image_index)
 
     def on_image_selected(self, item: QListWidgetItem) -> None:
-        """Handle image selection from the list widget.
-
-        Args:
-            item: The selected list widget item.
-
-        """
+        """Handle image selection from the list widget."""
         selected_index = self.main_window.image_list_widget.row(item)
         if selected_index != self.main_window.current_image_index:
-            if self.main_window.annotation_modified:
-                reply = self.show_save_dialog()
-                if reply == QMessageBox.Cancel:
-                    self.main_window.image_list_widget.setCurrentRow(self.main_window.current_image_index)
-                    return
-                if reply == QMessageBox.Yes:
-                    self.main_window.save_current_annotations()
-
+            if not self._handle_unsaved_before_switch():
+                self.main_window.image_list_widget.setCurrentRow(self.main_window.current_image_index)
+                return
             self.main_window.current_image_index = selected_index
             self.main_window.load_current_image()
 

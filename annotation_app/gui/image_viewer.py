@@ -143,13 +143,13 @@ class ImageViewer(QWidget):
 
         self.glint_color = QColor(255, 165, 0, 255)  # Orange
 
-        # Manual Threshold detection overlay: bright cyan ellipse + center
-        # dot for the pupil, magenta dots for each glint. Distinct from the
-        # manual annotation colors so the live preview is unambiguous.
-        self.mt_pupil_color = QColor(0, 230, 255, 255)
-        self.mt_glint_color = QColor(255, 80, 180, 255)
-        # Limbus circle (Daugman IDO): lime green, distinct from pupil/glint.
-        self.mt_limbus_color = QColor(80, 255, 100, 255)
+        # Manual Threshold overlay uses the same colors as the Annotate-mode
+        # manual annotations so the visual language stays consistent: pupil
+        # in teal, glints in orange, limbus in dark purple.
+        self.mt_pupil_color = self.pupil_ellipse_color
+        self.mt_pupil_center_color = self.pupil_color
+        self.mt_glint_color = self.glint_color
+        self.mt_limbus_color = self.iris_ellipse_color
         # Manual Threshold ROIs: yellow rectangle for the pupil search region,
         # orange-red for the glint search region.
         self.pupil_roi_color = QColor(255, 220, 0, 255)
@@ -814,25 +814,24 @@ class ImageViewer(QWidget):
         pupil_center = det.get("pupil_center")
         glints = det.get("glints") or []
 
-        # Pupil ellipse: dashed cyan outline. No fill — the painter's brush
-        # may still be set from prior ROI corner-handle draws.
+        # Pupil ellipse: solid teal outline, matches the Annotate-mode style.
         if pupil_ellipse is not None:
             (cx, cy), (w, h), angle = pupil_ellipse
             painter.save()
-            painter.setPen(QPen(self.mt_pupil_color, 2, Qt.DashLine))
+            painter.setPen(QPen(self.mt_pupil_color, 1, Qt.SolidLine))
             painter.setBrush(Qt.NoBrush)
             painter.translate(QPointF(cx * self.factor, cy * self.factor))
             painter.rotate(angle)
             painter.drawEllipse(QPointF(0, 0), (w / 2) * self.factor, (h / 2) * self.factor)
             painter.restore()
 
-        # Limbus: dashed lime-green circle around the iris.
+        # Limbus: solid dark-purple circle around the iris.
         limbus = det.get("limbus")
         if limbus is not None:
             lcx, lcy = limbus["center"]
             lr = limbus["radius"]
             painter.save()
-            painter.setPen(QPen(self.mt_limbus_color, 2, Qt.DashLine))
+            painter.setPen(QPen(self.mt_limbus_color, 1, Qt.SolidLine))
             painter.setBrush(Qt.NoBrush)
             painter.drawEllipse(
                 QPointF(lcx * self.factor, lcy * self.factor),
@@ -841,19 +840,19 @@ class ImageViewer(QWidget):
             )
             painter.restore()
 
-        # Pupil center: filled cyan dot with a thin contrasting ring.
+        # Pupil center marker: small filled dot like the manual pupil points.
         if pupil_center is not None:
             pcx, pcy = pupil_center
             scaled = QPointF(pcx * self.factor, pcy * self.factor)
-            painter.setBrush(self.mt_pupil_color)
-            painter.setPen(QPen(self.mt_pupil_color, 1, Qt.SolidLine))
-            painter.drawEllipse(scaled, 4, 4)
+            painter.setBrush(self.mt_pupil_center_color)
+            painter.setPen(QPen(self.mt_pupil_center_color, 3, Qt.SolidLine))
+            painter.drawEllipse(scaled, 1.5, 1.5)
 
-        # Each glint: filled magenta dot.
+        # Glints: small filled orange dots, same shape as manual glint points.
         painter.setBrush(self.mt_glint_color)
-        painter.setPen(QPen(self.mt_glint_color, 1, Qt.SolidLine))
+        painter.setPen(QPen(self.mt_glint_color, 3, Qt.SolidLine))
         for gx, gy in glints:
-            painter.drawEllipse(QPointF(gx * self.factor, gy * self.factor), 3, 3)
+            painter.drawEllipse(QPointF(gx * self.factor, gy * self.factor), 1.5, 1.5)
 
     def fit_annotation(self) -> bool:
         """Fit an ellipse to the current annotation points."""

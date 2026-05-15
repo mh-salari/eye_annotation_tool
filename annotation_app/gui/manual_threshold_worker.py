@@ -53,12 +53,19 @@ class DetectionWorker(QObject):
         except Exception:
             pass
 
+        # ``pupil_contour`` deliberately omitted — it's an ndarray (not JSON
+        # serialisable for the tuning save path) and the viewer doesn't draw
+        # it anyway.
         payload = {
-            "pupil_contour": result["pupil_contour"],
-            "pupil_center": result["pupil_center"],
-            "pupil_ellipse": result["pupil_ellipse"],
-            "glints": [g["center"] for g in result["glints"]],
+            "pupil_center": list(result["pupil_center"]),
+            "pupil_ellipse": _ellipse_to_json(result["pupil_ellipse"]),
+            "glints": [list(g["center"]) for g in result["glints"]],
             "limbus": limbus,
-            "params": params,
         }
         self.detection_ready.emit(payload)
+
+
+def _ellipse_to_json(ellipse: tuple) -> list:
+    """Convert ((cx, cy), (w, h), angle) into JSON-friendly nested lists."""
+    (cx, cy), (w, h), angle = ellipse
+    return [[float(cx), float(cy)], [float(w), float(h)], float(angle)]

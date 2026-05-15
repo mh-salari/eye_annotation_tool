@@ -31,15 +31,19 @@ class AnnotationController:
         """Save annotations for the current image."""
         self.save_current_annotations()
 
-    def save_current_annotations(self) -> None:
-        """Save current image annotations to file, prompting if file exists."""
+    def save_current_annotations(self, silent: bool = False) -> None:
+        """Save current image annotations to file.
+
+        When ``silent`` is True the overwrite-confirmation dialog is skipped —
+        used by the autosave-on-image-change path so navigation isn't blocked.
+        """
         if self.main_window.annotation_modified and 0 <= self.main_window.current_image_index < len(
             self.main_window.image_paths
         ):
             image_path = self.main_window.image_paths[self.main_window.current_image_index]
             annotation_path = get_annotation_path(image_path)
 
-            if Path(annotation_path).exists():
+            if not silent and Path(annotation_path).exists():
                 reply = QMessageBox.question(
                     self.main_window,
                     "Update Annotations",
@@ -51,17 +55,23 @@ class AnnotationController:
                     return
 
             eye_data = self.main_window.image_viewer.get_annotation_data()
-            save_annotations(annotation_path, eye_data, single_eye_mode=self.main_window.single_eye_mode)
+            tuning = self.main_window.get_current_tuning()
+            save_annotations(
+                annotation_path,
+                eye_data,
+                single_eye_mode=self.main_window.single_eye_mode,
+                tuning=tuning,
+            )
             self.main_window.set_annotation_modified(False)
-            # QMessageBox.information(self.main_window, "Success", "Annotations saved successfully.")
 
     def load_annotations(self) -> None:
         """Load annotations for the current image from file."""
         if 0 <= self.main_window.current_image_index < len(self.main_window.image_paths):
             image_path = self.main_window.image_paths[self.main_window.current_image_index]
             annotation_path = get_annotation_path(image_path)
-            annotation_data = load_annotations(annotation_path)
-            self.main_window.image_viewer.set_annotation_data(annotation_data)
+            eye_data, tuning = load_annotations(annotation_path)
+            self.main_window.image_viewer.set_annotation_data(eye_data)
+            self.main_window.apply_tuning(tuning)
             self.main_window.set_annotation_modified(False)
 
     def check_unsaved_changes(self) -> bool:

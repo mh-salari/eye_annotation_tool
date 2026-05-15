@@ -20,10 +20,35 @@ def _serialize_eye_block(block: dict) -> dict:
     }
 
 
+def _serialize_tuning(tuning: dict | None) -> dict | None:
+    """Convert in-memory Manual-Threshold tuning state to JSON form."""
+    if tuning is None:
+        return None
+    return {
+        "thresholds": tuning.get("thresholds"),
+        "pupil_roi": list(tuning["pupil_roi"]) if tuning.get("pupil_roi") else None,
+        "glint_roi": list(tuning["glint_roi"]) if tuning.get("glint_roi") else None,
+        "detection": tuning.get("detection"),
+    }
+
+
+def _deserialize_tuning(raw: dict | None) -> dict | None:
+    """Restore Manual-Threshold tuning state from JSON form."""
+    if raw is None:
+        return None
+    return {
+        "thresholds": raw.get("thresholds"),
+        "pupil_roi": tuple(raw["pupil_roi"]) if raw.get("pupil_roi") else None,
+        "glint_roi": tuple(raw["glint_roi"]) if raw.get("glint_roi") else None,
+        "detection": raw.get("detection"),
+    }
+
+
 def save_annotations(
     annotation_path: str,
     eye_data: dict,
     single_eye_mode: bool = False,
+    tuning: dict | None = None,
 ) -> None:
     """Save annotation data to a JSON file.
 
@@ -32,12 +57,18 @@ def save_annotations(
         eye_data: Dictionary containing annotation data for both left and right eyes.
         single_eye_mode: When True, write a flat schema (no ``left`` / ``right``
             keys) using the ``left`` block as the canonical single-eye source.
+        tuning: Optional Manual-Threshold tuning state (thresholds + ROIs +
+            cached detection). Written as a top-level ``tuning`` key alongside
+            the eye blocks.
 
     """
     if single_eye_mode:
         serializable_data = _serialize_eye_block(eye_data["left"])
     else:
         serializable_data = {eye: _serialize_eye_block(eye_data[eye]) for eye in ("left", "right")}
+
+    if tuning is not None:
+        serializable_data["tuning"] = _serialize_tuning(tuning)
 
     with Path(annotation_path).open("w", encoding="utf-8") as f:
         json.dump(serializable_data, f, indent=2)
@@ -70,7 +101,7 @@ def _deserialize_eye_block(block: dict) -> dict:
     }
 
 
-def load_annotations(annotation_path: str) -> dict:
+def load_annotations(annotation_path: str) -> tuple[dict, dict | None]:
     """Load annotation data from a JSON file.
 
     Handles three on-disk schemas transparently:
@@ -84,23 +115,33 @@ def load_annotations(annotation_path: str) -> dict:
       single-eye format. Treated identically.
 
     Returns:
-        ``{"left": {...}, "right": {...}}`` regardless of on-disk schema, so
-        the rest of the app sees a uniform structure.
+        ``(eye_data, tuning)``. ``eye_data`` is ``{"left": ..., "right": ...}``
+        regardless of on-disk schema. ``tuning`` is the deserialised
+        Manual-Threshold state (or ``None`` if absent).
 
     """
     if not Path(annotation_path).exists():
-        return {"left": _empty_eye_block(), "right": _empty_eye_block()}
+        return {"left": _empty_eye_block(), "right": _empty_eye_block()}, None
 
-    with Path(annotation_path).open(encoding="utf-8") as f:
-        ann = json.load(f)
+    try:
+        with Path(annotation_path).open(encoding="utf-8") as f:
+            ann = json.load(f)
+    except json.JSONDecodeError as exc:
+        # Corrupt or partially-written file (e.g. previous crash mid-save).
+        # Don't crash the GUI; treat as no saved annotations.
+        print(f"warning: skipping unreadable annotation file {annotation_path}: {exc}")
+        return {"left": _empty_eye_block(), "right": _empty_eye_block()}, None
 
+    tuning = _deserialize_tuning(ann.get("tuning"))
     if "left" in ann or "right" in ann:
-        return {
+        eye_data = {
             "left": _deserialize_eye_block(ann["left"]) if "left" in ann else _empty_eye_block(),
             "right": _deserialize_eye_block(ann["right"]) if "right" in ann else _empty_eye_block(),
         }
-    # Flat single-eye schema (or legacy pre-multi-eye file). Load into left.
-    return {"left": _deserialize_eye_block(ann), "right": _empty_eye_block()}
+    else:
+        # Flat single-eye schema (or legacy pre-multi-eye file). Load into left.
+        eye_data = {"left": _deserialize_eye_block(ann), "right": _empty_eye_block()}
+    return eye_data, tuning
 
 
 def get_annotation_path(image_path: str) -> str:
