@@ -10,7 +10,7 @@ current params if it cares about staleness).
 import numpy as np
 from PyQt5.QtCore import QObject, pyqtSignal, pyqtSlot
 
-from annotation_app.auto_detectors.algorithms import detect_pupil_and_glints
+from annotation_app.auto_detectors.algorithms import detect_limbus, detect_pupil_and_glints
 
 
 class DetectionWorker(QObject):
@@ -41,11 +41,24 @@ class DetectionWorker(QObject):
             self.detection_failed.emit(f"{type(exc).__name__}: {exc}")
             return
 
+        # Limbus is best-effort: it depends on a successful pupil fit and
+        # the Daugman IDO can fail at extreme thresholds. Don't poison the
+        # whole detection when only the limbus part is unhappy.
+        limbus = None
+        try:
+            (pcx, pcy), (pw, ph), _ = result["pupil_ellipse"]
+            pupil_radius = max(pw, ph) / 2
+            (lcx, lcy), lr = detect_limbus(image, (pcx, pcy), pupil_radius)
+            limbus = {"center": [float(lcx), float(lcy)], "radius": float(lr)}
+        except Exception:
+            pass
+
         payload = {
             "pupil_contour": result["pupil_contour"],
             "pupil_center": result["pupil_center"],
             "pupil_ellipse": result["pupil_ellipse"],
             "glints": [g["center"] for g in result["glints"]],
+            "limbus": limbus,
             "params": params,
         }
         self.detection_ready.emit(payload)

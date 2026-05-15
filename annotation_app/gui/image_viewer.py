@@ -148,6 +148,8 @@ class ImageViewer(QWidget):
         # manual annotation colors so the live preview is unambiguous.
         self.mt_pupil_color = QColor(0, 230, 255, 255)
         self.mt_glint_color = QColor(255, 80, 180, 255)
+        # Limbus circle (Daugman IDO): lime green, distinct from pupil/glint.
+        self.mt_limbus_color = QColor(80, 255, 100, 255)
         # Manual Threshold ROIs: yellow rectangle for the pupil search region,
         # orange-red for the glint search region.
         self.pupil_roi_color = QColor(255, 220, 0, 255)
@@ -822,6 +824,21 @@ class ImageViewer(QWidget):
             painter.translate(QPointF(cx * self.factor, cy * self.factor))
             painter.rotate(angle)
             painter.drawEllipse(QPointF(0, 0), (w / 2) * self.factor, (h / 2) * self.factor)
+            painter.restore()
+
+        # Limbus: dashed lime-green circle around the iris.
+        limbus = det.get("limbus")
+        if limbus is not None:
+            lcx, lcy = limbus["center"]
+            lr = limbus["radius"]
+            painter.save()
+            painter.setPen(QPen(self.mt_limbus_color, 2, Qt.DashLine))
+            painter.setBrush(Qt.NoBrush)
+            painter.drawEllipse(
+                QPointF(lcx * self.factor, lcy * self.factor),
+                lr * self.factor,
+                lr * self.factor,
+            )
             painter.restore()
 
         # Pupil center: filled cyan dot with a thin contrasting ring.
