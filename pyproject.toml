@@ -73,7 +73,7 @@ preview = true
 #     "E9",   # Pycodestyle E9xx errors (syntax)
 # ]
 
-extend-select = [
+lint.extend-select = [
     "E",    # Pycodestyle errors (style issues)
     "W",    # Pycodestyle warnings (style issues)
     "C90",  # McCabe – complexity metric for functions
@@ -132,7 +132,7 @@ extend-select = [
     "PLC0415", #`import` should be at the top-level of a file
 ]
 
-ignore = [
+lint.ignore = [
     "E501",  # Pycodestyle - line too long
     "E741",  # Pycodestyle - ambiguous variable name
     "FBT003", # Flake8-boolean-trap - boolean position value in function call

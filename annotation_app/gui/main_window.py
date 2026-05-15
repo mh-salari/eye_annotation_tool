@@ -191,7 +191,9 @@ class MainWindow(QMainWindow):
         self.annotation_controls.clear_eyelid_points_requested.connect(self.image_viewer.clear_eyelid_points)
         self.annotation_controls.clear_glint_points_requested.connect(self.image_viewer.clear_glint_points)
         self.annotation_controls.clear_all_requested.connect(self.image_viewer.clear_all)
-        self.annotation_controls.auto_detector_requested.connect(self.auto_detectors_handler.on_auto_detector_requested)
+        self.annotation_controls.auto_detector_requested.connect(
+            self.auto_detectors_handler.on_auto_detector_requested
+        )
         self.annotation_controls.roi_toggle_requested.connect(self.image_viewer.toggle_roi_mode)
         self.annotation_controls.roi_clear_requested.connect(self.image_viewer.clear_roi)
 
@@ -212,7 +214,8 @@ class MainWindow(QMainWindow):
         self.annotation_controls.mode_changed.connect(self._on_mode_changed)
         self._mt_debounce.timeout.connect(self._on_manual_threshold_debounce_fired)
         self.manual_threshold_detect_requested.connect(
-            self._mt_worker.detect, Qt.QueuedConnection,
+            self._mt_worker.detect,
+            Qt.QueuedConnection,
         )
         self._mt_worker.detection_ready.connect(self._on_manual_threshold_detection_ready)
         self._mt_worker.detection_failed.connect(self._on_manual_threshold_detection_failed)
@@ -644,14 +647,13 @@ class MainWindow(QMainWindow):
     @staticmethod
     def get_version_from_setup() -> str:
         """Get the application version from setup.py."""
-        setup_path = str(Path(__file__).parent / ".." / ".." / "setup.py")
-        with Path(setup_path).open(encoding="utf-8") as file:
-            tree = ast.parse(file.read())
-            for node in ast.walk(tree):
-                if isinstance(node, ast.Call) and node.func.id == "setup":
-                    for keyword in node.keywords:
-                        if keyword.arg == "version":
-                            return ast.literal_eval(keyword.value)
+        setup_path = Path(__file__).parent / ".." / ".." / "setup.py"
+        tree = ast.parse(setup_path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Call) and node.func.id == "setup":
+                for keyword in node.keywords:
+                    if keyword.arg == "version":
+                        return ast.literal_eval(keyword.value)
         return "Unknown"
 
     def show_about_dialog(self) -> None:

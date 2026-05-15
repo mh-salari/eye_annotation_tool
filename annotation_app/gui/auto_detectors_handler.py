@@ -98,8 +98,8 @@ class AutoDetectorsHandler:
             except Exception as e:
                 QMessageBox.warning(
                     self.main_window,
-                    f"{detector_type.split('_')[0].capitalize()} Detection Error",
-                    f"Error detecting {detector_type.split('_')[0]}: {e!s}",
+                    f"{detector_type.split('_', maxsplit=1)[0].capitalize()} Detection Error",
+                    f"Error detecting {detector_type.split('_', maxsplit=1)[0]}: {e!s}",
                 )
         else:
             if detector_type == "pupil_detector":

@@ -95,14 +95,26 @@ class ManualThresholdPanel(QGroupBox):
         layout = QVBoxLayout()
 
         self.pupil_threshold_slider, self.pupil_threshold_label = self._add_int_slider(
-            layout, "Pupil threshold", 0, 255, self._params["pupil_threshold"],
+            layout,
+            "Pupil threshold",
+            0,
+            255,
+            self._params["pupil_threshold"],
         )
         self.glint_threshold_slider, self.glint_threshold_label = self._add_int_slider(
-            layout, "Glint threshold", 0, 255, self._params["glint_threshold"],
+            layout,
+            "Glint threshold",
+            0,
+            255,
+            self._params["glint_threshold"],
         )
-        initial_pct = int(round(self._params["glint_margin_ratio"] * 100))
+        initial_pct = round(self._params["glint_margin_ratio"] * 100)
         self.glint_margin_slider, self.glint_margin_label = self._add_int_slider(
-            layout, "Glint margin (%)", -100, 300, initial_pct,
+            layout,
+            "Glint margin (%)",
+            -100,
+            300,
+            initial_pct,
         )
         self.glint_margin_label.setText(f"{initial_pct:+d}%")
         self.glint_margin_slider.setToolTip(
@@ -270,7 +282,7 @@ class ManualThresholdPanel(QGroupBox):
                 self.glint_threshold_label.setText(str(int(params["glint_threshold"])))
                 self._params["glint_threshold"] = int(params["glint_threshold"])
             if "glint_margin_ratio" in params:
-                pct = int(round(float(params["glint_margin_ratio"]) * 100))
+                pct = round(float(params["glint_margin_ratio"]) * 100)
                 self.glint_margin_slider.setValue(pct)
                 self.glint_margin_label.setText(f"{pct:+d}%")
                 self._params["glint_margin_ratio"] = float(params["glint_margin_ratio"])

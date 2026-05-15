@@ -277,7 +277,7 @@ def detect_pupil_and_glints(
     try:
         (lcx, lcy), lr = detect_limbus(img, (cx, cy), pupil_radius)
         limbus = {"center": [float(lcx), float(lcy)], "radius": float(lr)}
-    except Exception:
+    except Exception:  # noqa: S110 - optional; Daugman IDO can fail at extreme thresholds
         pass
 
     if glint_roi is not None:
@@ -288,24 +288,22 @@ def detect_pupil_and_glints(
         if glint_margin_ratio > 0:
             # Expand outward in iris-ring units so +100% reaches the limbus.
             # If limbus detection failed, fall back to pupil_radius as the scale.
-            ring_px = (
-                max(limbus["radius"] - pupil_radius, 0.0)
-                if limbus is not None
-                else pupil_radius
-            )
-            glint_margin_px = int(round(glint_margin_ratio * ring_px))
+            ring_px = max(limbus["radius"] - pupil_radius, 0.0) if limbus is not None else pupil_radius
+            glint_margin_px = round(glint_margin_ratio * ring_px)
             if glint_margin_px > 0:
                 k = 2 * glint_margin_px + 1
                 glint_search_mask = cv2.dilate(
-                    glint_search_mask, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k, k)),
+                    glint_search_mask,
+                    cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k, k)),
                 )
         elif glint_margin_ratio < 0:
             # Shrink inward in pupil-radius units so -100% collapses to the centre.
-            erosion_px = int(round(-glint_margin_ratio * pupil_radius))
+            erosion_px = round(-glint_margin_ratio * pupil_radius)
             if erosion_px > 0:
                 k = 2 * erosion_px + 1
                 glint_search_mask = cv2.erode(
-                    glint_search_mask, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k, k)),
+                    glint_search_mask,
+                    cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k, k)),
                 )
 
     # An explicit glint_roi means "the glint is here" — disable the area

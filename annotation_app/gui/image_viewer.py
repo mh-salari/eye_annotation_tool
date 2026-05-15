@@ -253,7 +253,7 @@ class ImageViewer(QWidget):
 
     def set_mt_active_roi(self, target: str | None) -> None:
         """Activate draw/edit on the Manual Threshold pupil/glint ROI, or none."""
-        if target not in (None, "pupil", "glint"):
+        if target not in {None, "pupil", "glint"}:
             raise ValueError(f"unknown mt roi target: {target!r}")
         self._mt_active_roi = target
         if target is None:
