@@ -42,14 +42,6 @@ cd eye_annotation_tool
 uv sync
 ```
 
-> **Apple Silicon (M1/M2/M3) Note:** The `pupil-detectors` dependency only provides pre-built wheels for x86_64. On Apple Silicon Macs, you need to use an x86_64 Python via Rosetta 2:
->
-> ```bash
-> uv python install cpython-3.11-macos-x86_64
-> uv python pin cpython-3.11-macos-x86_64
-> uv sync
-> ```
-
 ## Usage
 
 ```bash

@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 
 DEFAULT_SETTINGS = {
-    "pupil_detector": "Pupil Core",
+    "pupil_detector": "Threshold",
     "limbus_detector": "disabled",
     "eyelid_detector": "disabled",
 }

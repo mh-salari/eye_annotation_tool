@@ -23,71 +23,6 @@ wheels = [
 ]
 
 [[package]]
-name = "cysignals"
-version = "1.12.5"
-source = { registry = "https://pypi.org/simple" }
-resolution-markers = [
-    "python_full_version == '3.11.*' and sys_platform == 'darwin'",
-    "python_full_version == '3.11.*' and platform_machine == 'aarch64' and sys_platform == 'linux'",
-    "(python_full_version == '3.11.*' and platform_machine != 'aarch64' and sys_platform == 'linux') or (python_full_version == '3.11.*' and sys_platform != 'darwin' and sys_platform != 'linux')",
-    "python_full_version < '3.11' and sys_platform == 'darwin'",
-    "python_full_version < '3.11' and platform_machine == 'aarch64' and sys_platform == 'linux'",
-    "(python_full_version < '3.11' and platform_machine != 'aarch64' and sys_platform == 'linux') or (python_full_version < '3.11' and sys_platform != 'darwin' and sys_platform != 'linux')",
-]
-sdist = { url = "https://files.pythonhosted.org/packages/ba/be/3dd297fb25113abf40dd5de66088ce6883b62c417caa6b5fc2a84b9d48bf/cysignals-1.12.5.tar.gz", hash = "sha256:8f8ed409043d028b59d063dc4c069cbf12a750534757ce06f38eeac5ff368700", size = 86022, upload-time = "2025-09-24T02:47:35.065Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/b2/7e/a1438512fe30237b360853ab67eb77be7270e90108eeac6b906fc59eda0b/cysignals-1.12.5-cp310-cp310-macosx_10_9_x86_64.whl", hash = "sha256:78ec72c069b0c0fbf81c52afadf4220e49ff04405976cd3ac1d1fb3561bdc8b3", size = 216195, upload-time = "2025-09-24T02:46:50.87Z" },
-    { url = "https://files.pythonhosted.org/packages/9d/c3/96d19413d80c2158dfab8dbc7347725e560f725a5be0a455f8dfd80fd5f1/cysignals-1.12.5-cp310-cp310-macosx_11_0_arm64.whl", hash = "sha256:dcea06cc0902ed5453345bc7a8e6a2237b222ce772ab3cc137b135ebcb7e410c", size = 216979, upload-time = "2025-09-24T02:46:52.625Z" },
-    { url = "https://files.pythonhosted.org/packages/9d/65/a7141267ed7d86d888a4733d36e67b9ae9f277767b09b2f698a3919e4926/cysignals-1.12.5-cp310-cp310-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:131e70b8c1eead0781c34d1cd5b5d3fe1c9228a985ce548f277a68d10df691ff", size = 262455, upload-time = "2025-09-24T02:46:53.947Z" },
-    { url = "https://files.pythonhosted.org/packages/08/32/a9903d69da4bc6f05c3e2e803f1d1899039379cfbee5b45044901fb9bbf7/cysignals-1.12.5-cp310-cp310-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:215fdf50197256e456075c0a80de67006584a67d7f489ff1436c1b2f00592e2d", size = 268161, upload-time = "2025-09-24T02:46:55.437Z" },
-    { url = "https://files.pythonhosted.org/packages/43/71/07da5244e84bbda1b26afe6491e62a79b1b71381bd0a3a32642ec7a8bce2/cysignals-1.12.5-cp310-cp310-musllinux_1_2_aarch64.whl", hash = "sha256:a8631d5ed0c15951c5ab653298efd76e0a8d48912693dd8287cb52d4b631783a", size = 264246, upload-time = "2025-09-24T02:46:56.471Z" },
-    { url = "https://files.pythonhosted.org/packages/5a/54/8b9921971aaadd4729d626171bdc1721c959c812d2c7205dafe81fb79a95/cysignals-1.12.5-cp310-cp310-musllinux_1_2_x86_64.whl", hash = "sha256:13d61803e20d471f3bafa2acbb290168609b8854aaefb6feaab2208ef4906b9a", size = 271089, upload-time = "2025-09-24T02:46:57.776Z" },
-    { url = "https://files.pythonhosted.org/packages/e1/7f/916abb405299a2e29eebcde322e7d583557e159f1749345574decd5b00e5/cysignals-1.12.5-cp311-cp311-macosx_10_9_x86_64.whl", hash = "sha256:b8b757e49c9181d874c08271bcbc3ded677f43263e2370b36e41556d897fb053", size = 219441, upload-time = "2025-09-24T02:47:00.396Z" },
-    { url = "https://files.pythonhosted.org/packages/b4/5e/3b90a5a05293b788b037573879dfa4128df53681c9282be0c50d7ec1fda5/cysignals-1.12.5-cp311-cp311-macosx_11_0_arm64.whl", hash = "sha256:82022c3f20f44e52e1c1767716ebf936f15ed9dc2539ae0f840108a59c8313b2", size = 219615, upload-time = "2025-09-24T02:47:01.339Z" },
-    { url = "https://files.pythonhosted.org/packages/85/22/c31e7373d00783d7ebed166ae1e24b871505bb4148fe9a1760659aa9e3d6/cysignals-1.12.5-cp311-cp311-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:9c2daad79f36bf288be9501fcfac4eaacd80113376128e67151a45a57a6470d5", size = 267017, upload-time = "2025-09-24T02:47:02.638Z" },
-    { url = "https://files.pythonhosted.org/packages/cc/f9/0120e457038ab2a00c018503b0fcb1226b59cede896ff19aad93af96d9ca/cysignals-1.12.5-cp311-cp311-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:c37abf7fe2c68c7b63bb5df1f0bf54abab69f7386e767c625d6924dc38746f45", size = 273583, upload-time = "2025-09-24T02:47:03.633Z" },
-    { url = "https://files.pythonhosted.org/packages/e5/a9/03ae3e5b559dd4dd2d852365af9b0ea9150fd74cd216e74227b305a1352b/cysignals-1.12.5-cp311-cp311-musllinux_1_2_aarch64.whl", hash = "sha256:90404a01595e0fcc2f55760ab25ba4ea995c3143739da976364a64fa16306a47", size = 269180, upload-time = "2025-09-24T02:47:04.567Z" },
-    { url = "https://files.pythonhosted.org/packages/11/a9/2a78532431764608a87baa91108f2200ac72490cb03af3cc92cdb21dfd08/cysignals-1.12.5-cp311-cp311-musllinux_1_2_x86_64.whl", hash = "sha256:f14d212027280f37fc1324a66737f78755be010101e0ee8ddd3c98c0dcef4276", size = 276560, upload-time = "2025-09-24T02:47:05.957Z" },
-    { url = "https://files.pythonhosted.org/packages/ff/7f/4ac0871dfea1e5723db6a8765e340660c6bf789d9d538c10e773c08ab2e0/cysignals-1.12.5-cp312-cp312-macosx_10_13_x86_64.whl", hash = "sha256:f7c4074c9a9ae1294abf6a7de224174c2797e3b8f0c86881a04557224ad766bd", size = 220817, upload-time = "2025-09-24T02:47:09.319Z" },
-    { url = "https://files.pythonhosted.org/packages/ba/0c/17b2236fb780081cd95a6609747377c9f5d0bd85fb0d7aa31ee9f5dc531f/cysignals-1.12.5-cp312-cp312-macosx_11_0_arm64.whl", hash = "sha256:08dc79fd7470f828d7ae2f70b534a2710d39c1f194ffeb9649fbdff6e6f0bfff", size = 219943, upload-time = "2025-09-24T02:47:10.347Z" },
-    { url = "https://files.pythonhosted.org/packages/60/fd/9d84bcd8c0d743b41f22e2ef54125e4e787c401e1ffe569b15a433d089ac/cysignals-1.12.5-cp312-cp312-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:9c8011f72efc59fda3cf72096e7cdfc00f415629252c161c29eb721427a666a8", size = 262680, upload-time = "2025-09-24T02:47:11.35Z" },
-    { url = "https://files.pythonhosted.org/packages/d9/e5/6954b9b5d8c843292a58cb091fb52c4a93305681d63e5b48c01d9ff0dead/cysignals-1.12.5-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:eccbcfd762de37daf4a01a0a77ef653561a153c48c2db9104916d36ebbd3cf24", size = 270195, upload-time = "2025-09-24T02:47:12.424Z" },
-    { url = "https://files.pythonhosted.org/packages/76/04/cea6ac568ec4c2c9a5d003629346438ec8ceb991a627edc91fa8d24028de/cysignals-1.12.5-cp312-cp312-musllinux_1_2_aarch64.whl", hash = "sha256:741c9bed4ef802c5892f62c6c8ad96390610bcfb617a0250a86c595eecdd13a9", size = 263724, upload-time = "2025-09-24T02:47:13.789Z" },
-    { url = "https://files.pythonhosted.org/packages/8f/06/16111451a159266a9b03946498137645cd1fd334331b751b00c55fdc2bd4/cysignals-1.12.5-cp312-cp312-musllinux_1_2_x86_64.whl", hash = "sha256:10e57664e3a2c3e7cdd270b7fa041859b552c2813c195b1247e3c116bf40226b", size = 273469, upload-time = "2025-09-24T02:47:14.785Z" },
-    { url = "https://files.pythonhosted.org/packages/9c/3e/9873294ae69ab6620a19e225b65b2aaf79b42a0e5c50e55ccda129d493ac/cysignals-1.12.5-cp313-cp313-macosx_10_13_x86_64.whl", hash = "sha256:c2131f0a724d3f5c0d6ae11c100641a491b223b075d03aa83c69b1d44736a099", size = 217212, upload-time = "2025-09-24T02:47:18.409Z" },
-    { url = "https://files.pythonhosted.org/packages/77/9c/208ba3bad103ed0218d6a225705f2ebc9a886167e0fae5d761c891779057/cysignals-1.12.5-cp313-cp313-macosx_11_0_arm64.whl", hash = "sha256:03cb462edcc1ee7b63f2108bbeb89ce04ddca3baeb4d490f26c997ec23f392f1", size = 217008, upload-time = "2025-09-24T02:47:19.495Z" },
-    { url = "https://files.pythonhosted.org/packages/0b/ab/ebc8dc495251630832a2572ef9a350ac0d2b7d9608531fbbb65fc61ad6e4/cysignals-1.12.5-cp313-cp313-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:64895f286cb6e0f070db6ea8c808039fda21b2c3c9876e3486e6f36aa956b557", size = 260584, upload-time = "2025-09-24T02:47:20.564Z" },
-    { url = "https://files.pythonhosted.org/packages/95/bc/4aaf0032b7c5c7d3c62e42ce6ffda431778f08ac8f52d701af77ed5db3c1/cysignals-1.12.5-cp313-cp313-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:0008a7e53f4889f75c5132c06b42723e80ec40f1035be1cbe4d909896e8f55dc", size = 268999, upload-time = "2025-09-24T02:47:21.579Z" },
-    { url = "https://files.pythonhosted.org/packages/9c/7d/ef2e2d6a08f3821fd157fe69ecdf921c763645ea6259f557a7712f42b7ee/cysignals-1.12.5-cp313-cp313-musllinux_1_2_aarch64.whl", hash = "sha256:800b6b7ad6c45590a2a30d05889378beee9948d8828bc8aafd79694825b595b6", size = 262547, upload-time = "2025-09-24T02:47:22.598Z" },
-    { url = "https://files.pythonhosted.org/packages/22/51/0a564cfefe9853ddcfb4b76ab845398471dd4106da29e829be31705db2c1/cysignals-1.12.5-cp313-cp313-musllinux_1_2_x86_64.whl", hash = "sha256:c09035afcd3017250e796247f3eaf5e79a9a7090b1e104a962b8eb4c87bf9ebe", size = 271757, upload-time = "2025-09-24T02:47:23.637Z" },
-]
-
-[[package]]
-name = "cysignals"
-version = "1.12.6"
-source = { registry = "https://pypi.org/simple" }
-resolution-markers = [
-    "python_full_version >= '3.12' and sys_platform == 'darwin'",
-    "python_full_version >= '3.12' and platform_machine == 'aarch64' and sys_platform == 'linux'",
-    "(python_full_version >= '3.12' and platform_machine != 'aarch64' and sys_platform == 'linux') or (python_full_version >= '3.12' and sys_platform != 'darwin' and sys_platform != 'linux')",
-]
-sdist = { url = "https://files.pythonhosted.org/packages/b9/5a/d258fd8d6ee1538b8472f39051a87d3d6aa2ab26ffa2da4ac809fb851b88/cysignals-1.12.6.tar.gz", hash = "sha256:3ef3a37bdb244821b85475a08e2762ca1019570b369e321504995fa9a54675ce", size = 79583, upload-time = "2025-10-30T04:28:44.463Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/d4/65/8ada25e5501a3357ec0cddc40e6cca8fbef3c0a38bc62614cd20f4304e79/cysignals-1.12.6-cp312-cp312-macosx_11_0_arm64.whl", hash = "sha256:3ee654e14c0747d39711d169a664766e0140327a1d3ea1e0fccda1e31ef74e53", size = 220559, upload-time = "2025-10-30T04:28:14.409Z" },
-    { url = "https://files.pythonhosted.org/packages/fc/4c/ef1a4d2a0383a3b258ee2d2c67acc3a31f57ea7ff219354f4d920aecd5c3/cysignals-1.12.6-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:26a79edceeee7d74609b0cc73b4c3d93301e488dca28b166b3667049a2ee559c", size = 270698, upload-time = "2025-10-30T04:28:16.212Z" },
-    { url = "https://files.pythonhosted.org/packages/11/bc/24b88e729e9051f7c6225891200affc2ea4a431a72e00029de6f6cbaf84f/cysignals-1.12.6-cp312-cp312-musllinux_1_2_x86_64.whl", hash = "sha256:cdcf379028c9a4afcc957d046ce492c3418ac931ddf2089d21d34f337b64ecfb", size = 274019, upload-time = "2025-10-30T04:28:17.966Z" },
-    { url = "https://files.pythonhosted.org/packages/d4/ad/2c74618022ff94072458f21f941745ed6a14b6d95e28890a77d22b671e09/cysignals-1.12.6-cp313-cp313-macosx_11_0_arm64.whl", hash = "sha256:7cfce1fb8b5b30027518d29c472ea78377b049c74aa72b2750d203ba6e791327", size = 217630, upload-time = "2025-10-30T04:28:22.079Z" },
-    { url = "https://files.pythonhosted.org/packages/23/c0/356d5be95499d8a27e4195d6b9c9d000cdfc15171813c65058a35de6a06a/cysignals-1.12.6-cp313-cp313-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:d2a54eb2787e7e93855e06e420740b51b61c06dd466b8ad48a01cf5bc3bc2375", size = 268799, upload-time = "2025-10-30T04:28:23.844Z" },
-    { url = "https://files.pythonhosted.org/packages/86/5c/8c0734a11c8126fe0bb86e7e4e94f9d7d109f09275e57e87b84c7e9d783d/cysignals-1.12.6-cp313-cp313-musllinux_1_2_x86_64.whl", hash = "sha256:63bd2aeab7e515a530176a007478129a043415de7fa08519d9721689b47f91b3", size = 271794, upload-time = "2025-10-30T04:28:25.262Z" },
-    { url = "https://files.pythonhosted.org/packages/d9/0c/db66ab5e7be5454e39eac13e5a5bf908b28af590cb4e75a5d9da5005ab7b/cysignals-1.12.6-cp314-cp314-macosx_11_0_arm64.whl", hash = "sha256:f0e1b9c1f0a1a6ddc3b550893aa032cb2e865a60b8480d3ec61bf4f24f232cf1", size = 219287, upload-time = "2025-10-30T04:28:29.603Z" },
-    { url = "https://files.pythonhosted.org/packages/23/ea/e60bf45dbfb49a349b2ac9812526be40cc17a6b854308301932883dad85b/cysignals-1.12.6-cp314-cp314-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:948d9b0fcdb54d6ef0624991fb22b9c57a63467da56d46bc1f8edb618c900584", size = 269488, upload-time = "2025-10-30T04:28:31.005Z" },
-    { url = "https://files.pythonhosted.org/packages/71/bb/2f4097bcc7b6de3cceba80d830c653dc893feeef0914066580770aba1cdf/cysignals-1.12.6-cp314-cp314-musllinux_1_2_x86_64.whl", hash = "sha256:8eceead50d00487179017eb81b00a7bbf2acfcef6869ba950a13e0e3ee5fef07", size = 272516, upload-time = "2025-10-30T04:28:32.798Z" },
-    { url = "https://files.pythonhosted.org/packages/75/f8/25a75c4106eb1ed54b0ab928d8206d3906bcf708ef952a141fff88e2c034/cysignals-1.12.6-cp314-cp314t-macosx_11_0_arm64.whl", hash = "sha256:83c4f6bb0cd1fc58fc55a3f0dbca0e1229113e3faf06e9a1a7f9cb19a4263f6f", size = 231614, upload-time = "2025-10-30T04:28:36.785Z" },
-    { url = "https://files.pythonhosted.org/packages/07/13/b10ef901ded109b6e86fadf123b7d8dc3646f64aefb5633e5b85bcd09ccb/cysignals-1.12.6-cp314-cp314t-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:8fd29e7452de0d8c7a929b29e8ba7f8bfa84fca746e80263799db026b56b8a1e", size = 279460, upload-time = "2025-10-30T04:28:38.282Z" },
-    { url = "https://files.pythonhosted.org/packages/15/55/ba70d9babff953d1b1730bd685ad47c2a4cee2f384a23d74f7f952d1f4e8/cysignals-1.12.6-cp314-cp314t-musllinux_1_2_x86_64.whl", hash = "sha256:576c16e08b4a917c23ca6d586131a53bedc921b9af8e311dbfc145d39dacd9cd", size = 283163, upload-time = "2025-10-30T04:28:40.517Z" },
-]
-
-[[package]]
 name = "daugman-derived-boundary-detectors"
 source = { editable = "../daugman-derived-boundary-detectors" }
 dependencies = [
@@ -125,7 +60,6 @@ dependencies = [
     { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "numpy", version = "2.3.4", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
     { name = "opencv-python" },
-    { name = "pupil-detectors" },
     { name = "pyqt5" },
     { name = "scipy", version = "1.15.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "scipy", version = "1.16.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
@@ -141,7 +75,6 @@ requires-dist = [
     { name = "daugman-derived-boundary-detectors", editable = "../daugman-derived-boundary-detectors" },
     { name = "numpy", specifier = ">=1.20.0" },
     { name = "opencv-python", specifier = ">=4.5.0" },
-    { name = "pupil-detectors", specifier = ">=2.0.0" },
     { name = "pyqt5", specifier = ">=5.15.0" },
     { name = "scipy", specifier = ">=1.7.0" },
 ]
@@ -348,27 +281,6 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/f9/e2/3e91f31a7d2b083fe6ef3fa267035b518369d9511ffab804f839851d2779/pluggy-1.6.0.tar.gz", hash = "sha256:7dcc130b76258d33b90f61b658791dede3486c3e6bfb003ee5c9bfb396dd22f3", size = 69412, upload-time = "2025-05-15T12:30:07.975Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/54/20/4d324d65cc6d9205fabedc306948156824eb9f0ee1633355a8f7ec5c66bf/pluggy-1.6.0-py3-none-any.whl", hash = "sha256:e920276dd6813095e9377c0bc5566d94c932c33b27a3e3945d8389c374dd4746", size = 20538, upload-time = "2025-05-15T12:30:06.134Z" },
-]
-
-[[package]]
-name = "pupil-detectors"
-version = "2.0.2"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "cysignals", version = "1.12.5", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12' and sys_platform != 'win32'" },
-    { name = "cysignals", version = "1.12.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12' and sys_platform != 'win32'" },
-    { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
-    { name = "numpy", version = "2.3.4", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
-    { name = "opencv-python" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/6a/28/f6f27580cf7fea0f37b590c41c55090358f175299ba700cccf51d75e2477/pupil_detectors-2.0.2.tar.gz", hash = "sha256:7e920435657e30e52eb136c10e3a116eaabcf7acd4b0a301f9a4ef4105415184", size = 69583, upload-time = "2022-10-06T07:15:09.408Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/96/27/1225e6be64d4d004758c8deec94638de218cdc80910ec49d591519a94278/pupil_detectors-2.0.2-cp310-cp310-macosx_10_9_x86_64.whl", hash = "sha256:7d504a35d1c8b2094a89ff7b12c137e987f81f46c249aec750b03534139a641a", size = 27570230, upload-time = "2022-10-06T07:14:32.6Z" },
-    { url = "https://files.pythonhosted.org/packages/12/fb/b1a177bf1bed6108027b364c2507419400c991b056ccbc3010f7bb6f0f5d/pupil_detectors-2.0.2-cp310-cp310-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:7022a45f65eca91e78e90c64bd5126c666a4081886aa800a73ef81acddfae1ee", size = 20298608, upload-time = "2022-10-06T07:15:01.794Z" },
-    { url = "https://files.pythonhosted.org/packages/a2/c1/0980b2b132df57ed7735ad8c8fcc6bcab4e0c544a8b9b37d223a63776b35/pupil_detectors-2.0.2-cp310-cp310-win_amd64.whl", hash = "sha256:c9edde7d826f9c1c6ef1f2824fa878a26502f9778db7364c3c6d22296c6c5be2", size = 23607518, upload-time = "2022-10-06T07:15:04.363Z" },
-    { url = "https://files.pythonhosted.org/packages/be/5f/733e37d01e1b400d079712662daeea93e048fcffccc75974036b25bbfe79/pupil_detectors-2.0.2-cp311-cp311-macosx_10_9_x86_64.whl", hash = "sha256:8b9bdc25b57efb9abb739d4890fee162fc83ce3d5a82003ce08fca23ec338cd7", size = 27564823, upload-time = "2022-10-06T07:14:50.499Z" },
-    { url = "https://files.pythonhosted.org/packages/35/bb/9c83ccf437b2bcb9b22160aebdfb0a77262023a04e0cb01c3179d6d8173a/pupil_detectors-2.0.2-cp311-cp311-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:0e43939210ae3c3f17c2789474188e06ccded707b1ac76bb4e4934ed9622e140", size = 20299110, upload-time = "2022-10-06T07:14:19.786Z" },
-    { url = "https://files.pythonhosted.org/packages/e7/9a/fcd1a9673c8e3676d58f672df93235058bedaf005e8b529f0304c904a3ff/pupil_detectors-2.0.2-cp311-cp311-win_amd64.whl", hash = "sha256:8909459c0bf2f92fa43e2732b5c04304753ab7d758c072d0faedd9bd499ed2f6", size = 23604737, upload-time = "2022-10-06T07:14:22.941Z" },
 ]
 
 [[package]]
