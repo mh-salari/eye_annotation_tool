@@ -35,7 +35,7 @@ class ShortcutHandler:
         prev_image_shortcut = QShortcut(QKeySequence(Qt.Key_Left), self.main_window)
         prev_image_shortcut.activated.connect(self.main_window.navigation_controller.prev_image)
 
-        # Toggle between pupil and iris
+        # Toggle between pupil and limbus
         toggle_shortcut = QShortcut(QKeySequence(Qt.Key_Tab), self.main_window)
         toggle_shortcut.activated.connect(self.toggle_annotation_type)
 
@@ -43,8 +43,8 @@ class ShortcutHandler:
         """Toggle between different annotation types."""
         current_type = self.main_window.annotation_controls.get_current_annotation_type()
         if current_type == "pupil":
-            new_type = "iris"
-        elif current_type == "iris":
+            new_type = "limbus"
+        elif current_type == "limbus":
             new_type = "eyelid_contour"
         else:
             new_type = "pupil"

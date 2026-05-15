@@ -1,12 +1,12 @@
 # Creating a New Plugin for EyE Annotation Tool
 
-This guide explains how to create a new pupil, iris or eyelid detector plugin for the EyE Annotation Tool application.
+This guide explains how to create a new pupil, limbus or eyelid detector plugin for the EyE Annotation Tool application.
 
 ## Steps to Create a New Plugin
 
 1. Create a new Python file in the appropriate directory:
    - For pupil detectors: `annotation_app/auto_detectors/plugins/pupil_detectors/`
-   - For iris detectors: `annotation_app/auto_detectors/plugins/iris_detectors/`
+   - For limbus detectors: `annotation_app/auto_detectors/plugins/limbus_detectors/`
    - For eyelid detectors: `annotation_app/auto_detectors/plugins/eyelid_detectors/`
 
 2. Import the necessary modules:
@@ -45,7 +45,7 @@ The plugin manager will automatically discover and load your new plugin when the
 
 ## Example
 
-See `placeholder_iris_detector.py` for a simple example of a detector plugin.
+See `placeholder_limbus_detector.py` for a simple example of a detector plugin.
 
 ## Notes
 

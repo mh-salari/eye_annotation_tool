@@ -12,7 +12,7 @@ Current schema::
       "single_eye_mode": true,
       "current_mode": "annotate",
       "pupil_detector": "Threshold",
-      "iris_detector": "disabled",
+      "limbus_detector": "disabled",
       "eyelid_detector": "disabled"
     }
 
@@ -27,7 +27,7 @@ PROJECT_SETTINGS_FILENAME = ".eye_annotation_project.json"
 # Keys mirrored from SettingsHandler (global auto-detector settings). When a
 # project is loaded these per-project values take precedence; absence falls
 # back to whatever the global file holds.
-PROJECT_DETECTOR_KEYS = ("pupil_detector", "iris_detector", "eyelid_detector")
+PROJECT_DETECTOR_KEYS = ("pupil_detector", "limbus_detector", "eyelid_detector")
 
 DEFAULT_PROJECT_SETTINGS = {
     "single_eye_mode": False,

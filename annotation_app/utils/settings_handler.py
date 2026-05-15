@@ -5,7 +5,7 @@ from pathlib import Path
 
 DEFAULT_SETTINGS = {
     "pupil_detector": "Pupil Core",
-    "iris_detector": "disabled",
+    "limbus_detector": "disabled",
     "eyelid_detector": "disabled",
 }
 

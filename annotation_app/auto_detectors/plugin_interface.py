@@ -4,7 +4,7 @@ from abc import ABC, abstractmethod
 
 
 class DetectorPlugin(ABC):
-    """Base class for all detector plugins (pupil, iris, eyelid)."""
+    """Base class for all detector plugins (pupil, limbus, glint, eyelid)."""
 
     @abstractmethod
     def __init__(self) -> None:

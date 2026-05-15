@@ -187,7 +187,7 @@ class MainWindow(QMainWindow):
         self.annotation_controls.fit_annotation_requested.connect(self.image_viewer.fit_annotation)
         self.annotation_controls.clear_selected_annotation_requested.connect(self.image_viewer.clear_selected_ellipse)
         self.annotation_controls.clear_pupil_requested.connect(self.image_viewer.clear_pupil_points)
-        self.annotation_controls.clear_iris_requested.connect(self.image_viewer.clear_iris_points)
+        self.annotation_controls.clear_limbus_requested.connect(self.image_viewer.clear_limbus_points)
         self.annotation_controls.clear_eyelid_points_requested.connect(self.image_viewer.clear_eyelid_points)
         self.annotation_controls.clear_glint_points_requested.connect(self.image_viewer.clear_glint_points)
         self.annotation_controls.clear_all_requested.connect(self.image_viewer.clear_all)
@@ -660,7 +660,7 @@ class MainWindow(QMainWindow):
         """Show the about dialog with application information."""
         about_text = (
             "<h3>EyE Annotation Tool</h3>"
-            "<p>A tool to annotate eye images for pupil, iris and eyelid detection.</p>"
+            "<p>A tool to annotate eye images for pupil, limbus and eyelid detection.</p>"
             "<p>Developed by "
             "<a href='https://mh-salari.ir/'"
             "style='color: #8b7aa2;'>Mohammadhossein Salari</a></p>"

@@ -34,8 +34,8 @@ class AutoDetectorsHandler:
             changes_made = False
             if current_annotation == "pupil":
                 changes_made = self.detect_and_update("pupil_detector", image_path)
-            elif current_annotation == "iris":
-                changes_made = self.detect_and_update("iris_detector", image_path)
+            elif current_annotation == "limbus":
+                changes_made = self.detect_and_update("limbus_detector", image_path)
             elif current_annotation == "eyelid_contour":
                 changes_made = self.detect_and_update("eyelid_detector", image_path)
             elif current_annotation == "glint":
@@ -62,8 +62,8 @@ class AutoDetectorsHandler:
         elif detector_name != "disabled":
             if detector_type == "pupil_detector":
                 detector = self.main_window.plugin_manager.get_pupil_detector(detector_name)
-            elif detector_type == "iris_detector":
-                detector = self.main_window.plugin_manager.get_iris_detector(detector_name)
+            elif detector_type == "limbus_detector":
+                detector = self.main_window.plugin_manager.get_limbus_detector(detector_name)
             else:  # eyelid_detector
                 detector = self.main_window.plugin_manager.get_eyelid_detector(detector_name)
         else:
@@ -88,12 +88,12 @@ class AutoDetectorsHandler:
                         )
                         self.main_window.image_viewer.pupil_points = list(starmap(QPointF, points))
                     else:
-                        self.main_window.image_viewer.iris_ellipse = (
+                        self.main_window.image_viewer.limbus_ellipse = (
                             center,
                             size,
                             angle,
                         )
-                        self.main_window.image_viewer.iris_points = list(starmap(QPointF, points))
+                        self.main_window.image_viewer.limbus_points = list(starmap(QPointF, points))
                 changes_made = True
             except Exception as e:
                 QMessageBox.warning(
@@ -105,9 +105,9 @@ class AutoDetectorsHandler:
             if detector_type == "pupil_detector":
                 self.main_window.image_viewer.pupil_ellipse = None
                 self.main_window.image_viewer.pupil_points = []
-            elif detector_type == "iris_detector":
-                self.main_window.image_viewer.iris_ellipse = None
-                self.main_window.image_viewer.iris_points = []
+            elif detector_type == "limbus_detector":
+                self.main_window.image_viewer.limbus_ellipse = None
+                self.main_window.image_viewer.limbus_points = []
             else:  # eyelid_detector
                 self.main_window.image_viewer.eyelid_contour_points = []
                 self.main_window.image_viewer.fitted_eyelid_curve = None
@@ -146,12 +146,12 @@ class AutoDetectorsHandler:
     def update_annotation_controls(self) -> None:
         """Update annotation controls based on active detectors."""
         pupil_detector_name = self.main_window.settings_handler.get_setting("pupil_detector")
-        iris_detector_name = self.main_window.settings_handler.get_setting("iris_detector")
+        limbus_detector_name = self.main_window.settings_handler.get_setting("limbus_detector")
         eyelid_detector_name = self.main_window.settings_handler.get_setting("eyelid_detector")
 
         if eyelid_detector_name != "disabled":
             self.main_window.annotation_controls.set_current_annotation("eyelid_contour")
-        elif iris_detector_name != "disabled":
-            self.main_window.annotation_controls.set_current_annotation("iris")
+        elif limbus_detector_name != "disabled":
+            self.main_window.annotation_controls.set_current_annotation("limbus")
         elif pupil_detector_name != "disabled":
             self.main_window.annotation_controls.set_current_annotation("pupil")

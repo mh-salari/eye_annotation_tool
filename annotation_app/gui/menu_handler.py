@@ -53,9 +53,9 @@ class MenuHandler:
         menu.addMenu(pupil_menu)
         self.add_detector_actions(pupil_menu, "pupil_detector")
 
-        iris_menu = QMenu("Iris Detector", self.main_window)
-        menu.addMenu(iris_menu)
-        self.add_detector_actions(iris_menu, "iris_detector")
+        limbus_menu = QMenu("Limbus Detector", self.main_window)
+        menu.addMenu(limbus_menu)
+        self.add_detector_actions(limbus_menu, "limbus_detector")
 
         eyelid_menu = QMenu("Eyelid Detector", self.main_window)
         menu.addMenu(eyelid_menu)
@@ -65,8 +65,8 @@ class MenuHandler:
         """Add detector selection actions to a menu."""
         if detector_type == "pupil_detector":
             detectors = self.main_window.plugin_manager.get_pupil_detector_names()
-        elif detector_type == "iris_detector":
-            detectors = self.main_window.plugin_manager.get_iris_detector_names()
+        elif detector_type == "limbus_detector":
+            detectors = self.main_window.plugin_manager.get_limbus_detector_names()
         else:  # eyelid_detector
             detectors = self.main_window.plugin_manager.get_eyelid_detector_names()
 
@@ -89,11 +89,11 @@ class MenuHandler:
         """Update menu item checked states."""
         auto_menu = self.main_window.menuBar().actions()[1].menu()
         pupil_menu = auto_menu.actions()[0].menu()
-        iris_menu = auto_menu.actions()[1].menu()
+        limbus_menu = auto_menu.actions()[1].menu()
         eyelid_menu = auto_menu.actions()[2].menu()
 
         self.update_detector_menu_checks(pupil_menu, "pupil_detector")
-        self.update_detector_menu_checks(iris_menu, "iris_detector")
+        self.update_detector_menu_checks(limbus_menu, "limbus_detector")
         self.update_detector_menu_checks(eyelid_menu, "eyelid_detector")
 
     def update_detector_menu_checks(self, menu: QMenu, detector_type: str) -> None:

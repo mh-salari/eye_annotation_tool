@@ -24,7 +24,7 @@ class AnnotationControlPanel(QWidget):
     eye_changed = pyqtSignal(str)
     fit_annotation_requested = pyqtSignal()
     clear_pupil_requested = pyqtSignal()
-    clear_iris_requested = pyqtSignal()
+    clear_limbus_requested = pyqtSignal()
     clear_eyelid_points_requested = pyqtSignal()
     clear_glint_points_requested = pyqtSignal()
     clear_all_requested = pyqtSignal()
@@ -129,11 +129,11 @@ class AnnotationControlPanel(QWidget):
         self.pupil_group.auto_detector_requested.connect(self.auto_detector_requested.emit)
         self.pupil_group.set_checked(True)
 
-        self.iris_group = AnnotationGroup("Iris", has_fit=True, has_auto_detector=True)
-        self.iris_group.selected.connect(lambda: self.annotation_changed.emit("iris"))
-        self.iris_group.fit_requested.connect(self.on_fit_requested)
-        self.iris_group.clear_requested.connect(self.clear_iris_requested.emit)
-        self.iris_group.auto_detector_requested.connect(self.auto_detector_requested.emit)
+        self.limbus_group = AnnotationGroup("Limbus", has_fit=True, has_auto_detector=True)
+        self.limbus_group.selected.connect(lambda: self.annotation_changed.emit("limbus"))
+        self.limbus_group.fit_requested.connect(self.on_fit_requested)
+        self.limbus_group.clear_requested.connect(self.clear_limbus_requested.emit)
+        self.limbus_group.auto_detector_requested.connect(self.auto_detector_requested.emit)
 
         self.eyelid_group = AnnotationGroup("Eyelid Contour", has_fit=False, has_auto_detector=True)
         self.eyelid_group.selected.connect(lambda: self.annotation_changed.emit("eyelid_contour"))
@@ -147,12 +147,12 @@ class AnnotationControlPanel(QWidget):
 
         self.button_group = QButtonGroup()
         self.button_group.addButton(self.pupil_group.radio)
-        self.button_group.addButton(self.iris_group.radio)
+        self.button_group.addButton(self.limbus_group.radio)
         self.button_group.addButton(self.eyelid_group.radio)
         self.button_group.addButton(self.glint_group.radio)
 
         layout.addWidget(self.pupil_group)
-        layout.addWidget(self.iris_group)
+        layout.addWidget(self.limbus_group)
         layout.addWidget(self.eyelid_group)
         layout.addWidget(self.glint_group)
         layout.addStretch(1)
@@ -178,8 +178,8 @@ class AnnotationControlPanel(QWidget):
         """Set the current annotation type."""
         if annotation_type == "pupil":
             self.pupil_group.set_checked(True)
-        elif annotation_type == "iris":
-            self.iris_group.set_checked(True)
+        elif annotation_type == "limbus":
+            self.limbus_group.set_checked(True)
         elif annotation_type == "eyelid_contour":
             self.eyelid_group.set_checked(True)
         else:
@@ -189,8 +189,8 @@ class AnnotationControlPanel(QWidget):
         """Get the currently selected annotation type."""
         if self.pupil_group.is_checked():
             return "pupil"
-        if self.iris_group.is_checked():
-            return "iris"
+        if self.limbus_group.is_checked():
+            return "limbus"
         if self.eyelid_group.is_checked():
             return "eyelid_contour"
         return "glint"

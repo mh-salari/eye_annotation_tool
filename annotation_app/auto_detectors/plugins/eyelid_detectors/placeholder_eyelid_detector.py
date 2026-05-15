@@ -22,7 +22,7 @@ class PlaceholderEyelidDetector(DetectorPlugin):
         # For this example, we'll ignore the actual image content
         # and just return 4 fixed points representing an eyelid contour
 
-        # Assuming image size of 192x192 (same as in the iris example)
+        # Assuming image size of 192x192 (same as in the limbus example)
         height, width = 192, 192
 
         # Define 4 points for the eyelid contour
