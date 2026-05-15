@@ -213,13 +213,21 @@ def detect_pupil_and_glints(
     if pupil_roi is not None:
         pupil_mask = cv2.bitwise_and(pupil_mask, _roi_mask(img.shape, pupil_roi))
     contours, _ = cv2.findContours(pupil_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    interior = [c for c in contours if not _touches_border(c, img.shape)]
-    if not interior:
-        raise ValueError(
-            "no interior pupil contour at this threshold — raise pupil_threshold or "
-            "check the frame for a dark border covering the whole image",
-        )
-    pupil_contour = max(interior, key=cv2.contourArea)
+    if pupil_roi is not None:
+        # ROI is an explicit "the pupil is here" signal — take any non-empty
+        # contour. The border-rejection filter only makes sense without ROI,
+        # where it guards against picking up the frame's vignette.
+        candidates = [c for c in contours if cv2.contourArea(c) > 0]
+        if not candidates:
+            raise ValueError("no pupil contour found inside pupil_roi at this threshold")
+    else:
+        candidates = [c for c in contours if not _touches_border(c, img.shape)]
+        if not candidates:
+            raise ValueError(
+                "no interior pupil contour at this threshold — raise pupil_threshold or "
+                "check the frame for a dark border covering the whole image",
+            )
+    pupil_contour = max(candidates, key=cv2.contourArea)
     hull = cv2.convexHull(pupil_contour)
     # The spline is computed even when an alternative centre is chosen so the
     # area-equivalent diameter is available as a fallback when the hull has
@@ -300,13 +308,18 @@ def detect_pupil_and_glints(
                     glint_search_mask, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k, k)),
                 )
 
+    # An explicit glint_roi means "the glint is here" — disable the area
+    # filter that exists to reject skin/eyelid bleed in the no-ROI case.
+    apply_area_filter = glint_roi is None
+
     if glints_target == 1:
         # Single-LED rig: union every bright blob inside the search region into
         # one centroid (a saturated, irregular reflection can split into multiple
         # contours that still belong to the same physical LED).
         inside_mask = cv2.bitwise_and(glint_mask, glint_search_mask)
         inside_contours, _ = cv2.findContours(inside_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        inside_contours = [c for c in inside_contours if cv2.contourArea(c) <= glint_max_area]
+        if apply_area_filter:
+            inside_contours = [c for c in inside_contours if cv2.contourArea(c) <= glint_max_area]
         if inside_contours:
             union = np.zeros_like(glint_mask)
             cv2.drawContours(union, inside_contours, -1, 255, thickness=cv2.FILLED)
@@ -316,11 +329,11 @@ def detect_pupil_and_glints(
             filtered = []
     else:
         # Multi-LED: keep every bright blob whose centroid lands inside the
-        # search region and whose area is below the max.
+        # search region. The area filter only kicks in without glint_roi.
         glint_contours, _ = cv2.findContours(glint_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         filtered = []
         for c in glint_contours:
-            if cv2.contourArea(c) > glint_max_area:
+            if apply_area_filter and cv2.contourArea(c) > glint_max_area:
                 continue
             gm = cv2.moments(c)
             if gm["m00"] > 0:
