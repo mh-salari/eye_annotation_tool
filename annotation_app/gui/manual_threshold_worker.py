@@ -30,7 +30,7 @@ class DetectionWorker(QObject):
                 image,
                 pupil_threshold=int(params["pupil_threshold"]),
                 glint_threshold=int(params["glint_threshold"]),
-                glint_margin=int(params["glint_margin"]),
+                glint_margin_ratio=float(params["glint_margin_ratio"]),
                 glints_target=int(params["glints_target"]),
                 glint_max_area_ratio=float(params["glint_max_area_ratio"]),
                 pupil_center_method=params["pupil_center_method"],

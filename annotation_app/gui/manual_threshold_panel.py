@@ -35,7 +35,7 @@ PUPIL_CENTER_METHODS = (
 DEFAULT_PARAMS = {
     "pupil_threshold": 30,
     "glint_threshold": 240,
-    "glint_margin": 10,
+    "glint_margin_ratio": 0.1,
     "glints_target": 1,
     "glint_max_area_ratio": 0.1,
     "pupil_center_method": "convex_hull_centroid",
@@ -101,7 +101,11 @@ class ManualThresholdPanel(QGroupBox):
             layout, "Glint threshold", 0, 255, self._params["glint_threshold"],
         )
         self.glint_margin_slider, self.glint_margin_label = self._add_int_slider(
-            layout, "Glint margin", 0, 50, self._params["glint_margin"],
+            layout,
+            "Glint margin (%)",
+            0,
+            100,
+            int(round(self._params["glint_margin_ratio"] * 100)),
         )
 
         # Glint count target + area ratio in one row to save space.
@@ -191,13 +195,16 @@ class ManualThresholdPanel(QGroupBox):
     # ----- event handlers -----
 
     def _on_slider_changed(self, title: str, value: int, value_label: QLabel) -> None:
-        value_label.setText(str(value))
-        key = {
-            "Pupil threshold": "pupil_threshold",
-            "Glint threshold": "glint_threshold",
-            "Glint margin": "glint_margin",
-        }[title]
-        self._params[key] = int(value)
+        if title == "Glint margin (%)":
+            value_label.setText(f"{value}%")
+            self._params["glint_margin_ratio"] = value / 100.0
+        else:
+            value_label.setText(str(value))
+            key = {
+                "Pupil threshold": "pupil_threshold",
+                "Glint threshold": "glint_threshold",
+            }[title]
+            self._params[key] = int(value)
         self.params_changed.emit(dict(self._params))
 
     def _on_glints_target_changed(self, value: int) -> None:
@@ -257,10 +264,11 @@ class ManualThresholdPanel(QGroupBox):
                 self.glint_threshold_slider.setValue(int(params["glint_threshold"]))
                 self.glint_threshold_label.setText(str(int(params["glint_threshold"])))
                 self._params["glint_threshold"] = int(params["glint_threshold"])
-            if "glint_margin" in params:
-                self.glint_margin_slider.setValue(int(params["glint_margin"]))
-                self.glint_margin_label.setText(str(int(params["glint_margin"])))
-                self._params["glint_margin"] = int(params["glint_margin"])
+            if "glint_margin_ratio" in params:
+                pct = int(round(float(params["glint_margin_ratio"]) * 100))
+                self.glint_margin_slider.setValue(pct)
+                self.glint_margin_label.setText(f"{pct}%")
+                self._params["glint_margin_ratio"] = float(params["glint_margin_ratio"])
             if "glints_target" in params:
                 self.glints_target_spin.setValue(int(params["glints_target"]))
                 self._params["glints_target"] = int(params["glints_target"])

@@ -156,7 +156,7 @@ def detect_pupil_and_glints(
     img: np.ndarray,
     pupil_threshold: int = 30,
     glint_threshold: int = 240,
-    glint_margin: int = 10,
+    glint_margin_ratio: float = 0.1,
     glints_target: int = 1,
     glint_max_area_ratio: float = 0.1,
     pupil_center_method: str = "convex_hull_centroid",
@@ -250,13 +250,17 @@ def detect_pupil_and_glints(
     _, glint_mask = cv2.threshold(img, glint_threshold, 255, cv2.THRESH_BINARY)
 
     # Glint search region: explicit ROI overrides the pupil-mask + dilation default.
+    # Dilation is expressed as a fraction of the detected pupil radius so the
+    # tuning value transfers across image resolutions.
     if glint_roi is not None:
         glint_search_mask = _roi_mask(img.shape, glint_roi)
     else:
         glint_search_mask = np.zeros_like(glint_mask)
         cv2.drawContours(glint_search_mask, [pupil_contour], -1, 255, thickness=cv2.FILLED)
-        if glint_margin > 0:
-            k = 2 * int(glint_margin) + 1
+        pupil_radius = max(w, h) / 2
+        glint_margin_px = int(round(glint_margin_ratio * pupil_radius))
+        if glint_margin_px > 0:
+            k = 2 * glint_margin_px + 1
             glint_search_mask = cv2.dilate(
                 glint_search_mask, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k, k)),
             )
