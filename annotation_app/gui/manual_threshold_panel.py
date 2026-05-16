@@ -46,6 +46,7 @@ class ManualThresholdPanel(QGroupBox):
     """Sliders + spin boxes + method radio for live threshold tuning."""
 
     params_changed = pyqtSignal(dict)
+    detect_requested = pyqtSignal()
     # Pupil/Glint ROI mode toggles. Bool payload: True = activate that ROI's
     # drag-edit mode, False = deactivate. Only one ROI active at a time
     # (enforced inside the panel via mutex on toggle).
@@ -93,6 +94,13 @@ class ManualThresholdPanel(QGroupBox):
             """
         )
         layout = QVBoxLayout()
+
+        # Per-image save-state badge. Updated by the main window after each
+        # image load, manual save, or annotation-modified event.
+        self.save_state_label = QLabel("● UNSAVED")
+        self.save_state_label.setAlignment(Qt.AlignCenter)
+        self._style_save_state_label(saved=False)
+        layout.addWidget(self.save_state_label)
 
         self.pupil_threshold_slider, self.pupil_threshold_label = self._add_int_slider(
             layout,
@@ -183,6 +191,14 @@ class ManualThresholdPanel(QGroupBox):
         glint_row.addWidget(self.clear_glint_roi_button)
         layout.addLayout(glint_row)
 
+        # Explicit detection trigger. Opening a fresh image does not auto-detect,
+        # so the displayed overlay is unambiguous: present = loaded from disk
+        # (saved state); absent = image has no saved annotation and pressing
+        # Detect computes one (unsaved until the user explicitly saves).
+        self.detect_button = MaterialButton("Detect")
+        self.detect_button.clicked.connect(self.detect_requested.emit)
+        layout.addWidget(self.detect_button)
+
         self.setLayout(layout)
 
     def _add_int_slider(
@@ -253,6 +269,22 @@ class ManualThresholdPanel(QGroupBox):
         """Untoggle both ROI buttons (e.g. when leaving Manual Threshold mode)."""
         self.pupil_roi_button.setChecked(False)
         self.glint_roi_button.setChecked(False)
+
+    def set_save_state(self, saved: bool) -> None:
+        """Update the per-image save-state badge: True → saved (green), False → unsaved (orange)."""
+        self.save_state_label.setText("● SAVED" if saved else "● UNSAVED")
+        self._style_save_state_label(saved=saved)
+
+    def _style_save_state_label(self, *, saved: bool) -> None:
+        """Apply the green/orange pill styling to the save-state badge."""
+        if saved:
+            bg, fg = "#1f8a44", "#ffffff"  # green
+        else:
+            bg, fg = "#d97706", "#ffffff"  # amber
+        self.save_state_label.setStyleSheet(
+            f"QLabel {{ background-color: {bg}; color: {fg};"
+            f" padding: 4px 8px; border-radius: 6px; font-weight: bold; }}"
+        )
 
     def current_params(self) -> dict:
         """Return a copy of the current parameter dict."""

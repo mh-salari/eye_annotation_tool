@@ -171,8 +171,21 @@ class MainWindow(QMainWindow):
         self.annotation_modified = False
 
     def set_annotation_modified(self, modified: bool) -> None:
-        """Set the annotation modified flag."""
+        """Set the annotation modified flag and refresh the GUI save-state indicator."""
         self.annotation_modified = modified
+        self._refresh_save_state_indicator()
+
+    def _refresh_save_state_indicator(self) -> None:
+        """Sync the Manual Threshold badge and the window title `*` suffix to ``annotation_modified``."""
+        saved = not self.annotation_modified
+        self.annotation_controls.manual_threshold_panel.set_save_state(saved)
+        if 0 <= self.current_image_index < len(self.image_paths):
+            name = Path(self.image_paths[self.current_image_index]).name
+            self.setWindowTitle(
+                f"EyE Annotation Tool - {name}{'' if saved else ' *'}"
+            )
+        else:
+            self.setWindowTitle("EyE Annotation Tool" + ("" if saved else " *"))
 
     def connect_signals(self) -> None:
         """Connect signals and slots for UI components."""
@@ -221,6 +234,7 @@ class MainWindow(QMainWindow):
         self._mt_worker.detection_ready.connect(self._on_manual_threshold_detection_ready)
         self._mt_worker.detection_failed.connect(self._on_manual_threshold_detection_failed)
         self.image_viewer.image_loaded.connect(self._on_image_loaded_for_manual_threshold)
+        panel.detect_requested.connect(self._kick_detection_if_active)
 
         # Pupil/Glint ROI flow: panel toggle -> viewer drag-edit mode; viewer
         # roi changes -> re-trigger detection with the new ROI.
@@ -525,11 +539,15 @@ class MainWindow(QMainWindow):
         self._mt_debounce.start()
 
     def _on_image_loaded_for_manual_threshold(self) -> None:
-        """Re-detect on the freshly loaded image if we're in Manual Threshold mode."""
-        if self.annotation_controls.current_mode() != MODE_MANUAL_THRESHOLD:
-            return
-        self._mt_pending_params = self.annotation_controls.manual_threshold_panel.current_params()
-        self._mt_debounce.start()
+        """Refresh the saved/unsaved indicator on image change.
+
+        Manual Threshold mode does not auto-detect on image load — the
+        overlay is loaded directly from the per-image annotation file
+        (when present) by `apply_tuning`, and a fresh detection requires
+        an explicit Detect-button press. Slider / ROI changes still
+        debounce-detect for live preview.
+        """
+        self._refresh_save_state_indicator()
 
     def _on_manual_threshold_detection_ready(self, payload: dict) -> None:
         """Forward the worker's detection result into the image viewer.
