@@ -19,6 +19,10 @@ class ImageViewer(QWidget):
     # Emitted after a new image is loaded; the orchestrator listens to clear
     # its per-image detection cache.
     image_loaded = pyqtSignal()
+    # Emitted on drag-end when the user has drawn, moved, or resized a
+    # per-target Auto Detect ROI on the canvas. Payload is the target slug
+    # ("pupil", ...) and the new ``(x, y, w, h)`` tuple or ``None``.
+    target_roi_changed = pyqtSignal(str, object)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         """Initialize the ImageViewer."""
@@ -119,6 +123,13 @@ class ImageViewer(QWidget):
         self._detection_overlays: dict[str, dict] = {}
         self._show_detection_overlays = False
 
+        # Per-target Auto Detect ROI rectangles (target → ``(x, y, w, h)``
+        # tuple or None). ``_active_roi_target`` is the target whose
+        # rectangle is currently in drag-edit mode — handles are drawn on
+        # that one only, and canvas clicks edit that ROI exclusively.
+        self._target_rois: dict[str, tuple | None] = {}
+        self._active_roi_target: str | None = None
+
     def setup_colors(self) -> None:
         # Define colors with transparency
         """Set up color definitions for annotations."""
@@ -144,6 +155,14 @@ class ImageViewer(QWidget):
         # distinct bright green so it reads on top of the iris.
         self.detection_pupil_ellipse_color = self.pupil_ellipse_color
         self.detection_pupil_center_color = QColor(40, 220, 60, 255)
+
+        # Per-target ROI rectangle colours. Each target's ROI is drawn in
+        # the same hue as its detection marker so the association is
+        # obvious at a glance. Glint / limbus / eyelid entries will be
+        # added when those plugins land.
+        self.target_roi_colors: dict[str, QColor] = {
+            "pupil": self.detection_pupil_center_color,
+        }
 
     def setup_undo_system(self) -> None:
         """Initialize the undo/redo system."""
@@ -323,6 +342,87 @@ class ImageViewer(QWidget):
                 self.annotation_changed.emit()
                 self.update_image()
 
+    def _active_drag_roi(self) -> tuple | None:
+        """Return the rectangle currently being drag-edited (Annotate self.roi or a target ROI)."""
+        if self.roi_drawing_mode:
+            return self.roi
+        if self._active_roi_target is not None:
+            return self._target_rois.get(self._active_roi_target)
+        return None
+
+    def _set_active_drag_roi(self, value: tuple | None) -> None:
+        """Write the in-progress drag rectangle to its owner (Annotate or target store)."""
+        if self.roi_drawing_mode:
+            self.roi = value
+        elif self._active_roi_target is not None:
+            self._target_rois[self._active_roi_target] = value
+
+    def _drag_active_roi(self, new_pos: QPointF) -> None:
+        """Update the active drag ROI in place based on the current cursor position.
+
+        Dispatches by ``drawing_roi`` / ``moving_roi`` / ``resizing_roi``
+        flags. The active rectangle is read via :meth:`_active_drag_roi`
+        and written back via :meth:`_set_active_drag_roi` so this works
+        for both the Annotate-mode ROI and per-target Auto Detect ROIs.
+        """
+        if self.drawing_roi:
+            x = min(self.roi_start_pos.x(), new_pos.x())
+            y = min(self.roi_start_pos.y(), new_pos.y())
+            w = abs(new_pos.x() - self.roi_start_pos.x())
+            h = abs(new_pos.y() - self.roi_start_pos.y())
+            self._set_active_drag_roi((x, y, w, h))
+            return
+        current = self._active_drag_roi()
+        if current is None:
+            return
+        if self.moving_roi:
+            delta_x = new_pos.x() - self.roi_start_pos.x()
+            delta_y = new_pos.y() - self.roi_start_pos.y()
+            x, y, w, h = current
+            self._set_active_drag_roi((x + delta_x, y + delta_y, w, h))
+            self.roi_start_pos = new_pos
+            return
+        if self.resizing_roi:
+            x, y, w, h = current
+            if "t" in self.roi_resize_handle:
+                delta_y = new_pos.y() - y
+                y = new_pos.y()
+                h -= delta_y
+            if "b" in self.roi_resize_handle:
+                h = new_pos.y() - y
+            if "l" in self.roi_resize_handle:
+                delta_x = new_pos.x() - x
+                x = new_pos.x()
+                w -= delta_x
+            if "r" in self.roi_resize_handle:
+                w = new_pos.x() - x
+            self._set_active_drag_roi((x, y, max(10, w), max(10, h)))
+
+    def _try_begin_roi_drag(self, image_pos: QPointF, current: tuple | None) -> bool:
+        """Convert a click on or near ``current`` into a resize/move/draw state.
+
+        Returns True iff this click consumes the event (i.e. it landed on
+        an ROI handle / inside the rectangle, or it began a fresh draw).
+        Always returns True under the present caller — the caller has
+        already established that some ROI drag mode is active.
+        """
+        if current:
+            handle = self.get_roi_handle_at_pos(image_pos, current)
+            if handle:
+                self.resizing_roi = True
+                self.roi_resize_handle = handle
+                self.roi_start_pos = image_pos
+                return True
+            if self.is_point_in_roi(image_pos, current):
+                self.moving_roi = True
+                self.roi_start_pos = image_pos
+                return True
+        # Start a fresh draw, replacing whatever was there.
+        self.drawing_roi = True
+        self.roi_start_pos = image_pos
+        self._set_active_drag_roi(None)
+        return True
+
     def mousePressEvent(self, event: QEvent) -> None:  # noqa: N802
         """Handle mouse press events."""
         if event.button() == Qt.MiddleButton:
@@ -332,24 +432,14 @@ class ImageViewer(QWidget):
         elif event.button() == Qt.LeftButton:
             image_pos = self.get_image_position(event.pos())
             if image_pos:
-                # Active ROI drag (Annotate-mode self.roi). Mutually exclusive
-                # with the annotation-point flow below.
+                # Annotate-mode self.roi drag takes priority over the
+                # per-target Auto Detect ROIs and the annotation-point flow.
                 if self.roi_drawing_mode:
-                    if self.roi:
-                        handle = self.get_roi_handle_at_pos(image_pos, self.roi)
-                        if handle:
-                            self.resizing_roi = True
-                            self.roi_resize_handle = handle
-                            self.roi_start_pos = image_pos
-                            return
-                        if self.is_point_in_roi(image_pos, self.roi):
-                            self.moving_roi = True
-                            self.roi_start_pos = image_pos
-                            return
-                    # Start drawing a new rectangle, replacing any existing one.
-                    self.drawing_roi = True
-                    self.roi_start_pos = image_pos
-                    self.roi = None
+                    self._try_begin_roi_drag(image_pos, self.roi)
+                    return
+                # A per-target ROI in drag-edit mode consumes the click too.
+                if self._active_roi_target is not None:
+                    self._try_begin_roi_drag(image_pos, self._target_rois.get(self._active_roi_target))
                     return
 
                 self.selected_point, selected_annotation = self.find_closest_point_and_type(image_pos)
@@ -386,33 +476,7 @@ class ImageViewer(QWidget):
         elif self.drawing_roi or self.moving_roi or self.resizing_roi:
             new_pos = self.get_image_position(event.pos())
             if new_pos and self.roi_start_pos:
-                if self.drawing_roi:
-                    x = min(self.roi_start_pos.x(), new_pos.x())
-                    y = min(self.roi_start_pos.y(), new_pos.y())
-                    w = abs(new_pos.x() - self.roi_start_pos.x())
-                    h = abs(new_pos.y() - self.roi_start_pos.y())
-                    self.roi = (x, y, w, h)
-                elif self.moving_roi and self.roi:
-                    delta_x = new_pos.x() - self.roi_start_pos.x()
-                    delta_y = new_pos.y() - self.roi_start_pos.y()
-                    x, y, w, h = self.roi
-                    self.roi = (x + delta_x, y + delta_y, w, h)
-                    self.roi_start_pos = new_pos
-                elif self.resizing_roi and self.roi:
-                    x, y, w, h = self.roi
-                    if "t" in self.roi_resize_handle:
-                        delta_y = new_pos.y() - y
-                        y = new_pos.y()
-                        h -= delta_y
-                    if "b" in self.roi_resize_handle:
-                        h = new_pos.y() - y
-                    if "l" in self.roi_resize_handle:
-                        delta_x = new_pos.x() - x
-                        x = new_pos.x()
-                        w -= delta_x
-                    if "r" in self.roi_resize_handle:
-                        w = new_pos.x() - x
-                    self.roi = (x, y, max(10, w), max(10, h))
+                self._drag_active_roi(new_pos)
                 self.update_image()
         elif self.moving_point and self.selected_point:
             new_pos = self.get_image_position(event.pos())
@@ -461,9 +525,13 @@ class ImageViewer(QWidget):
                 self.moving_roi = False
                 self.resizing_roi = False
                 self.roi_resize_handle = None
-                if self.roi:
-                    self.save_current_eye_data()
-                    self.annotation_changed.emit()
+                if self.roi_drawing_mode:
+                    if self.roi:
+                        self.save_current_eye_data()
+                        self.annotation_changed.emit()
+                elif self._active_roi_target is not None:
+                    target = self._active_roi_target
+                    self.target_roi_changed.emit(target, self._target_rois.get(target))
                 return
 
             self.moving_point = False
@@ -498,6 +566,11 @@ class ImageViewer(QWidget):
         self.limbus_points = []
         self.pupil_ellipse = None
         self.limbus_ellipse = None
+        # Per-image Auto Detect overlay state — cleared here so the next
+        # image starts blank before the annotation controller restores
+        # whatever the new image's saved annotation carries.
+        self._detection_overlays.clear()
+        self._target_rois.clear()
         self.reset_undo_stack()
         self.update_image()
         self.image_loaded.emit()
@@ -538,6 +611,49 @@ class ImageViewer(QWidget):
     def get_detection_overlay(self, target: str) -> dict | None:
         """Return the currently stored result for ``target`` (or None)."""
         return self._detection_overlays.get(target)
+
+    # ----- Per-target Auto Detect ROIs -----
+
+    def set_active_roi_target(self, target: str | None) -> None:
+        """Enter drag-edit mode for ``target``'s ROI, or leave it (``None``).
+
+        Cancels any in-progress drag and re-paints so the corner-handle
+        decoration follows the newly active target.
+        """
+        if target is not None and target == self._active_roi_target:
+            return
+        self._active_roi_target = target
+        # Cancel any drag in progress; the user toggled the active ROI
+        # while pressing the mouse — rare but worth a clean reset.
+        self.drawing_roi = False
+        self.moving_roi = False
+        self.resizing_roi = False
+        self.roi_resize_handle = None
+        self.update_image()
+
+    def set_target_roi(self, target: str, roi: tuple | None) -> None:
+        """Replace ``target``'s stored ROI without emitting ``target_roi_changed``."""
+        self._target_rois[target] = tuple(roi) if roi is not None else None
+        self.update_image()
+
+    def clear_target_roi(self, target: str) -> None:
+        """Drop ``target``'s stored ROI and emit ``target_roi_changed`` with ``None``."""
+        if self._target_rois.get(target) is None:
+            return
+        self._target_rois[target] = None
+        self.target_roi_changed.emit(target, None)
+        self.update_image()
+
+    def get_target_roi(self, target: str) -> tuple | None:
+        """Return ``target``'s stored ROI (or None)."""
+        return self._target_rois.get(target)
+
+    def clear_all_target_rois(self) -> None:
+        """Drop every stored per-target ROI without emitting signals."""
+        if not self._target_rois:
+            return
+        self._target_rois.clear()
+        self.update_image()
 
     def eventFilter(self, source: QWidget, event: QEvent) -> bool:  # noqa: N802
         """Filter events for window state changes."""
@@ -598,6 +714,7 @@ class ImageViewer(QWidget):
 
         if self._show_detection_overlays:
             self._draw_detection_overlays(painter)
+            self._draw_target_rois(painter)
 
         painter.end()
         self.image_label.setPixmap(self.pixmap)
@@ -707,6 +824,59 @@ class ImageViewer(QWidget):
         pupil = self._detection_overlays.get("pupil")
         if pupil is not None:
             self._draw_pupil_detection(painter, pupil)
+
+    def _draw_target_rois(self, painter: QPainter) -> None:
+        """Render every stored per-target ROI rectangle.
+
+        All targets are drawn dashed in their plugin colour; the currently
+        active target additionally gets corner handles so the user can see
+        which one accepts mouse drags.
+        """
+        fallback_color = QColor(255, 255, 255, 200)
+        for target, roi in self._target_rois.items():
+            if roi is None:
+                continue
+            color = self.target_roi_colors.get(target, fallback_color)
+            self._draw_target_roi_box(
+                painter,
+                roi,
+                color,
+                active=(target == self._active_roi_target),
+            )
+
+    def _draw_target_roi_box(
+        self,
+        painter: QPainter,
+        roi: tuple,
+        color: QColor,
+        *,
+        active: bool,
+    ) -> None:
+        """Render one per-target ROI rectangle, with corner handles when ``active``."""
+        x, y, w, h = roi
+        scaled_x = x * self.factor
+        scaled_y = y * self.factor
+        scaled_w = w * self.factor
+        scaled_h = h * self.factor
+        painter.setPen(QPen(color, 2, Qt.DashLine))
+        painter.setBrush(Qt.NoBrush)
+        painter.drawRect(int(scaled_x), int(scaled_y), int(scaled_w), int(scaled_h))
+        if active:
+            handle_size = 8
+            painter.setPen(QPen(color, 2, Qt.SolidLine))
+            painter.setBrush(color)
+            for cx, cy in (
+                (scaled_x, scaled_y),
+                (scaled_x + scaled_w, scaled_y),
+                (scaled_x, scaled_y + scaled_h),
+                (scaled_x + scaled_w, scaled_y + scaled_h),
+            ):
+                painter.drawRect(
+                    int(cx - handle_size / 2),
+                    int(cy - handle_size / 2),
+                    handle_size,
+                    handle_size,
+                )
 
     def _draw_pupil_detection(self, painter: QPainter, result: dict) -> None:
         """Render a pupil-target detection result.

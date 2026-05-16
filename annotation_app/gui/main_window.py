@@ -42,6 +42,22 @@ from .shortcut_handler import ShortcutHandler
 # flooded with stale intermediates.
 AUTO_DETECT_DEBOUNCE_MS = 100
 
+# Method-name suffix each plugin panel uses for its per-target ROI setter.
+# Plugins that consume an ROI (currently ThresholdPupil) expose
+# ``set_<target>_roi(roi)``; the orchestrator hands new rectangles back
+# through that method so the panel's params dict stays the source of truth.
+_PANEL_ROI_SETTER = "set_{target}_roi"
+
+
+def _panel_roi_setter_name(target: str) -> str:
+    """Return the panel-method name that pushes a new ROI for ``target``."""
+    return _PANEL_ROI_SETTER.format(target=target)
+
+
+def _panel_roi_param_key(target: str) -> str:
+    """Return the params-dict key plugin panels use for their ``target`` ROI."""
+    return f"{target}_roi"
+
 
 class MainWindow(QMainWindow):
     """Main application window containing all UI components and controllers."""
@@ -205,11 +221,13 @@ class MainWindow(QMainWindow):
 
         self.image_viewer.annotation_changed.connect(self.on_annotation_changed)
         self.image_viewer.annotation_type_changed.connect(self.annotation_controls.set_current_annotation)
-        # On image change: drop the orchestrator's per-image cache AND the
-        # viewer's per-image overlay store before the annotation_controller
-        # re-populates them from the new image's saved annotation (if any).
+        # On image change: drop the orchestrator's per-image cache before
+        # the annotation_controller restores whatever the new image's saved
+        # annotation carries. The image viewer clears its own per-image
+        # overlay + target-ROI state inside ``load_image`` itself.
         self.image_viewer.image_loaded.connect(self.orchestrator.clear_cache)
-        self.image_viewer.image_loaded.connect(self.image_viewer.clear_all_detection_overlays)
+
+        self.image_viewer.target_roi_changed.connect(self._on_target_roi_changed)
 
         self.annotation_controls.auto_detect_run_requested.connect(self._on_run_auto_detect)
         self._auto_detect_debounce.timeout.connect(self._on_auto_detect_debounce_fired)
@@ -479,6 +497,13 @@ class MainWindow(QMainWindow):
                 panel.set_params(params)
             self.orchestrator.set_cached_result(plugin.target, result)
             self.image_viewer.set_detection_overlay(plugin.target, result)
+            # panel.set_params is silent by design; mirror the per-target
+            # ROI value into the viewer's store so the rectangle renders.
+            saved_roi = params.get(_panel_roi_param_key(plugin.target))
+            self.image_viewer.set_target_roi(
+                plugin.target,
+                tuple(saved_roi) if saved_roi is not None else None,
+            )
 
     # ----- Auto Detect mode: plugin resolution, run dispatch, signal forwarding -----
 
@@ -524,6 +549,27 @@ class MainWindow(QMainWindow):
                     params,
                 ),
             )
+            # Wire the per-target ROI signals when the panel exposes them.
+            # The plugin contract does not mandate ROI controls — only
+            # plugins whose algorithm consumes an ROI (e.g. ThresholdPupil)
+            # surface these signals.
+            if hasattr(panel, "roi_edit_requested"):
+                panel.roi_edit_requested.connect(
+                    lambda checked, target_=plugin.target: self._on_panel_roi_edit_requested(
+                        target_,
+                        checked,
+                    ),
+                )
+            if hasattr(panel, "clear_roi_requested"):
+                panel.clear_roi_requested.connect(
+                    lambda target_=plugin.target: self._on_panel_clear_roi_requested(target_),
+                )
+            # Seed the viewer's ROI store from the project-saved params so
+            # the rectangle is rendered immediately when Auto Detect mode
+            # is entered.
+            saved_roi = entry.get("params", {}).get(_panel_roi_param_key(plugin.target))
+            if saved_roi is not None:
+                self.image_viewer.set_target_roi(plugin.target, tuple(saved_roi))
             panels.append((plugin.name, panel))
         self.annotation_controls.set_auto_detect_panels(panels)
         self.orchestrator.set_enabled_plugins(dict(self._enabled_plugins))
@@ -583,6 +629,39 @@ class MainWindow(QMainWindow):
         """Clear the per-target overlay and surface the failure in the status bar."""
         self.image_viewer.clear_detection_overlay(target)
         self.statusBar().showMessage(f"Auto Detect: {target} failed at current parameters.", 5000)
+
+    def _on_panel_roi_edit_requested(self, target: str, active: bool) -> None:
+        """Enter (or leave) drag-edit mode for ``target``'s ROI on the canvas."""
+        self.image_viewer.set_active_roi_target(target if active else None)
+
+    def _on_panel_clear_roi_requested(self, target: str) -> None:
+        """Drop ``target``'s ROI everywhere: viewer store, panel params, plus re-run."""
+        self.image_viewer.set_target_roi(target, None)
+        plugin = self._enabled_plugins.get(target)
+        if plugin is None:
+            return
+        panel = self.annotation_controls.auto_detect_panel(plugin.name)
+        setter = getattr(panel, _panel_roi_setter_name(target), None) if panel is not None else None
+        if setter is not None:
+            # set_<target>_roi(None) updates the panel's params dict and emits
+            # params_changed → the debounce path re-runs detection without
+            # the ROI constraint.
+            setter(None)
+
+    def _on_target_roi_changed(self, target: str, roi: tuple | None) -> None:
+        """Push a canvas-edited ROI back into the panel's params dict.
+
+        The panel's setter (e.g. ``set_pupil_roi``) writes the new value
+        into the params dict and emits ``params_changed``; the regular
+        debounce path then re-runs detection with the updated ROI.
+        """
+        plugin = self._enabled_plugins.get(target)
+        if plugin is None:
+            return
+        panel = self.annotation_controls.auto_detect_panel(plugin.name)
+        setter = getattr(panel, _panel_roi_setter_name(target), None) if panel is not None else None
+        if setter is not None:
+            setter(roi)
 
     def get_current_screen(self) -> QScreen | None:
         """Get the screen that currently contains the window."""
