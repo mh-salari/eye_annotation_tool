@@ -695,12 +695,14 @@ class ImageViewer(QWidget):
         painter = QPainter(self.pixmap)
         painter.drawPixmap(0, 0, scaled_pixmap)
 
-        # Draw the active eye's annotations. In single-eye mode the right
-        # block is unused and we skip it to avoid drawing stale data carried
-        # over from a multi-eye file loaded earlier.
-        self.draw_eye_annotations(painter, "left")
-        if not self.single_eye_mode:
-            self.draw_eye_annotations(painter, "right")
+        # Annotate-mode points and ellipses are hidden in Manual Threshold
+        # mode so the threshold overlay isn't visually contaminated by data
+        # captured in the other mode (they remain in memory and are restored
+        # when switching back).
+        if not self._is_manual_threshold_mode:
+            self.draw_eye_annotations(painter, "left")
+            if not self.single_eye_mode:
+                self.draw_eye_annotations(painter, "right")
 
         # Draw ROI if it exists and we're in ROI mode or it's defined
         if self.roi:
