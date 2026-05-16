@@ -193,8 +193,12 @@ class MainWindow(QMainWindow):
         self._refresh_save_state_indicator()
 
     def _refresh_save_state_indicator(self) -> None:
-        """Sync the Manual Threshold badge and the window title `*` suffix to ``annotation_modified``."""
-        saved = not self.annotation_modified
+        """Sync the Manual Threshold badge and the window title to the save state.
+
+        Treated as saved when autosave is enabled (autosave keeps disk in sync
+        on every image change) or when no edits are pending.
+        """
+        saved = self.autosave_enabled or not self.annotation_modified
         self.annotation_controls.manual_threshold_panel.set_save_state(saved)
         if 0 <= self.current_image_index < len(self.image_paths):
             name = Path(self.image_paths[self.current_image_index]).name
@@ -475,6 +479,7 @@ class MainWindow(QMainWindow):
             project_settings = load_project_settings(self.project_dir)
             project_settings["autosave"] = enabled
             self._save_to_all_projects(project_settings)
+        self._refresh_save_state_indicator()
 
     def get_current_tuning(self) -> dict | None:
         """Collect Manual-Threshold state for persistence; ``None`` if nothing to save."""
@@ -742,19 +747,22 @@ class MainWindow(QMainWindow):
     def closeEvent(self, event: QCloseEvent) -> None:  # noqa: N802
         """Handle window close event."""
         if self.annotation_modified:
-            reply = QMessageBox.question(
-                self,
-                "Unsaved Changes",
-                "You have unsaved changes. Do you want to save before exiting?",
-                QMessageBox.Save | QMessageBox.Discard | QMessageBox.Cancel,
-                QMessageBox.Save,
-            )
-
-            if reply == QMessageBox.Save:
+            if self.autosave_enabled:
                 self.annotation_controller.save_annotations()
-            elif reply == QMessageBox.Cancel:
-                event.ignore()
-                return
+            else:
+                reply = QMessageBox.question(
+                    self,
+                    "Unsaved Changes",
+                    "You have unsaved changes. Do you want to save before exiting?",
+                    QMessageBox.Save | QMessageBox.Discard | QMessageBox.Cancel,
+                    QMessageBox.Save,
+                )
+
+                if reply == QMessageBox.Save:
+                    self.annotation_controller.save_annotations()
+                elif reply == QMessageBox.Cancel:
+                    event.ignore()
+                    return
 
         # Stop the Manual Threshold worker thread before exiting so Qt
         # doesn't print "QThread: Destroyed while thread is still running".

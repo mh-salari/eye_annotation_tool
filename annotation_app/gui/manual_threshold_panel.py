@@ -1,16 +1,18 @@
 """Right-panel widget for the Manual Threshold mode.
 
 Exposes the per-image threshold knobs (pupil + glint thresholds, glint margin,
-glint count target, glint area ratio, pupil-centre method) as a single
-``QGroupBox``. Visibility is controlled externally by the mode switcher in
-``AnnotationControlPanel``; ``params_changed`` always fires when any control
-moves so callers can rely on the signal independent of UI state.
+glint count target, pupil-centre method) as a single ``QGroupBox``. Visibility
+is controlled externally by the mode switcher in ``AnnotationControlPanel``;
+``params_changed`` always fires when any control moves so callers can rely on
+the signal independent of UI state. ``glint_max_area_ratio`` is kept in the
+saved params dict but hidden from the UI — the default works for the data we
+process and surfacing it just added a confusing knob.
 """
 
 from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtWidgets import (
+    QAbstractSpinBox,
     QButtonGroup,
-    QDoubleSpinBox,
     QGroupBox,
     QHBoxLayout,
     QLabel,
@@ -102,29 +104,46 @@ class ManualThresholdPanel(QGroupBox):
         self._style_save_state_label(saved=False)
         layout.addWidget(self.save_state_label)
 
-        self.pupil_threshold_slider, self.pupil_threshold_label = self._add_int_slider(
+        self.pupil_threshold_slider, self.pupil_threshold_spin, _ = self._add_int_slider(
             layout,
             "Pupil threshold",
             0,
             255,
             self._params["pupil_threshold"],
         )
-        self.glint_threshold_slider, self.glint_threshold_label = self._add_int_slider(
+        self.glint_threshold_slider, self.glint_threshold_spin, _ = self._add_int_slider(
             layout,
             "Glint threshold",
             0,
             255,
             self._params["glint_threshold"],
         )
+
+        # Glints-target on its own row.
+        glints_row = QHBoxLayout()
+        glints_label = QLabel("Glints:")
+        glints_label.setMinimumWidth(120)
+        glints_row.addWidget(glints_label)
+        self.glints_target_spin = QSpinBox()
+        self.glints_target_spin.setRange(1, 8)
+        self.glints_target_spin.setValue(self._params["glints_target"])
+        self.glints_target_spin.setButtonSymbols(QAbstractSpinBox.NoButtons)
+        self.glints_target_spin.setMinimumWidth(50)
+        self.glints_target_spin.setMaximumWidth(70)
+        self.glints_target_spin.valueChanged.connect(self._on_glints_target_changed)
+        glints_row.addWidget(self.glints_target_spin)
+        glints_row.addStretch()
+        layout.addLayout(glints_row)
+
         initial_pct = round(self._params["glint_margin_ratio"] * 100)
-        self.glint_margin_slider, self.glint_margin_label = self._add_int_slider(
+        self.glint_margin_slider, self.glint_margin_spin, _ = self._add_int_slider(
             layout,
-            "Glint margin (%)",
+            "Glint margin",
             -100,
             300,
             initial_pct,
+            suffix="%",
         )
-        self.glint_margin_label.setText(f"{initial_pct:+d}%")
         self.glint_margin_slider.setToolTip(
             "Glint search region relative to the pupil.\n"
             "  0%   = pupil boundary\n"
@@ -132,26 +151,6 @@ class ManualThresholdPanel(QGroupBox):
             ">100% = keep extending past the limbus onto the sclera\n"
             "-100% = shrink inward to the pupil centre",
         )
-
-        # Glint count target + area ratio in one row to save space.
-        row = QHBoxLayout()
-        row.addWidget(QLabel("Glints target:"))
-        self.glints_target_spin = QSpinBox()
-        self.glints_target_spin.setRange(1, 8)
-        self.glints_target_spin.setValue(self._params["glints_target"])
-        self.glints_target_spin.valueChanged.connect(self._on_glints_target_changed)
-        row.addWidget(self.glints_target_spin)
-        row.addSpacing(8)
-        row.addWidget(QLabel("Max area ratio:"))
-        self.area_ratio_spin = QDoubleSpinBox()
-        self.area_ratio_spin.setRange(0.0, 1.0)
-        self.area_ratio_spin.setSingleStep(0.01)
-        self.area_ratio_spin.setDecimals(2)
-        self.area_ratio_spin.setValue(self._params["glint_max_area_ratio"])
-        self.area_ratio_spin.valueChanged.connect(self._on_area_ratio_changed)
-        row.addWidget(self.area_ratio_spin)
-        row.addStretch()
-        layout.addLayout(row)
 
         # Pupil-centre method (3 radio buttons).
         layout.addWidget(QLabel("Pupil center method:"))
@@ -200,10 +199,7 @@ class ManualThresholdPanel(QGroupBox):
         # Disabled state needs to read as "no-op for now" at a glance —
         # Qt's default greyscale on top of the MaterialButton dark theme is
         # too subtle. Hollow out the button: faint background, dim text.
-        self.detect_button.setStyleSheet(
-            "QPushButton:disabled {"
-            " background-color: #1f1f1f; color: #4a4a4a; }"
-        )
+        self.detect_button.setStyleSheet("QPushButton:disabled { background-color: #1f1f1f; color: #4a4a4a; }")
         layout.addWidget(self.detect_button)
 
         self.setLayout(layout)
@@ -215,7 +211,9 @@ class ManualThresholdPanel(QGroupBox):
         minimum: int,
         maximum: int,
         initial: int,
-    ) -> tuple[QSlider, QLabel]:
+        *,
+        suffix: str = "",
+    ) -> tuple[QSlider, QSpinBox, QHBoxLayout]:
         row = QHBoxLayout()
         title_label = QLabel(f"{title}:")
         title_label.setMinimumWidth(120)
@@ -223,23 +221,30 @@ class ManualThresholdPanel(QGroupBox):
         slider = QSlider(Qt.Horizontal)
         slider.setRange(minimum, maximum)
         slider.setValue(initial)
-        value_label = QLabel(str(initial))
-        value_label.setMinimumWidth(32)
-        value_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
-        slider.valueChanged.connect(lambda v, lbl=value_label, t=title: self._on_slider_changed(t, v, lbl))
+        spinbox = QSpinBox()
+        spinbox.setRange(minimum, maximum)
+        spinbox.setValue(initial)
+        spinbox.setSuffix(suffix)
+        # Editable text only; arrows would compete for tile width with the slider.
+        spinbox.setButtonSymbols(QAbstractSpinBox.NoButtons)
+        spinbox.setMinimumWidth(50)
+        spinbox.setMaximumWidth(70)
+        # Bidirectional sync. setValue is a no-op when value already matches,
+        # so this won't loop. Only the slider drives the params handler.
+        slider.valueChanged.connect(spinbox.setValue)
+        spinbox.valueChanged.connect(slider.setValue)
+        slider.valueChanged.connect(lambda v, t=title: self._on_slider_changed(t, v))
         row.addWidget(slider)
-        row.addWidget(value_label)
+        row.addWidget(spinbox)
         parent_layout.addLayout(row)
-        return slider, value_label
+        return slider, spinbox, row
 
     # ----- event handlers -----
 
-    def _on_slider_changed(self, title: str, value: int, value_label: QLabel) -> None:
-        if title == "Glint margin (%)":
-            value_label.setText(f"{value:+d}%")
+    def _on_slider_changed(self, title: str, value: int) -> None:
+        if title == "Glint margin":
             self._params["glint_margin_ratio"] = value / 100.0
         else:
-            value_label.setText(str(value))
             key = {
                 "Pupil threshold": "pupil_threshold",
                 "Glint threshold": "glint_threshold",
@@ -249,10 +254,6 @@ class ManualThresholdPanel(QGroupBox):
 
     def _on_glints_target_changed(self, value: int) -> None:
         self._params["glints_target"] = int(value)
-        self.params_changed.emit(dict(self._params))
-
-    def _on_area_ratio_changed(self, value: float) -> None:
-        self._params["glint_max_area_ratio"] = float(value)
         self.params_changed.emit(dict(self._params))
 
     def _on_method_toggled(self, checked: bool, key: str) -> None:
@@ -307,42 +308,42 @@ class ManualThresholdPanel(QGroupBox):
         Block widget signals while restoring so a single ``params_changed`` is
         emitted at the end instead of one per slider/spin/radio assignment.
         """
-        for widget in (
+        widgets = (
             self.pupil_threshold_slider,
+            self.pupil_threshold_spin,
             self.glint_threshold_slider,
+            self.glint_threshold_spin,
             self.glint_margin_slider,
+            self.glint_margin_spin,
             self.glints_target_spin,
-            self.area_ratio_spin,
-        ):
+        )
+        for widget in widgets:
             widget.blockSignals(True)
         try:
             if "pupil_threshold" in params:
-                self.pupil_threshold_slider.setValue(int(params["pupil_threshold"]))
-                self.pupil_threshold_label.setText(str(int(params["pupil_threshold"])))
-                self._params["pupil_threshold"] = int(params["pupil_threshold"])
+                val = int(params["pupil_threshold"])
+                self.pupil_threshold_slider.setValue(val)
+                self.pupil_threshold_spin.setValue(val)
+                self._params["pupil_threshold"] = val
             if "glint_threshold" in params:
-                self.glint_threshold_slider.setValue(int(params["glint_threshold"]))
-                self.glint_threshold_label.setText(str(int(params["glint_threshold"])))
-                self._params["glint_threshold"] = int(params["glint_threshold"])
+                val = int(params["glint_threshold"])
+                self.glint_threshold_slider.setValue(val)
+                self.glint_threshold_spin.setValue(val)
+                self._params["glint_threshold"] = val
             if "glint_margin_ratio" in params:
                 pct = round(float(params["glint_margin_ratio"]) * 100)
                 self.glint_margin_slider.setValue(pct)
-                self.glint_margin_label.setText(f"{pct:+d}%")
+                self.glint_margin_spin.setValue(pct)
                 self._params["glint_margin_ratio"] = float(params["glint_margin_ratio"])
             if "glints_target" in params:
                 self.glints_target_spin.setValue(int(params["glints_target"]))
                 self._params["glints_target"] = int(params["glints_target"])
             if "glint_max_area_ratio" in params:
-                self.area_ratio_spin.setValue(float(params["glint_max_area_ratio"]))
+                # Hidden from the UI; keep the value in the params dict so
+                # detect_pupil_and_glints sees the saved tuning.
                 self._params["glint_max_area_ratio"] = float(params["glint_max_area_ratio"])
         finally:
-            for widget in (
-                self.pupil_threshold_slider,
-                self.glint_threshold_slider,
-                self.glint_margin_slider,
-                self.glints_target_spin,
-                self.area_ratio_spin,
-            ):
+            for widget in widgets:
                 widget.blockSignals(False)
         # Method radios use a QButtonGroup; click the right one so the others untoggle.
         method = params.get("pupil_center_method")
