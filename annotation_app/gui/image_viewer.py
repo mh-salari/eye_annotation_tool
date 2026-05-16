@@ -645,6 +645,14 @@ class ImageViewer(QWidget):
         self._show_glint_mask = bool(on)
         self.update_image()
 
+    def get_threshold_masks(self) -> tuple["np.ndarray | None", "np.ndarray | None"]:
+        """Return the current ``(pupil_mask, glint_search_area)`` pair."""
+        return self._mt_pupil_mask, self._mt_glint_search_area
+
+    def get_mask_visibility(self) -> tuple[bool, bool]:
+        """Return whether each threshold-mask overlay is currently shown."""
+        return self._show_pupil_mask, self._show_glint_mask
+
     def eventFilter(self, source: QWidget, event: QEvent) -> bool:  # noqa: N802
         """Filter events for window state changes."""
         if (

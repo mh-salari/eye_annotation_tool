@@ -33,6 +33,7 @@ from .annotation_controls import MODE_ANNOTATE, MODE_MANUAL_THRESHOLD, Annotatio
 from .auto_detectors_handler import AutoDetectorsHandler
 from .custom_widgets import MaterialButton
 from .image_viewer import ImageViewer
+from .manual_threshold_panel import DEFAULT_PARAMS as MANUAL_THRESHOLD_DEFAULTS
 from .manual_threshold_worker import DetectionWorker
 from .menu_handler import MenuHandler
 from .shortcut_handler import ShortcutHandler
@@ -176,6 +177,11 @@ class MainWindow(QMainWindow):
         self.image_paths = []
         self.current_image_index = -1
         self.annotation_modified = False
+        # Holds the pre-Clear Manual Threshold state for one-step undo. Cleared
+        # on image change so a stale snapshot can never bleed into another
+        # image. Single-level rather than a stack: Clear All in MT mode is the
+        # only producer.
+        self._mt_clear_snapshot: dict | None = None
 
     @property
     def project_dir(self) -> str | None:
@@ -223,7 +229,7 @@ class MainWindow(QMainWindow):
         self.annotation_controls.clear_limbus_requested.connect(self.image_viewer.clear_limbus_points)
         self.annotation_controls.clear_eyelid_points_requested.connect(self.image_viewer.clear_eyelid_points)
         self.annotation_controls.clear_glint_points_requested.connect(self.image_viewer.clear_glint_points)
-        self.annotation_controls.clear_all_requested.connect(self.image_viewer.clear_all)
+        self.annotation_controls.clear_all_requested.connect(self._on_clear_all)
         self.annotation_controls.auto_detector_requested.connect(
             self.auto_detectors_handler.on_auto_detector_requested
         )
@@ -639,6 +645,102 @@ class MainWindow(QMainWindow):
         self._refresh_save_state_indicator()
         has_overlay = self.image_viewer.manual_threshold_detection is not None
         self.annotation_controls.manual_threshold_panel.set_detect_button_enabled(not has_overlay)
+        # The Clear All snapshot is per-image; loading a different image
+        # invalidates whatever was captured against the previous one.
+        self._mt_clear_snapshot = None
+
+    # ----- Clear All / Undo dispatch -----
+
+    def _on_clear_all(self) -> None:
+        """Route the Clear All button to the right handler for the current mode."""
+        if self.annotation_controls.current_mode() == MODE_MANUAL_THRESHOLD:
+            self._clear_all_manual_threshold()
+        else:
+            self.image_viewer.clear_all()
+
+    def _clear_all_manual_threshold(self) -> None:
+        """Reset Manual Threshold state to a fresh-image baseline.
+
+        Snapshots the current parameters, ROIs, detection result, and mask
+        toggles so a subsequent Ctrl-Z can restore them — important when
+        autosave is on, because navigating away would otherwise persist the
+        cleared state to disk and the original tuning would be lost.
+
+        Panel signals are blocked during the widget reset so the live
+        detection pipeline is not triggered while clearing.
+        """
+        viewer = self.image_viewer
+        panel = self.annotation_controls.manual_threshold_panel
+        pupil_mask, glint_search_area = viewer.get_threshold_masks()
+        show_pupil_mask, show_glint_mask = viewer.get_mask_visibility()
+        self._mt_clear_snapshot = {
+            "params": panel.current_params(),
+            "pupil_roi": viewer.pupil_roi,
+            "glint_roi": viewer.glint_roi,
+            "detection": viewer.manual_threshold_detection,
+            "pupil_mask": pupil_mask,
+            "glint_search_area": glint_search_area,
+            "show_pupil_mask": show_pupil_mask,
+            "show_glint_mask": show_glint_mask,
+        }
+        # Drop any in-flight debounced detection so it can't fire against the
+        # reset state and resurrect a stale overlay.
+        self._mt_debounce.stop()
+        self._mt_pending_params = None
+        panel.blockSignals(True)
+        try:
+            panel.set_params(MANUAL_THRESHOLD_DEFAULTS)
+            panel.deactivate_roi_buttons()
+            panel.show_pupil_mask_checkbox.setChecked(False)
+            panel.show_glint_mask_checkbox.setChecked(False)
+        finally:
+            panel.blockSignals(False)
+        viewer.set_pupil_roi(None)
+        viewer.set_glint_roi(None)
+        viewer.set_mt_active_roi(None)
+        viewer.set_show_pupil_mask(False)
+        viewer.set_show_glint_mask(False)
+        viewer.set_manual_threshold_detection(None)
+        panel.set_detect_button_enabled(True)
+        self.set_annotation_modified(True)
+
+    def _restore_mt_clear_snapshot(self) -> None:
+        """Restore the snapshot taken by :meth:`_clear_all_manual_threshold`."""
+        snapshot = self._mt_clear_snapshot
+        if snapshot is None:
+            return
+        viewer = self.image_viewer
+        panel = self.annotation_controls.manual_threshold_panel
+        self._mt_debounce.stop()
+        self._mt_pending_params = None
+        panel.blockSignals(True)
+        try:
+            panel.set_params(snapshot["params"])
+            panel.show_pupil_mask_checkbox.setChecked(snapshot["show_pupil_mask"])
+            panel.show_glint_mask_checkbox.setChecked(snapshot["show_glint_mask"])
+        finally:
+            panel.blockSignals(False)
+        viewer.set_pupil_roi(snapshot["pupil_roi"])
+        viewer.set_glint_roi(snapshot["glint_roi"])
+        viewer.set_threshold_masks(snapshot["pupil_mask"], snapshot["glint_search_area"])
+        viewer.set_show_pupil_mask(snapshot["show_pupil_mask"])
+        viewer.set_show_glint_mask(snapshot["show_glint_mask"])
+        viewer.set_manual_threshold_detection(snapshot["detection"])
+        panel.set_detect_button_enabled(snapshot["detection"] is None)
+        self._mt_clear_snapshot = None
+        self.set_annotation_modified(True)
+
+    def on_undo(self) -> None:
+        """Ctrl-Z entry point.
+
+        When a Clear All snapshot is pending in Manual Threshold mode, the
+        first undo restores it. Otherwise undo falls through to the image
+        viewer's annotation-point history.
+        """
+        if self.annotation_controls.current_mode() == MODE_MANUAL_THRESHOLD and self._mt_clear_snapshot is not None:
+            self._restore_mt_clear_snapshot()
+            return
+        self.image_viewer.undo()
 
     def _on_manual_threshold_detection_ready(self, payload: dict) -> None:
         """Forward the worker's detection result into the image viewer.
