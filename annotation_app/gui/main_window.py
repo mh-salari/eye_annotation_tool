@@ -460,6 +460,7 @@ class MainWindow(QMainWindow):
         """React to the Annotate / Manual Threshold mode switcher."""
         panel = self.annotation_controls.manual_threshold_panel
         eye_selector = self.annotation_controls.eye_selector
+        self.image_viewer.set_manual_threshold_mode(mode == MODE_MANUAL_THRESHOLD)
         if mode == MODE_MANUAL_THRESHOLD:
             # Manual Threshold is inherently single-eye: detection runs on the
             # whole image, ROIs aren't eye-scoped. Force single-eye and disable

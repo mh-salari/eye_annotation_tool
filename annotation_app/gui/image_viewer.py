@@ -118,6 +118,11 @@ class ImageViewer(QWidget):
         # and the most recent detection result for overlay rendering. Cleared
         # when the panel is disabled or a new image is loaded.
         self.image_grayscale: np.ndarray | None = None
+        # Top-level mode flag — True while the GUI is in Manual Threshold mode.
+        # Used by mousePressEvent to suppress the click-to-add-annotation-point
+        # flow (pupil / glint / limbus / eyelid) that only applies in Annotate.
+        self._is_manual_threshold_mode = False
+
         self.manual_threshold_detection: dict | None = None
 
         # Manual Threshold per-image ROIs. ``_mt_active_roi`` names which one
@@ -285,6 +290,10 @@ class ImageViewer(QWidget):
         self.glint_roi_changed.emit(None)
         self.update_image()
 
+    def set_manual_threshold_mode(self, on: bool) -> None:
+        """Toggle the top-level Manual Threshold mode flag."""
+        self._is_manual_threshold_mode = bool(on)
+
     def _active_drag_roi_attr(self) -> str | None:
         """Pick the ROI attribute the next drag should mutate, or ``None`` if no drag mode is on."""
         if self.roi_drawing_mode:
@@ -413,6 +422,13 @@ class ImageViewer(QWidget):
                     self.drawing_roi = True
                     self.roi_start_pos = image_pos
                     setattr(self, roi_attr, None)
+                    return
+
+                # Manual Threshold mode owns its own interactions (ROI drag
+                # handled above, sliders / auto-detect drive the detection).
+                # A plain click outside an ROI should be a no-op here, not a
+                # silent manual annotation that the user can't see toggled.
+                if self._is_manual_threshold_mode:
                     return
 
                 self.selected_point, selected_annotation = self.find_closest_point_and_type(image_pos)
