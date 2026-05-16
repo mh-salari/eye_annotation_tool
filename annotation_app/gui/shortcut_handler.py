@@ -19,11 +19,9 @@ class ShortcutHandler:
 
     def setup_shortcuts(self) -> None:
         """Set up keyboard shortcuts for the application."""
-        # Undo shortcut. Routed through the main window so it can restore a
-        # Manual Threshold Clear-All snapshot before falling back to the
-        # image viewer's annotation-point history.
+        # Undo shortcut — walks the image viewer's annotation-point history.
         undo_shortcut = QShortcut(QKeySequence.Undo, self.main_window)
-        undo_shortcut.activated.connect(self.main_window.on_undo)
+        undo_shortcut.activated.connect(self.main_window.image_viewer.undo)
 
         # Save shortcut
         save_shortcut = QShortcut(QKeySequence.Save, self.main_window)

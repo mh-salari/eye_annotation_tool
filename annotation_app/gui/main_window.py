@@ -3,7 +3,7 @@
 import ast
 from pathlib import Path
 
-from PyQt5.QtCore import QEvent, QRect, Qt, QThread, QTimer, pyqtSignal
+from PyQt5.QtCore import QEvent, QRect, Qt
 from PyQt5.QtGui import QCloseEvent, QIcon, QPixmap, QScreen
 from PyQt5.QtWidgets import (
     QApplication,
@@ -25,35 +25,22 @@ from PyQt5.QtWidgets import (
 )
 
 from ..auto_detectors import PluginManager
+from ..auto_detectors.orchestrator import DetectorOrchestrator
 from ..controllers.annotation_controller import AnnotationController
 from ..controllers.navigation_controller import NavigationController
-from ..utils.project_settings import PROJECT_DETECTOR_KEYS, load_project_settings, save_project_settings
-from ..utils.settings_handler import SettingsHandler
-from .annotation_controls import MODE_ANNOTATE, MODE_MANUAL_THRESHOLD, AnnotationControlPanel
-from .auto_detectors_handler import AutoDetectorsHandler
+from ..utils.project_settings import load_project_settings, save_project_settings
+from .annotation_controls import MODE_AUTO_DETECT, MODE_MANUAL, AnnotationControlPanel
 from .custom_widgets import MaterialButton
 from .image_viewer import ImageViewer
-from .manual_threshold_panel import DEFAULT_PARAMS as MANUAL_THRESHOLD_DEFAULTS
-from .manual_threshold_worker import DetectionWorker
 from .menu_handler import MenuHandler
 from .shortcut_handler import ShortcutHandler
-
-# Slider drags fire one params_changed per pixel. Collapse the resulting burst
-# to a single detection ~100 ms after the last change so the worker isn't
-# flooded with stale intermediates.
-MANUAL_THRESHOLD_DEBOUNCE_MS = 100
 
 
 class MainWindow(QMainWindow):
     """Main application window containing all UI components and controllers."""
 
-    # Queued-connection bridge into the off-thread DetectionWorker. Emitted
-    # after the debounce timer fires; carries the grayscale image and the
-    # latest parameter dict from ManualThresholdPanel.
-    manual_threshold_detect_requested = pyqtSignal(object, object)
-
     def __init__(self, cli_single_eye: bool = False) -> None:
-        """Initialize the MainWindow.
+        """Initialise the MainWindow.
 
         Args:
             cli_single_eye: When True, force single-eye mode on at startup
@@ -62,8 +49,8 @@ class MainWindow(QMainWindow):
         """
         super().__init__()
         self.setWindowTitle("EyE Annotation Tool")
-        self.settings_handler = SettingsHandler()
         self.plugin_manager = PluginManager()
+        self.orchestrator = DetectorOrchestrator(self)
         self._cli_single_eye = bool(cli_single_eye)
         self.single_eye_mode = self._cli_single_eye
         self.autosave_enabled = False
@@ -79,40 +66,16 @@ class MainWindow(QMainWindow):
         self.navigation_controller = NavigationController(self)
         self.menu_handler = MenuHandler(self)
         self.shortcut_handler = ShortcutHandler(self)
-        self.auto_detectors_handler = AutoDetectorsHandler(self)
-
-        # Manual Threshold mode runs detect_pupil_and_glints on a background
-        # thread so the GUI stays responsive while the user drags sliders.
-        # The worker lives for the whole MainWindow lifetime; we feed it
-        # (image, params) tuples and it emits results back.
-        self._mt_thread = QThread(self)
-        self._mt_worker = DetectionWorker()
-        self._mt_worker.moveToThread(self._mt_thread)
-        self._mt_thread.start()
-        self._mt_debounce = QTimer(self)
-        self._mt_debounce.setSingleShot(True)
-        self._mt_debounce.setInterval(MANUAL_THRESHOLD_DEBOUNCE_MS)
-        self._mt_pending_params: dict | None = None
-        # Set true by apply_tuning so the next detection_ready (which is the
-        # re-run after a saved load) doesn't mark the annotation as modified.
-        self._mt_skip_next_modified_mark = False
 
         self.menu_handler.setup_menu()
         self.shortcut_handler.setup_shortcuts()
         self.connect_signals()
-        self._sync_auto_detector_buttons()
 
-        # Set the application icon
         icon_path = str(Path(__file__).parent / ".." / "resources" / "app_icon.ico")
         self.setWindowIcon(QIcon(icon_path))
 
-        # Store the screen size for later use
         self.screen = QApplication.primaryScreen().availableGeometry()
-
-        # Set the window to maximized state
         self.showMaximized()
-
-        # Install event filter to catch window state changes
         self.installEventFilter(self)
 
     def setup_ui(self) -> None:
@@ -120,7 +83,7 @@ class MainWindow(QMainWindow):
         central_widget = QWidget()
         main_layout = QHBoxLayout()
 
-        # Left panel
+        # Left panel: load + navigate + save controls and the image list.
         left_panel = QWidget()
         left_layout = QVBoxLayout()
         self.load_images_button = MaterialButton("Load Images")
@@ -145,11 +108,10 @@ class MainWindow(QMainWindow):
         left_layout.addStretch(1)
         left_panel.setLayout(left_layout)
 
-        # Central area for image viewer
         self.image_viewer = ImageViewer()
 
         # Right panel for annotation controls. Wrapped in a QScrollArea so
-        # taller Annotate-mode content can't push the window past the screen.
+        # taller Manual-mode content can't push the window past the screen.
         self.annotation_controls = AnnotationControlPanel()
         right_scroll = QScrollArea()
         right_scroll.setWidget(self.annotation_controls)
@@ -165,23 +127,14 @@ class MainWindow(QMainWindow):
         central_widget.setLayout(main_layout)
         self.setCentralWidget(central_widget)
 
-        # Status bar surfaces non-blocking messages such as Manual Threshold
-        # detection failures (no dark contour, no glints, etc.).
         self.setStatusBar(QStatusBar())
-
-        # Set focus to the image viewer
         self.image_viewer.setFocus()
 
     def setup_variables(self) -> None:
-        """Initialize instance variables."""
-        self.image_paths = []
+        """Initialise instance variables."""
+        self.image_paths: list[str] = []
         self.current_image_index = -1
         self.annotation_modified = False
-        # Holds the pre-Clear Manual Threshold state for one-step undo. Cleared
-        # on image change so a stale snapshot can never bleed into another
-        # image. Single-level rather than a stack: Clear All in MT mode is the
-        # only producer.
-        self._mt_clear_snapshot: dict | None = None
 
     @property
     def project_dir(self) -> str | None:
@@ -199,13 +152,12 @@ class MainWindow(QMainWindow):
         self._refresh_save_state_indicator()
 
     def _refresh_save_state_indicator(self) -> None:
-        """Sync the Manual Threshold badge and the window title to the save state.
+        """Sync the window title to the current save state.
 
         Treated as saved when autosave is enabled (autosave keeps disk in sync
         on every image change) or when no edits are pending.
         """
         saved = self.autosave_enabled or not self.annotation_modified
-        self.annotation_controls.manual_threshold_panel.set_save_state(saved)
         if 0 <= self.current_image_index < len(self.image_paths):
             name = Path(self.image_paths[self.current_image_index]).name
             self.setWindowTitle(f"EyE Annotation Tool - {name}{'' if saved else ' *'}")
@@ -229,48 +181,12 @@ class MainWindow(QMainWindow):
         self.annotation_controls.clear_limbus_requested.connect(self.image_viewer.clear_limbus_points)
         self.annotation_controls.clear_eyelid_points_requested.connect(self.image_viewer.clear_eyelid_points)
         self.annotation_controls.clear_glint_points_requested.connect(self.image_viewer.clear_glint_points)
-        self.annotation_controls.clear_all_requested.connect(self._on_clear_all)
-        self.annotation_controls.auto_detector_requested.connect(
-            self.auto_detectors_handler.on_auto_detector_requested
-        )
-        self.annotation_controls.roi_toggle_requested.connect(self.image_viewer.toggle_roi_mode)
-        self.annotation_controls.roi_clear_requested.connect(self.image_viewer.clear_roi)
+        self.annotation_controls.clear_all_requested.connect(self.image_viewer.clear_all)
+        self.annotation_controls.mode_changed.connect(self._on_mode_changed)
 
         self.image_viewer.annotation_changed.connect(self.on_annotation_changed)
         self.image_viewer.annotation_type_changed.connect(self.annotation_controls.set_current_annotation)
-
-        # Manual Threshold live-detection signal graph:
-        #   slider drag -> ManualThresholdPanel.params_changed
-        #     -> debounce timer
-        #       -> manual_threshold_detect_requested  (queued, cross-thread)
-        #         -> DetectionWorker.detect
-        #           -> detection_ready / detection_failed
-        #             -> ImageViewer.set_manual_threshold_detection / status bar
-        # Top-of-panel mode switcher (Annotate / Manual Threshold) drives the
-        # detector on/off via annotation_controls.mode_changed.
-        panel = self.annotation_controls.manual_threshold_panel
-        panel.params_changed.connect(self._on_manual_threshold_params_changed)
-        self.annotation_controls.mode_changed.connect(self._on_mode_changed)
-        self._mt_debounce.timeout.connect(self._on_manual_threshold_debounce_fired)
-        self.manual_threshold_detect_requested.connect(
-            self._mt_worker.detect,
-            Qt.QueuedConnection,
-        )
-        self._mt_worker.detection_ready.connect(self._on_manual_threshold_detection_ready)
-        self._mt_worker.detection_failed.connect(self._on_manual_threshold_detection_failed)
-        self.image_viewer.image_loaded.connect(self._on_image_loaded_for_manual_threshold)
-        panel.detect_requested.connect(self._kick_detection_if_active)
-        panel.show_pupil_mask_toggled.connect(self.image_viewer.set_show_pupil_mask)
-        panel.show_glint_mask_toggled.connect(self.image_viewer.set_show_glint_mask)
-
-        # Pupil/Glint ROI flow: panel toggle -> viewer drag-edit mode; viewer
-        # roi changes -> re-trigger detection with the new ROI.
-        panel.pupil_roi_mode_changed.connect(self._on_pupil_roi_mode_changed)
-        panel.glint_roi_mode_changed.connect(self._on_glint_roi_mode_changed)
-        panel.clear_pupil_roi_requested.connect(self._on_clear_pupil_roi)
-        panel.clear_glint_roi_requested.connect(self._on_clear_glint_roi)
-        self.image_viewer.pupil_roi_changed.connect(self._on_mt_roi_changed)
-        self.image_viewer.glint_roi_changed.connect(self._on_mt_roi_changed)
+        self.image_viewer.image_loaded.connect(self.orchestrator.clear_cache)
 
     IMAGE_SUFFIXES = (".png", ".jpg", ".jpeg", ".bmp")
 
@@ -364,21 +280,13 @@ class MainWindow(QMainWindow):
         project_settings = chosen
         effective_single_eye = self._cli_single_eye or bool(project_settings.get("single_eye_mode", False))
         self._apply_single_eye_mode(effective_single_eye)
-        detectors_changed = False
-        for key in PROJECT_DETECTOR_KEYS:
-            if key in project_settings:
-                self.settings_handler.set_setting(key, project_settings[key])
-                detectors_changed = True
-        if detectors_changed:
-            self.menu_handler.update_menu_checks()
-        self._sync_auto_detector_buttons()
         # Restore the last used mode for this project; setChecked fires the
-        # button's toggled signal which drives the full _on_mode_changed flow.
-        saved_mode = project_settings.get("current_mode", MODE_ANNOTATE)
-        if saved_mode == MODE_MANUAL_THRESHOLD:
-            self.annotation_controls.mode_manual_threshold_button.setChecked(True)
+        # button's toggled signal which drives _on_mode_changed.
+        saved_mode = project_settings.get("current_mode", MODE_MANUAL)
+        if saved_mode == MODE_AUTO_DETECT:
+            self.annotation_controls.mode_auto_detect_button.setChecked(True)
         else:
-            self.annotation_controls.mode_annotate_button.setChecked(True)
+            self.annotation_controls.mode_manual_button.setChecked(True)
         # Restore autosave toggle from the project file.
         autosave = bool(project_settings.get("autosave", False))
         self.autosave_enabled = autosave
@@ -400,8 +308,8 @@ class MainWindow(QMainWindow):
         layout.addWidget(
             QLabel(
                 "The selected folders carry different project settings. Pick the\n"
-                "configuration to use — it will be saved to all loaded folders."
-            )
+                "configuration to use — it will be saved to all loaded folders.",
+            ),
         )
         button_group = QButtonGroup(dialog)
         for i, (cfg, dirs) in enumerate(groups):
@@ -439,13 +347,20 @@ class MainWindow(QMainWindow):
             settings["single_eye_mode"] = self.single_eye_mode
             self._save_to_all_projects(settings)
 
+    def _on_mode_changed(self, mode: str) -> None:
+        """Persist the new mode in project settings."""
+        if not self.project_dirs:
+            return
+        settings = load_project_settings(self.project_dir)
+        settings["current_mode"] = mode
+        self._save_to_all_projects(settings)
+
     def update_image_list(self) -> None:
         """Update the image list widget with current image paths.
 
         When a project folder is set, display each entry as its path relative
         to that root so files with the same basename in different subdirs are
-        distinguishable (e.g. ``cal_dark/left_eye_target_0.png`` vs
-        ``cal_bright/left_eye_target_0.png``).
+        distinguishable.
         """
         self.image_list_widget.clear()
         project_root = Path(self.project_dir) if self.project_dir else None
@@ -489,372 +404,65 @@ class MainWindow(QMainWindow):
             self._save_to_all_projects(project_settings)
         self._refresh_save_state_indicator()
 
-    def get_current_tuning(self) -> dict | None:
-        """Collect Manual-Threshold state for persistence; ``None`` if nothing to save."""
-        viewer = self.image_viewer
-        panel = self.annotation_controls.manual_threshold_panel
-        has_state = (
-            viewer.manual_threshold_detection is not None
-            or viewer.pupil_roi is not None
-            or viewer.glint_roi is not None
-        )
-        if not has_state:
-            return None
-        return {
-            "thresholds": panel.current_params(),
-            "pupil_roi": viewer.pupil_roi,
-            "glint_roi": viewer.glint_roi,
-            "detection": viewer.manual_threshold_detection,
-        }
+    def collect_detections_for_save(self) -> dict:
+        """Return the per-plugin serialised detection results to persist with this image.
 
-    def apply_tuning(self, tuning: dict | None) -> None:
-        """Restore Manual-Threshold state after loading an annotation file.
-
-        When we restored a tuning from disk, set ``_mt_skip_next_modified_mark``
-        so the worker's re-run (triggered by ``image_loaded``) doesn't flip
-        the modified flag back on. With no tuning on disk, the next detection
-        is genuinely unsaved state and we *do* want the modified flag set.
+        Placeholder: the orchestrator + per-plugin save path lands in the
+        next refactor step. Returning an empty dict keeps the annotation
+        controller's save flow functional in the meantime.
         """
-        viewer = self.image_viewer
-        panel = self.annotation_controls.manual_threshold_panel
-        if tuning is None:
-            viewer.set_pupil_roi(None)
-            viewer.set_glint_roi(None)
-            viewer.set_manual_threshold_detection(None)
-            self._mt_skip_next_modified_mark = False
-            return
-        thresholds = tuning.get("thresholds")
-        if thresholds:
-            panel.set_params(thresholds)
-        viewer.set_pupil_roi(tuning.get("pupil_roi"))
-        viewer.set_glint_roi(tuning.get("glint_roi"))
-        viewer.set_manual_threshold_detection(tuning.get("detection"))
-        self._mt_skip_next_modified_mark = True
+        return {}
 
-    # ----- Manual Threshold mode -----
+    def apply_loaded_detections(self, detections: dict) -> None:
+        """Hand the deserialised detection blocks back to the orchestrator/viewer.
 
-    def _on_manual_threshold_params_changed(self, params: dict) -> None:
-        """Buffer the new parameters and (re)start the debounce timer.
-
-        Sliders fire one ``params_changed`` per pixel of drag. We collapse
-        the burst by storing only the most recent payload and resetting the
-        single-shot timer, so a steady drag results in one detection at the
-        end of the drag rather than dozens.
+        Placeholder: the orchestrator + per-plugin restore path lands in
+        the next refactor step.
         """
-        self._mt_pending_params = params
-        self._mt_debounce.start()
-        self.set_annotation_modified(True)
-
-    def _on_manual_threshold_debounce_fired(self) -> None:
-        """Dispatch the buffered detection to the worker.
-
-        Skipped silently if no image / grayscale / params are available.
-        ROIs are pulled from the image viewer at dispatch time so they're
-        always in sync with the drawn rectangles.
-        """
-        if self._mt_pending_params is None:
-            return
-        image = self.image_viewer.get_current_image_grayscale()
-        if image is None:
-            return
-        params = dict(self._mt_pending_params)
-        params["pupil_roi"] = self.image_viewer.pupil_roi
-        params["glint_roi"] = self.image_viewer.glint_roi
-        self.manual_threshold_detect_requested.emit(image, params)
-
-    def _on_mode_changed(self, mode: str) -> None:
-        """React to the Annotate / Manual Threshold mode switcher."""
-        panel = self.annotation_controls.manual_threshold_panel
-        eye_selector = self.annotation_controls.eye_selector
-        self.image_viewer.set_manual_threshold_mode(mode == MODE_MANUAL_THRESHOLD)
-        if mode == MODE_MANUAL_THRESHOLD:
-            # Manual Threshold is inherently single-eye: detection runs on the
-            # whole image, ROIs aren't eye-scoped. Force single-eye and disable
-            # only the L/R radios so the Single Eye selection stays interactive.
-            self._mt_saved_single_eye = self.single_eye_mode
-            if not self.single_eye_mode:
-                self._apply_single_eye_mode(True)
-            eye_selector.left_eye_radio.setEnabled(False)
-            eye_selector.right_eye_radio.setEnabled(False)
-            params = panel.current_params()
-            self._mt_pending_params = params
-            # The detection that runs on mode entry just reflects the current
-            # in-memory state — no user edit happened. Don't promote the
-            # modified flag (it stays at whatever the user's prior edits set).
-            self._mt_skip_next_modified_mark = True
-            self._mt_debounce.start()
-        else:
-            self.image_viewer.set_manual_threshold_detection(None)
-            # Leaving Manual Threshold mode also clears the ROI drag-edit state.
-            panel.deactivate_roi_buttons()
-            self.image_viewer.set_mt_active_roi(None)
-            # Restore the eye-mode the user had before entering Manual Threshold.
-            eye_selector.left_eye_radio.setEnabled(True)
-            eye_selector.right_eye_radio.setEnabled(True)
-            saved = getattr(self, "_mt_saved_single_eye", None)
-            if saved is not None and saved != self.single_eye_mode:
-                self._apply_single_eye_mode(saved)
-        # Persist the new mode for this project.
-        if self.project_dirs:
-            project_settings = load_project_settings(self.project_dir)
-            project_settings["current_mode"] = mode
-            self._save_to_all_projects(project_settings)
-
-    def _on_pupil_roi_mode_changed(self, active: bool) -> None:
-        """Activate or deactivate pupil-ROI drag editing on the image viewer."""
-        self.image_viewer.set_mt_active_roi("pupil" if active else None)
-
-    def _on_glint_roi_mode_changed(self, active: bool) -> None:
-        """Activate or deactivate glint-ROI drag editing on the image viewer."""
-        self.image_viewer.set_mt_active_roi("glint" if active else None)
-
-    def _on_clear_pupil_roi(self) -> None:
-        """Clear the pupil ROI and re-run detection without it."""
-        self.image_viewer.clear_pupil_roi()
-        self._kick_detection_if_active()
-
-    def _on_clear_glint_roi(self) -> None:
-        """Clear the glint ROI and re-run detection without it."""
-        self.image_viewer.clear_glint_roi()
-        self._kick_detection_if_active()
-
-    def _on_mt_roi_changed(self, _roi: object) -> None:
-        """Re-trigger detection after the user finishes dragging a Pupil/Glint ROI."""
-        self._kick_detection_if_active()
-        self.set_annotation_modified(True)
-
-    def _kick_detection_if_active(self) -> None:
-        """Schedule a debounced detection if Manual Threshold mode is on."""
-        if self.annotation_controls.current_mode() != MODE_MANUAL_THRESHOLD:
-            return
-        self._mt_pending_params = self.annotation_controls.manual_threshold_panel.current_params()
-        self._mt_debounce.start()
-
-    def _on_image_loaded_for_manual_threshold(self) -> None:
-        """Refresh save-state indicator + arm the Detect button on image change.
-
-        Manual Threshold mode does not auto-detect on image load. The overlay
-        is loaded from the per-image annotation file when present; otherwise
-        a fresh detection requires the explicit Detect button (or any slider
-        movement, which triggers the live debounce). The Detect button is
-        enabled only when there is no overlay yet — so the user has an
-        obvious "compute now" trigger for a never-detected image and isn't
-        left wondering whether pressing it does anything when an overlay is
-        already on screen.
-        """
-        self._refresh_save_state_indicator()
-        has_overlay = self.image_viewer.manual_threshold_detection is not None
-        self.annotation_controls.manual_threshold_panel.set_detect_button_enabled(not has_overlay)
-        # The Clear All snapshot is per-image; loading a different image
-        # invalidates whatever was captured against the previous one.
-        self._mt_clear_snapshot = None
-
-    # ----- Clear All / Undo dispatch -----
-
-    def _on_clear_all(self) -> None:
-        """Route the Clear All button to the right handler for the current mode."""
-        if self.annotation_controls.current_mode() == MODE_MANUAL_THRESHOLD:
-            self._clear_all_manual_threshold()
-        else:
-            self.image_viewer.clear_all()
-
-    def _clear_all_manual_threshold(self) -> None:
-        """Reset Manual Threshold state to a fresh-image baseline.
-
-        Snapshots the current parameters, ROIs, detection result, and mask
-        toggles so a subsequent Ctrl-Z can restore them — important when
-        autosave is on, because navigating away would otherwise persist the
-        cleared state to disk and the original tuning would be lost.
-
-        Panel signals are blocked during the widget reset so the live
-        detection pipeline is not triggered while clearing.
-        """
-        viewer = self.image_viewer
-        panel = self.annotation_controls.manual_threshold_panel
-        pupil_mask, glint_search_area = viewer.get_threshold_masks()
-        show_pupil_mask, show_glint_mask = viewer.get_mask_visibility()
-        self._mt_clear_snapshot = {
-            "params": panel.current_params(),
-            "pupil_roi": viewer.pupil_roi,
-            "glint_roi": viewer.glint_roi,
-            "detection": viewer.manual_threshold_detection,
-            "pupil_mask": pupil_mask,
-            "glint_search_area": glint_search_area,
-            "show_pupil_mask": show_pupil_mask,
-            "show_glint_mask": show_glint_mask,
-        }
-        # Drop any in-flight debounced detection so it can't fire against the
-        # reset state and resurrect a stale overlay.
-        self._mt_debounce.stop()
-        self._mt_pending_params = None
-        panel.blockSignals(True)
-        try:
-            panel.set_params(MANUAL_THRESHOLD_DEFAULTS)
-            panel.deactivate_roi_buttons()
-            panel.show_pupil_mask_checkbox.setChecked(False)
-            panel.show_glint_mask_checkbox.setChecked(False)
-        finally:
-            panel.blockSignals(False)
-        viewer.set_pupil_roi(None)
-        viewer.set_glint_roi(None)
-        viewer.set_mt_active_roi(None)
-        viewer.set_show_pupil_mask(False)
-        viewer.set_show_glint_mask(False)
-        viewer.set_manual_threshold_detection(None)
-        panel.set_detect_button_enabled(True)
-        self.set_annotation_modified(True)
-
-    def _restore_mt_clear_snapshot(self) -> None:
-        """Restore the snapshot taken by :meth:`_clear_all_manual_threshold`."""
-        snapshot = self._mt_clear_snapshot
-        if snapshot is None:
-            return
-        viewer = self.image_viewer
-        panel = self.annotation_controls.manual_threshold_panel
-        self._mt_debounce.stop()
-        self._mt_pending_params = None
-        panel.blockSignals(True)
-        try:
-            panel.set_params(snapshot["params"])
-            panel.show_pupil_mask_checkbox.setChecked(snapshot["show_pupil_mask"])
-            panel.show_glint_mask_checkbox.setChecked(snapshot["show_glint_mask"])
-        finally:
-            panel.blockSignals(False)
-        viewer.set_pupil_roi(snapshot["pupil_roi"])
-        viewer.set_glint_roi(snapshot["glint_roi"])
-        viewer.set_threshold_masks(snapshot["pupil_mask"], snapshot["glint_search_area"])
-        viewer.set_show_pupil_mask(snapshot["show_pupil_mask"])
-        viewer.set_show_glint_mask(snapshot["show_glint_mask"])
-        viewer.set_manual_threshold_detection(snapshot["detection"])
-        panel.set_detect_button_enabled(snapshot["detection"] is None)
-        self._mt_clear_snapshot = None
-        self.set_annotation_modified(True)
-
-    def on_undo(self) -> None:
-        """Ctrl-Z entry point.
-
-        When a Clear All snapshot is pending in Manual Threshold mode, the
-        first undo restores it. Otherwise undo falls through to the image
-        viewer's annotation-point history.
-        """
-        if self.annotation_controls.current_mode() == MODE_MANUAL_THRESHOLD and self._mt_clear_snapshot is not None:
-            self._restore_mt_clear_snapshot()
-            return
-        self.image_viewer.undo()
-
-    def _on_manual_threshold_detection_ready(self, payload: dict) -> None:
-        """Forward the worker's detection result into the image viewer.
-
-        Mark the annotation as modified so navigating away triggers the
-        save prompt (or autosave). Skipped exactly once after a tuning was
-        restored from disk — that first re-run is in sync with the file.
-        """
-        # Split the saved-state fields (which go through the JSON tuning file)
-        # from the transient binary masks (view-only — never persisted).
-        pupil_mask = payload.pop("pupil_mask", None)
-        glint_search_area = payload.pop("glint_search_area", None)
-        self.image_viewer.set_threshold_masks(pupil_mask, glint_search_area)
-        self.image_viewer.set_manual_threshold_detection(payload)
-        self.annotation_controls.manual_threshold_panel.set_detect_button_enabled(False)
-        self.statusBar().clearMessage()
-        if self._mt_skip_next_modified_mark:
-            self._mt_skip_next_modified_mark = False
-        else:
-            self.set_annotation_modified(True)
-
-    def _on_manual_threshold_detection_failed(self, message: str) -> None:
-        """Surface a non-blocking detection error in the status bar."""
-        self.image_viewer.set_manual_threshold_detection(None)
-        self.statusBar().showMessage(f"Manual Threshold: {message}", 5000)
-
-    def change_detector(self, detector_type: str, detector_name: str) -> None:
-        """Change the active detector for a given type.
-
-        Updates the global settings file (so the choice persists across
-        sessions when no project is loaded) and, if a project is loaded,
-        mirrors the choice into the per-project settings file so opening
-        the same project later restores the same detectors.
-        """
-        self.settings_handler.set_setting(detector_type, detector_name)
-        if self.project_dirs and detector_type in PROJECT_DETECTOR_KEYS:
-            project_settings = load_project_settings(self.project_dir)
-            project_settings[detector_type] = detector_name
-            self._save_to_all_projects(project_settings)
-        self.menu_handler.update_menu_checks()
-        self._sync_auto_detector_buttons()
-
-    def _sync_auto_detector_buttons(self) -> None:
-        """Hide each Auto Detect button when its detector setting is ``disabled``."""
-        panel = self.annotation_controls
-        for setting_key, group in (
-            ("pupil_detector", panel.pupil_group),
-            ("limbus_detector", panel.limbus_group),
-            ("eyelid_detector", panel.eyelid_group),
-        ):
-            enabled = self.settings_handler.get_setting(setting_key) != "disabled"
-            group.set_auto_detector_enabled(enabled)
 
     def get_current_screen(self) -> QScreen | None:
-        # Get the screen that contains the center of the window
         """Get the screen that currently contains the window."""
         center = self.geometry().center()
         return QApplication.screenAt(center)
 
     def resize_to_percentage(self, percentage: float) -> None:
-        # Get the current screen
-        """Resize the window to a percentage of screen size."""
+        """Resize the window to ``percentage`` of the current screen's geometry."""
         current_screen = self.get_current_screen()
-
         if current_screen:
-            # Get the available geometry of the current screen
             available_geometry = current_screen.availableGeometry()
-
-            # Calculate the new size
             new_width = int(available_geometry.width() * percentage)
             new_height = int(available_geometry.height() * percentage)
-
-            # Calculate new position to keep the window centered on the current screen
             new_x = available_geometry.x() + (available_geometry.width() - new_width) // 2
             new_y = available_geometry.y() + (available_geometry.height() - new_height) // 2
-
-            # Set the new geometry (position and size)
             new_geometry = QRect(new_x, new_y, new_width, new_height)
             self.setGeometry(new_geometry)
 
     def center_window(self) -> None:
-        """Center the window on the current screen."""
+        """Centre the window on the current screen."""
         current_screen = self.get_current_screen()
-
         if current_screen:
-            # Get the geometry of the current screen
             screen_geometry = current_screen.geometry()
-
-            # Calculate the center point of the screen
             center_point = screen_geometry.center()
-
-            # Move the window to the center of the current screen
             frame_geometry = self.frameGeometry()
             frame_geometry.moveCenter(center_point)
             self.move(frame_geometry.topLeft())
 
     def moveEvent(self, event: QEvent) -> None:  # noqa: N802
         """Handle window move events."""
-        # The current screen is updated automatically when the window moves
         super().moveEvent(event)
 
     def eventFilter(self, obj: QWidget, event: QEvent) -> bool:  # noqa: N802
         """Filter events for window state changes."""
         if event.type() == QEvent.WindowStateChange:
             if self.windowState() & Qt.WindowMaximized:
-                # When maximized, keep it maximized (window controls visible)
                 pass
             elif self.windowState() == Qt.WindowNoState:
-                # When restored, set to 75% of current screen size
+                # When restored from maximised, set to 75% of the current screen.
                 self.resize_to_percentage(0.75)
         return super().eventFilter(obj, event)
 
     def closeEvent(self, event: QCloseEvent) -> None:  # noqa: N802
-        """Handle window close event."""
+        """Handle the window close event with autosave + unsaved-changes prompt."""
         if self.annotation_modified:
             if self.autosave_enabled:
                 self.annotation_controller.save_annotations()
@@ -866,22 +474,16 @@ class MainWindow(QMainWindow):
                     QMessageBox.Save | QMessageBox.Discard | QMessageBox.Cancel,
                     QMessageBox.Save,
                 )
-
                 if reply == QMessageBox.Save:
                     self.annotation_controller.save_annotations()
                 elif reply == QMessageBox.Cancel:
                     event.ignore()
                     return
-
-        # Stop the Manual Threshold worker thread before exiting so Qt
-        # doesn't print "QThread: Destroyed while thread is still running".
-        self._mt_thread.quit()
-        self._mt_thread.wait()
         event.accept()
 
     @staticmethod
     def get_version_from_setup() -> str:
-        """Get the application version from setup.py."""
+        """Read the application version literal from ``setup.py``."""
         setup_path = Path(__file__).parent / ".." / ".." / "setup.py"
         tree = ast.parse(setup_path.read_text(encoding="utf-8"))
         for node in ast.walk(tree):
@@ -908,30 +510,22 @@ class MainWindow(QMainWindow):
             "Europe research and innovation funding program under grant "
             "agreement No 101072410, Eyes4ICU project.</p>"
         )
-        # Create a custom widget for the about dialog
         about_widget = QWidget()
         layout = QVBoxLayout()
-
-        # Add text
         text_label = QLabel(about_text)
         text_label.setTextFormat(Qt.RichText)
         text_label.setOpenExternalLinks(True)
         text_label.setWordWrap(True)
         layout.addWidget(text_label)
-
-        # Add image
         image_label = QLabel()
         image_path = str(Path(__file__).parent / ".." / "resources" / "Funded_by_EU_Eyes4ICU.png")
         pixmap = QPixmap(image_path)
         image_label.setPixmap(pixmap.scaled(400, 100, Qt.KeepAspectRatio, Qt.SmoothTransformation))
         image_label.setAlignment(Qt.AlignCenter)
         layout.addWidget(image_label)
-
         about_widget.setLayout(layout)
-
-        # Create and show the message box without an icon
         msg_box = QMessageBox(self)
         msg_box.setWindowTitle("About EyE Annotation Tool")
-        msg_box.setIcon(QMessageBox.NoIcon)  # This removes the icon
+        msg_box.setIcon(QMessageBox.NoIcon)
         msg_box.layout().addWidget(about_widget, 0, 0, 1, msg_box.layout().columnCount())
         msg_box.exec_()
