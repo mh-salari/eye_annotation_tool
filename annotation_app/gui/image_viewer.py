@@ -111,6 +111,14 @@ class ImageViewer(QWidget):
         # from disk.
         self.image_grayscale: np.ndarray | None = None
 
+        # Per-target Auto Detect overlay results, keyed by anatomical target
+        # ("pupil" / "glint" / "limbus" / "eyelid"). The shape of each entry
+        # matches the corresponding plugin's serialise/deserialise contract.
+        # Drawing of these overlays is gated on ``_show_detection_overlays``
+        # so they stay hidden in Manual mode without losing the data.
+        self._detection_overlays: dict[str, dict] = {}
+        self._show_detection_overlays = False
+
     def setup_colors(self) -> None:
         # Define colors with transparency
         """Set up color definitions for annotations."""
@@ -130,6 +138,12 @@ class ImageViewer(QWidget):
         self.glint_select_color = QColor(255, 215, 0, 255)  # Gold
 
         self.roi_color = QColor(0, 188, 212, 255)  # Cyan
+
+        # Auto Detect overlay colours. Pupil ellipse reuses the Annotate-mode
+        # pupil ellipse colour for visual continuity; the centre marker is a
+        # distinct bright green so it reads on top of the iris.
+        self.detection_pupil_ellipse_color = self.pupil_ellipse_color
+        self.detection_pupil_center_color = QColor(40, 220, 60, 255)
 
     def setup_undo_system(self) -> None:
         """Initialize the undo/redo system."""
@@ -493,6 +507,38 @@ class ImageViewer(QWidget):
         """Return the grayscale numpy view of the current image (or None)."""
         return self.image_grayscale
 
+    # ----- Auto Detect overlays -----
+
+    def set_show_detection_overlays(self, on: bool) -> None:
+        """Toggle visibility of every Auto Detect overlay.
+
+        Underlying results stay in memory; only the paint path is gated.
+        Called by MainWindow when the user flips the mode switcher.
+        """
+        self._show_detection_overlays = bool(on)
+        self.update_image()
+
+    def set_detection_overlay(self, target: str, result: dict) -> None:
+        """Store an Auto Detect result for ``target`` and re-paint."""
+        self._detection_overlays[target] = result
+        self.update_image()
+
+    def clear_detection_overlay(self, target: str) -> None:
+        """Drop the stored result for ``target`` and re-paint."""
+        if target in self._detection_overlays:
+            del self._detection_overlays[target]
+            self.update_image()
+
+    def clear_all_detection_overlays(self) -> None:
+        """Drop every stored Auto Detect result and re-paint. Called on image change."""
+        if self._detection_overlays:
+            self._detection_overlays.clear()
+            self.update_image()
+
+    def get_detection_overlay(self, target: str) -> dict | None:
+        """Return the currently stored result for ``target`` (or None)."""
+        return self._detection_overlays.get(target)
+
     def eventFilter(self, source: QWidget, event: QEvent) -> bool:  # noqa: N802
         """Filter events for window state changes."""
         if (
@@ -549,6 +595,9 @@ class ImageViewer(QWidget):
 
         if self.roi:
             self.draw_roi(painter)
+
+        if self._show_detection_overlays:
+            self._draw_detection_overlays(painter)
 
         painter.end()
         self.image_label.setPixmap(self.pixmap)
@@ -652,6 +701,41 @@ class ImageViewer(QWidget):
                     handle_size,
                     handle_size,
                 )
+
+    def _draw_detection_overlays(self, painter: QPainter) -> None:
+        """Render every per-target Auto Detect overlay in ``self._detection_overlays``."""
+        pupil = self._detection_overlays.get("pupil")
+        if pupil is not None:
+            self._draw_pupil_detection(painter, pupil)
+
+    def _draw_pupil_detection(self, painter: QPainter, result: dict) -> None:
+        """Render a pupil-target detection result.
+
+        ``result`` matches the shape produced by a pupil plugin's
+        deserialise: ``{"center": [cx, cy], "ellipse": {"center", "size",
+        "angle"}}``. The ellipse outlines the pupil contour; the centre is
+        drawn as a small filled dot on top.
+        """
+        ellipse = result.get("ellipse")
+        if ellipse is not None:
+            ecx, ecy = ellipse["center"]
+            ew, eh = ellipse["size"]
+            angle = float(ellipse["angle"])
+            painter.save()
+            painter.setPen(QPen(self.detection_pupil_ellipse_color, 1, Qt.SolidLine))
+            painter.setBrush(Qt.NoBrush)
+            painter.translate(QPointF(ecx * self.factor, ecy * self.factor))
+            painter.rotate(angle)
+            painter.drawEllipse(QPointF(0, 0), (ew / 2) * self.factor, (eh / 2) * self.factor)
+            painter.restore()
+
+        center = result.get("center")
+        if center is not None:
+            cx, cy = center
+            scaled = QPointF(cx * self.factor, cy * self.factor)
+            painter.setBrush(self.detection_pupil_center_color)
+            painter.setPen(QPen(self.detection_pupil_center_color, 3, Qt.SolidLine))
+            painter.drawEllipse(scaled, 1.5, 1.5)
 
     def fit_annotation(self) -> bool:
         """Fit an ellipse to the current annotation points."""

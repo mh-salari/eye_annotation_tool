@@ -76,6 +76,18 @@ class DetectorOrchestrator(QObject):
         """Return the last successful result cached for ``target`` on this image."""
         return self._results.get(target)
 
+    def set_cached_result(self, target: Target, result: dict | None) -> None:
+        """Inject a result into the cache without running a plugin.
+
+        Used by the per-image restore path: when an annotation file already
+        carries a previously saved detection, we deserialise it back into
+        the cache so downstream plugins can read it via ``shared_results``
+        and the viewer can render the overlay without re-running ``detect``.
+        """
+        if target not in self._results:
+            raise ValueError(f"unknown target {target!r}")
+        self._results[target] = result
+
     def clear_cache(self) -> None:
         """Forget every cached result. Call on image change."""
         for target in TARGETS:

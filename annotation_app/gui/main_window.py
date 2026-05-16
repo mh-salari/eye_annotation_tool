@@ -205,7 +205,11 @@ class MainWindow(QMainWindow):
 
         self.image_viewer.annotation_changed.connect(self.on_annotation_changed)
         self.image_viewer.annotation_type_changed.connect(self.annotation_controls.set_current_annotation)
+        # On image change: drop the orchestrator's per-image cache AND the
+        # viewer's per-image overlay store before the annotation_controller
+        # re-populates them from the new image's saved annotation (if any).
         self.image_viewer.image_loaded.connect(self.orchestrator.clear_cache)
+        self.image_viewer.image_loaded.connect(self.image_viewer.clear_all_detection_overlays)
 
         self.annotation_controls.auto_detect_run_requested.connect(self._on_run_auto_detect)
         self._auto_detect_debounce.timeout.connect(self._on_auto_detect_debounce_fired)
@@ -373,7 +377,8 @@ class MainWindow(QMainWindow):
             self._save_to_all_projects(settings)
 
     def _on_mode_changed(self, mode: str) -> None:
-        """Persist the new mode in project settings."""
+        """Persist the new mode and gate Auto Detect overlay visibility on it."""
+        self.image_viewer.set_show_detection_overlays(mode == MODE_AUTO_DETECT)
         if not self.project_dirs:
             return
         settings = load_project_settings(self.project_dir)
@@ -430,20 +435,50 @@ class MainWindow(QMainWindow):
         self._refresh_save_state_indicator()
 
     def collect_detections_for_save(self) -> dict:
-        """Return the per-plugin serialised detection results to persist with this image.
+        """Walk every enabled plugin and build the per-image ``detections`` dict.
 
-        Placeholder: the per-image save path lands in the next refactor
-        step (which adds the viewer's overlay rendering and the
-        per-image restore). Returning an empty dict keeps the annotation
-        controller's save flow functional in the meantime.
+        For each plugin whose target has a cached result on the current
+        image, the dict gets one entry keyed by plugin name carrying both
+        the parameter values used and the serialised result.
         """
-        return {}
+        out: dict = {}
+        for target, plugin in self._enabled_plugins.items():
+            result = self.orchestrator.cached_result(target)
+            if result is None:
+                continue
+            panel = self.annotation_controls.auto_detect_panel(plugin.name)
+            params = panel.current_params() if panel is not None else plugin.default_params()
+            out[plugin.name] = {
+                "params": params,
+                "result": plugin.serialize(result),
+            }
+        return out
 
     def apply_loaded_detections(self, detections: dict) -> None:
-        """Hand the deserialised detection blocks back to the orchestrator/viewer.
+        """Restore per-image detection blocks from a loaded annotation file.
 
-        Placeholder: the per-image restore path lands in the next refactor step.
+        For every block whose plugin is currently enabled, the panel is
+        seeded with the saved params, the orchestrator's cache is primed
+        with the deserialised result, and the viewer's overlay store
+        receives the same result so the painter draws it. Blocks whose
+        plugin is disabled or unknown for the current project are
+        ignored — they will be re-saved as-is on the next save only if
+        the user enables that plugin (handled by step g's UI).
         """
+        for plugin_name, blob in detections.items():
+            plugin = self.plugin_manager.get(plugin_name)
+            if plugin is None:
+                continue
+            if self._enabled_plugins.get(plugin.target) is not plugin:
+                continue
+            params = blob.get("params") or {}
+            result_blob = blob.get("result") or {}
+            result = plugin.deserialize(result_blob)
+            panel = self.annotation_controls.auto_detect_panel(plugin.name)
+            if panel is not None:
+                panel.set_params(params)
+            self.orchestrator.set_cached_result(plugin.target, result)
+            self.image_viewer.set_detection_overlay(plugin.target, result)
 
     # ----- Auto Detect mode: plugin resolution, run dispatch, signal forwarding -----
 
@@ -540,17 +575,13 @@ class MainWindow(QMainWindow):
         self.orchestrator.run_all(image, per_target_params)
 
     def _on_plugin_ready(self, target: str, result: dict) -> None:
-        """Surface a successful detection in the status bar.
-
-        Overlay rendering on the image viewer lands in the next refactor
-        step; for now the only user-visible feedback is a transient
-        status-bar message. ``result`` is not consumed here.
-        """
-        del result
-        self.statusBar().showMessage(f"Auto Detect: {target} updated.", 2000)
+        """Render the new detection result on the image viewer and mark modified."""
+        self.image_viewer.set_detection_overlay(target, result)
+        self.set_annotation_modified(True)
 
     def _on_plugin_failed(self, target: str) -> None:
-        """Surface a detection failure (None result or unmet dependency) in the status bar."""
+        """Clear the per-target overlay and surface the failure in the status bar."""
+        self.image_viewer.clear_detection_overlay(target)
         self.statusBar().showMessage(f"Auto Detect: {target} failed at current parameters.", 5000)
 
     def get_current_screen(self) -> QScreen | None:
