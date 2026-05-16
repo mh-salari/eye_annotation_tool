@@ -24,6 +24,7 @@ dependencies = [
     "opencv-python>=4.5.0",
     "scipy>=1.7.0",
     "daugman-derived-boundary-detectors",
+    "pupil-glint-detector",
 ]
 
 [project.urls]
@@ -34,12 +35,12 @@ Issues = "https://github.com/mh-salari/eye_annotation_tool/issues"
 [project.scripts]
 eye_annotation_tool = "annotation_app.main:run_app"
 
-# Local editable install of daugman-derived-boundary-detectors during
-# development. When that package gets published to PyPI (before we publish
-# eye-annotation-tool), this source override can be removed and the public
-# wheel will be used instead.
+# Local editable installs during development. When these packages get
+# published to PyPI (before we publish eye-annotation-tool), the source
+# overrides can be removed and the public wheels will be used instead.
 [tool.uv.sources]
 daugman-derived-boundary-detectors = { path = "../daugman-derived-boundary-detectors", editable = true }
+pupil-glint-detector = { path = "../pupil-glint-detector", editable = true }
 
 [build-system]
 requires = ["hatchling", "hatch-vcs"]
@@ -168,3 +169,7 @@ lint.ignore = [
 # GUI domain objects with many UI handlers — many public methods are intentional.
 "annotation_app/gui/image_viewer.py" = ["PLR0904"]
 "annotation_app/gui/main_window.py" = ["PLR0904"]
+# Plugin override methods (detect, serialize, deserialize, make_panel) often
+# don't reference ``self`` but must remain instance methods to satisfy the
+# DetectorPlugin contract and to allow subclasses to override.
+"annotation_app/auto_detectors/plugins/**/*.py" = ["PLR6301"]
