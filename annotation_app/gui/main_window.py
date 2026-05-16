@@ -216,7 +216,7 @@ class MainWindow(QMainWindow):
         self.annotation_controls.clear_limbus_requested.connect(self.image_viewer.clear_limbus_points)
         self.annotation_controls.clear_eyelid_points_requested.connect(self.image_viewer.clear_eyelid_points)
         self.annotation_controls.clear_glint_points_requested.connect(self.image_viewer.clear_glint_points)
-        self.annotation_controls.clear_all_requested.connect(self.image_viewer.clear_all)
+        self.annotation_controls.clear_all_requested.connect(self._on_clear_all)
         self.annotation_controls.mode_changed.connect(self._on_mode_changed)
 
         self.image_viewer.annotation_changed.connect(self.on_annotation_changed)
@@ -395,8 +395,16 @@ class MainWindow(QMainWindow):
             self._save_to_all_projects(settings)
 
     def _on_mode_changed(self, mode: str) -> None:
-        """Persist the new mode and gate Auto Detect overlay visibility on it."""
-        self.image_viewer.set_show_detection_overlays(mode == MODE_AUTO_DETECT)
+        """Persist the new mode and toggle which set of overlays the viewer paints.
+
+        Manual mode shows the manual click-points + Annotate ROI; Auto
+        Detect shows the per-target detection ellipses / centres + ROIs.
+        Modes never overlap visually — the underlying data for both
+        stays in memory regardless of which paint path is active.
+        """
+        is_auto = mode == MODE_AUTO_DETECT
+        self.image_viewer.set_show_manual_annotations(not is_auto)
+        self.image_viewer.set_show_detection_overlays(is_auto)
         if not self.project_dirs:
             return
         settings = load_project_settings(self.project_dir)
@@ -629,6 +637,43 @@ class MainWindow(QMainWindow):
         """Clear the per-target overlay and surface the failure in the status bar."""
         self.image_viewer.clear_detection_overlay(target)
         self.statusBar().showMessage(f"Auto Detect: {target} failed at current parameters.", 5000)
+
+    def _on_clear_all(self) -> None:
+        """Route the Clear All button by current mode.
+
+        Manual mode clears every manual annotation type (pupil / limbus /
+        eyelid / glint points). Auto Detect mode resets every mounted
+        plugin panel to its defaults, drops the orchestrator's cached
+        results, clears the viewer's overlays and per-target ROIs, and
+        cancels any in-flight debounced re-run. No detection runs — the
+        user clicks Run Auto Detect when ready.
+        """
+        if self.annotation_controls.current_mode() == MODE_AUTO_DETECT:
+            self._clear_all_auto_detect()
+        else:
+            self.image_viewer.clear_all()
+
+    def _clear_all_auto_detect(self) -> None:
+        """Reset every Auto Detect plugin panel, the orchestrator cache, and the viewer state."""
+        # Cancel any debounced run_one that might fire mid-reset.
+        self._auto_detect_debounce.stop()
+        self._pending_run_one = None
+
+        for target, plugin in self._enabled_plugins.items():
+            panel = self.annotation_controls.auto_detect_panel(plugin.name)
+            if panel is None:
+                continue
+            # set_params is silent — the panel updates its widgets without
+            # firing params_changed, so the orchestrator does not see a
+            # change request and detection stays off until the user asks.
+            panel.set_params(plugin.default_params())
+            self.orchestrator.set_cached_result(target, None)
+            self.image_viewer.clear_detection_overlay(target)
+            self.image_viewer.set_target_roi(target, None)
+        # Active drag-edit target was likely tied to one of the panels we
+        # just reset; drop it so the canvas isn't waiting on a phantom drag.
+        self.image_viewer.set_active_roi_target(None)
+        self.set_annotation_modified(True)
 
     def _on_panel_roi_edit_requested(self, target: str, active: bool) -> None:
         """Enter (or leave) drag-edit mode for ``target``'s ROI on the canvas."""

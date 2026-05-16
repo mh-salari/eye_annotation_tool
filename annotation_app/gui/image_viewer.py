@@ -123,6 +123,12 @@ class ImageViewer(QWidget):
         self._detection_overlays: dict[str, dict] = {}
         self._show_detection_overlays = False
 
+        # Manual-mode annotations (point markers, fitted ellipses, the
+        # Annotate-mode ROI rectangle) are hidden in Auto Detect mode so
+        # the detection overlay isn't visually contaminated by manual
+        # clicks. The data itself stays in memory.
+        self._show_manual_annotations = True
+
         # Per-target Auto Detect ROI rectangles (target → ``(x, y, w, h)``
         # tuple or None). ``_active_roi_target`` is the target whose
         # rectangle is currently in drag-edit mode — handles are drawn on
@@ -591,6 +597,16 @@ class ImageViewer(QWidget):
         self._show_detection_overlays = bool(on)
         self.update_image()
 
+    def set_show_manual_annotations(self, on: bool) -> None:
+        """Toggle visibility of manual-mode markers + the Annotate-mode ROI.
+
+        Underlying point/ellipse/ROI data stays in memory; only the paint
+        path is gated. Flipped to False when MainWindow enters Auto Detect
+        mode and back to True when returning to Manual mode.
+        """
+        self._show_manual_annotations = bool(on)
+        self.update_image()
+
     def set_detection_overlay(self, target: str, result: dict) -> None:
         """Store an Auto Detect result for ``target`` and re-paint."""
         self._detection_overlays[target] = result
@@ -705,12 +721,12 @@ class ImageViewer(QWidget):
         painter = QPainter(self.pixmap)
         painter.drawPixmap(0, 0, scaled_pixmap)
 
-        self.draw_eye_annotations(painter, "left")
-        if not self.single_eye_mode:
-            self.draw_eye_annotations(painter, "right")
-
-        if self.roi:
-            self.draw_roi(painter)
+        if self._show_manual_annotations:
+            self.draw_eye_annotations(painter, "left")
+            if not self.single_eye_mode:
+                self.draw_eye_annotations(painter, "right")
+            if self.roi:
+                self.draw_roi(painter)
 
         if self._show_detection_overlays:
             self._draw_detection_overlays(painter)
