@@ -16,6 +16,7 @@ from pupil_glint_detector import detect_pupil
 from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtWidgets import (
     QAbstractSpinBox,
+    QCheckBox,
     QComboBox,
     QGroupBox,
     QHBoxLayout,
@@ -61,6 +62,10 @@ class _ThresholdPupilPanel(QGroupBox):
     # Emitted when the user clicks Clear next to the ROI button — the
     # canvas drops the rectangle and the plugin re-runs without it.
     clear_roi_requested = pyqtSignal()
+    # Emitted when the user toggles the "Show mask" checkbox. The
+    # MainWindow forwards this to the image viewer so the threshold
+    # mask paint path can be gated independently per plugin.
+    show_mask_toggled = pyqtSignal(bool)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         """Build the panel widgets and seed them with :data:`DEFAULTS`."""
@@ -76,6 +81,11 @@ class _ThresholdPupilPanel(QGroupBox):
         layout.addLayout(self._build_threshold_row())
         layout.addLayout(self._build_method_row())
         layout.addLayout(self._build_roi_row())
+
+        self.show_mask_check = QCheckBox("Show mask")
+        self.show_mask_check.setChecked(False)
+        self.show_mask_check.toggled.connect(self.show_mask_toggled.emit)
+        layout.addWidget(self.show_mask_check)
 
         self.setLayout(layout)
 
@@ -234,10 +244,10 @@ class ThresholdPupil(DetectorPlugin):
                 "angle": float(angle),
             },
             # Carried for downstream plugins that consume the pupil
-            # contour (glint search region) and for the live mask overlay.
-            # Stripped from the serialised result.
+            # contour (glint search region) and for the optional "Show
+            # mask" overlay. Both are stripped on serialize().
             "contour": result["contour"],
-            "pupil_mask": result["mask"],
+            "mask": result["mask"],
         }
 
     def serialize(self, result: dict) -> dict:

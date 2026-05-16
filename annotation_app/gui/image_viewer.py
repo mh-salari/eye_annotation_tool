@@ -5,7 +5,7 @@ from collections import deque
 import cv2
 import numpy as np
 from PyQt5.QtCore import QEvent, QPoint, QPointF, QSizeF, Qt, pyqtSignal
-from PyQt5.QtGui import QColor, QKeyEvent, QPainter, QPen, QPixmap
+from PyQt5.QtGui import QColor, QImage, QKeyEvent, QPainter, QPen, QPixmap
 from PyQt5.QtWidgets import QLabel, QMessageBox, QScrollArea, QVBoxLayout, QWidget
 
 from ..utils.image_processing import find_closest_point, fit_ellipse
@@ -136,6 +136,15 @@ class ImageViewer(QWidget):
         self._target_rois: dict[str, tuple | None] = {}
         self._active_roi_target: str | None = None
 
+        # Per-target threshold-mask overlays. ``_target_masks`` holds the
+        # ``uint8`` ndarray a plugin's ``detect`` returned under its
+        # ``"mask"`` key (or ``None`` when the plugin didn't produce one),
+        # and ``_show_target_masks`` gates whether each one paints. Both
+        # are populated from outside via the public setters; the viewer
+        # never inspects plugin result shapes itself.
+        self._target_masks: dict[str, np.ndarray | None] = {}
+        self._show_target_masks: dict[str, bool] = {}
+
     def setup_colors(self) -> None:
         # Define colors with transparency
         """Set up color definitions for annotations."""
@@ -171,6 +180,15 @@ class ImageViewer(QWidget):
         self.target_roi_colors: dict[str, QColor] = {
             "pupil": self.detection_pupil_center_color,
             "glint": self.detection_glint_color,
+        }
+
+        # Per-target threshold-mask colours. Lower alpha than the marker
+        # palette so the underlying image is still readable through the
+        # overlay; cyan on the dark pupil and magenta on the bright glint
+        # both contrast well with their respective backgrounds.
+        self.target_mask_colors: dict[str, QColor] = {
+            "pupil": QColor(0, 200, 220, 64),
+            "glint": QColor(255, 0, 200, 110),
         }
 
     def setup_undo_system(self) -> None:
@@ -577,9 +595,12 @@ class ImageViewer(QWidget):
         self.limbus_ellipse = None
         # Per-image Auto Detect overlay state — cleared here so the next
         # image starts blank before the annotation controller restores
-        # whatever the new image's saved annotation carries.
+        # whatever the new image's saved annotation carries. Masks are
+        # transient (never persisted), so they always start empty on a
+        # new image until the next plugin run.
         self._detection_overlays.clear()
         self._target_rois.clear()
+        self._target_masks.clear()
         self.reset_undo_stack()
         self.update_image()
         self.image_loaded.emit()
@@ -673,6 +694,41 @@ class ImageViewer(QWidget):
             return
         self._target_rois.clear()
         self.update_image()
+
+    # ----- Per-target threshold-mask overlays -----
+
+    def set_target_mask(self, target: str, mask: "np.ndarray | None") -> None:
+        """Store ``target``'s threshold mask. Repaints when the mask is visible."""
+        self._target_masks[target] = mask
+        if self._show_target_masks.get(target):
+            self.update_image()
+
+    def set_show_target_mask(self, target: str, on: bool) -> None:
+        """Toggle visibility of ``target``'s threshold mask overlay."""
+        self._show_target_masks[target] = bool(on)
+        self.update_image()
+
+    def clear_target_mask(self, target: str) -> None:
+        """Drop the stored mask for ``target`` and repaint if it was visible."""
+        was_visible = self._show_target_masks.get(target) and self._target_masks.get(target) is not None
+        self._target_masks.pop(target, None)
+        if was_visible:
+            self.update_image()
+
+    def get_target_mask(self, target: str) -> "np.ndarray | None":
+        """Return the currently stored mask for ``target`` (or ``None``)."""
+        return self._target_masks.get(target)
+
+    def clear_all_target_masks(self) -> None:
+        """Drop every stored per-target mask. Repaints when at least one was visible."""
+        if not self._target_masks:
+            return
+        had_visible = any(
+            self._show_target_masks.get(t) and self._target_masks.get(t) is not None for t in self._target_masks
+        )
+        self._target_masks.clear()
+        if had_visible:
+            self.update_image()
 
     def eventFilter(self, source: QWidget, event: QEvent) -> bool:  # noqa: N802
         """Filter events for window state changes."""
@@ -840,12 +896,46 @@ class ImageViewer(QWidget):
 
     def _draw_detection_overlays(self, painter: QPainter) -> None:
         """Render every per-target Auto Detect overlay in ``self._detection_overlays``."""
+        # Threshold-mask fills go under the markers so the centres and
+        # ellipses remain legible on top of the mask. Each plugin's mask
+        # paints only when its "Show mask" toggle is on.
+        self._draw_target_masks(painter)
         pupil = self._detection_overlays.get("pupil")
         if pupil is not None:
             self._draw_pupil_detection(painter, pupil)
         glint = self._detection_overlays.get("glint")
         if glint is not None:
             self._draw_glint_detection(painter, glint)
+
+    def _draw_target_masks(self, painter: QPainter) -> None:
+        """Render each visible per-target threshold mask as a semi-transparent fill."""
+        fallback_color = QColor(255, 255, 255, 64)
+        for target, mask in self._target_masks.items():
+            if mask is None or not self._show_target_masks.get(target):
+                continue
+            color = self.target_mask_colors.get(target, fallback_color)
+            self._draw_mask(painter, mask, color)
+
+    def _draw_mask(self, painter: QPainter, mask: "np.ndarray", color: QColor) -> None:
+        """Blit a uint8 0/255 mask onto the canvas as a single coloured RGBA fill."""
+        if mask.size == 0:
+            return
+        h, w = mask.shape[:2]
+        rgba = np.zeros((h, w, 4), dtype=np.uint8)
+        bool_mask = mask > 0
+        rgba[bool_mask, 0] = color.red()
+        rgba[bool_mask, 1] = color.green()
+        rgba[bool_mask, 2] = color.blue()
+        rgba[bool_mask, 3] = color.alpha()
+        rgba = np.ascontiguousarray(rgba)
+        qimg = QImage(rgba.data, w, h, w * 4, QImage.Format_RGBA8888)
+        scaled = QPixmap.fromImage(qimg).scaled(
+            int(w * self.factor),
+            int(h * self.factor),
+            Qt.IgnoreAspectRatio,
+            Qt.FastTransformation,
+        )
+        painter.drawPixmap(0, 0, scaled)
 
     def _draw_glint_detection(self, painter: QPainter, result: dict) -> None:
         """Render glint-target detection markers as small filled red dots."""

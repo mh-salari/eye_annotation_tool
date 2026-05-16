@@ -43,10 +43,6 @@ class AnnotationControlPanel(QWidget):
     clear_selected_annotation_requested = pyqtSignal()
     # Emitted when the top mode switcher flips. Carries one of the MODE_* slugs.
     mode_changed = pyqtSignal(str)
-    # Emitted when the user clicks the "Run Auto Detect" button at the bottom
-    # of the Auto Detect page. MainWindow gathers params and calls the
-    # orchestrator's run_all.
-    auto_detect_run_requested = pyqtSignal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
         """Initialise the AnnotationControlPanel."""
@@ -158,12 +154,15 @@ class AnnotationControlPanel(QWidget):
         return page
 
     def _build_auto_detect_page(self) -> QWidget:
-        """Build the Auto Detect page: a dynamic stack of plugin panels + Run button.
+        """Build the Auto Detect page: a dynamic stack of plugin panels.
 
         The stack starts empty; ``set_auto_detect_panels`` is called by
         MainWindow on every project-settings change to install the panels
-        for the currently enabled plugins. The Run Auto Detect button is
-        permanently mounted at the bottom of the page.
+        for the currently enabled plugins. Cheap plugins re-run live on
+        slider drag via their ``params_changed`` signal; expensive
+        plugins (e.g. Daugman limbus, once it lands) provide their own
+        per-plugin Detect button inside their panel. There is no global
+        "Run Auto Detect" button.
         """
         page = QWidget()
         layout = QVBoxLayout()
@@ -185,10 +184,6 @@ class AnnotationControlPanel(QWidget):
         layout.addWidget(self._auto_detect_empty_label)
 
         layout.addStretch(1)
-
-        self.run_auto_detect_button = MaterialButton("Run Auto Detect")
-        self.run_auto_detect_button.clicked.connect(self.auto_detect_run_requested.emit)
-        layout.addWidget(self.run_auto_detect_button)
 
         page.setLayout(layout)
         self._auto_detect_panels: dict[str, QWidget] = {}
@@ -212,7 +207,6 @@ class AnnotationControlPanel(QWidget):
             self._auto_detect_panels_container.addWidget(widget)
             self._auto_detect_panels[name] = widget
         self._auto_detect_empty_label.setVisible(not panels)
-        self.run_auto_detect_button.setEnabled(bool(panels))
 
     def auto_detect_panel(self, plugin_name: str) -> QWidget | None:
         """Return the currently mounted Auto Detect panel for ``plugin_name``, or None."""

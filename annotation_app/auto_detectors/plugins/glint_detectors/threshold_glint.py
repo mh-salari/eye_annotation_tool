@@ -77,6 +77,10 @@ class _ThresholdGlintPanel(QGroupBox):
     """Right-panel widget for the Threshold Glint plugin."""
 
     params_changed = pyqtSignal(dict)
+    # Emitted when the user toggles the "Show mask" checkbox. MainWindow
+    # forwards to the image viewer so the threshold mask paint path is
+    # gated independently per plugin.
+    show_mask_toggled = pyqtSignal(bool)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         """Build the panel widgets and seed them with :data:`DEFAULTS`."""
@@ -96,6 +100,11 @@ class _ThresholdGlintPanel(QGroupBox):
         layout.addLayout(self._build_max_area_row())
         layout.addLayout(self._build_keep_row())
         layout.addLayout(self._build_flags_row())
+
+        self.show_mask_check = QCheckBox("Show mask")
+        self.show_mask_check.setChecked(False)
+        self.show_mask_check.toggled.connect(self.show_mask_toggled.emit)
+        layout.addWidget(self.show_mask_check)
 
         self.setLayout(layout)
 
@@ -122,8 +131,13 @@ class _ThresholdGlintPanel(QGroupBox):
 
     def _build_radius_row(self) -> QHBoxLayout:
         row = QHBoxLayout()
-        label = QLabel("Radius x pupil:")
+        label = QLabel("Search radius:")
         label.setMinimumWidth(110)
+        label.setToolTip(
+            "Maximum distance from the pupil centre at which a bright pixel can "
+            "be considered for glint detection, expressed as a multiple of the "
+            "detected pupil radius. 2.0 = twice the pupil's radius.",
+        )
         row.addWidget(label)
         initial_factor = float(self._params["search_radius_factor"])
         initial_slider = round(initial_factor * RADIUS_FACTOR_SCALE)
@@ -134,10 +148,13 @@ class _ThresholdGlintPanel(QGroupBox):
         self.radius_spin.setRange(0.1, 5.0)
         self.radius_spin.setSingleStep(0.1)
         self.radius_spin.setDecimals(1)
+        # Suffix nails the unit at the value site: "2.0 x pupil_r" reads
+        # unambiguously as "two times the pupil radius".
+        self.radius_spin.setSuffix(" x pupil_r")
         self.radius_spin.setValue(initial_factor)
         self.radius_spin.setButtonSymbols(QAbstractSpinBox.NoButtons)
-        self.radius_spin.setMinimumWidth(50)
-        self.radius_spin.setMaximumWidth(70)
+        self.radius_spin.setMinimumWidth(80)
+        self.radius_spin.setMaximumWidth(110)
         self.radius_slider.valueChanged.connect(self._on_radius_slider_changed)
         self.radius_spin.valueChanged.connect(self._on_radius_spin_changed)
         row.addWidget(self.radius_slider)
@@ -411,8 +428,10 @@ class ThresholdGlint(DetectorPlugin):
         return {
             "glints": [{"center": [float(g["center"][0]), float(g["center"][1])]} for g in result["glints"]],
             # Transient pixel mask of the bright-and-in-search-disk
-            # candidates. Used by the live overlay; stripped on save.
-            "search_area": result["search_area"],
+            # candidates. Surfaced under the standard ``"mask"`` key the
+            # plugin contract uses for the optional "Show mask" overlay;
+            # stripped on serialize().
+            "mask": result["search_area"],
         }
 
     def serialize(self, result: dict) -> dict:

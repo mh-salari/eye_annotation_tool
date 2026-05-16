@@ -25,6 +25,20 @@ The panel widget returned by ``make_panel`` must expose:
   - ``current_params() -> dict`` — current widget state as params dict,
   - ``set_params(params: dict) -> None`` — populate widgets without
     emitting ``params_changed``.
+
+Optional panel surface for plugins whose detect step produces a binary
+mask the user may want to overlay during tuning:
+
+  - ``show_mask_toggled: pyqtSignal(bool)`` — emitted when the panel's
+    "Show mask" checkbox flips. MainWindow forwards to the image viewer's
+    per-target mask visibility flag.
+
+If a plugin's ``detect`` returns a ``"mask"`` key in its result dict
+(a uint8 ``numpy.ndarray``), MainWindow pushes the array to the viewer
+under the plugin's ``target``; the viewer paints it as a semi-transparent
+fill when the per-target "Show mask" flag is on. ``serialize`` must
+always strip the mask — it is transient view-only state and never
+belongs in the per-image JSON.
 """
 
 from abc import ABC, abstractmethod

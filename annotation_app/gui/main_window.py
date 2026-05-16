@@ -229,7 +229,6 @@ class MainWindow(QMainWindow):
 
         self.image_viewer.target_roi_changed.connect(self._on_target_roi_changed)
 
-        self.annotation_controls.auto_detect_run_requested.connect(self._on_run_auto_detect)
         self._auto_detect_debounce.timeout.connect(self._on_auto_detect_debounce_fired)
         self.orchestrator.plugin_ready.connect(self._on_plugin_ready)
         self.orchestrator.plugin_failed.connect(self._on_plugin_failed)
@@ -490,6 +489,14 @@ class MainWindow(QMainWindow):
         plugin is disabled or unknown for the current project are
         ignored — they will be re-saved as-is on the next save only if
         the user enables that plugin (handled by step g's UI).
+
+        After the restore, every live cheap plugin is re-run once
+        synchronously on the current image. The cached result is
+        overwritten with the freshly computed one and the transient
+        mask is populated — masks are stripped on serialise, so a
+        freshly loaded image otherwise has no mask data even when its
+        Show-mask toggle is on. Non-live plugins are not re-run; their
+        own Detect button drives them.
         """
         for plugin_name, blob in detections.items():
             plugin = self.plugin_manager.get(plugin_name)
@@ -512,6 +519,28 @@ class MainWindow(QMainWindow):
                 plugin.target,
                 tuple(saved_roi) if saved_roi is not None else None,
             )
+        self._refresh_live_plugin_results()
+
+    def _refresh_live_plugin_results(self) -> None:
+        """Re-run every enabled live plugin on the current image, in dep order.
+
+        Walking ``DETECTOR_TARGETS`` in order respects the natural
+        dependency chain (pupil → glint → limbus → eyelid) so a
+        downstream plugin always sees the upstream one's freshly
+        computed result in its ``shared_results`` dict. Non-live plugins
+        are skipped — they only run on explicit user action.
+        """
+        image = self.image_viewer.get_current_image_grayscale()
+        if image is None:
+            return
+        for target in DETECTOR_TARGETS:
+            plugin = self._enabled_plugins.get(target)
+            if plugin is None or not plugin.live:
+                continue
+            panel = self.annotation_controls.auto_detect_panel(plugin.name)
+            if panel is None:
+                continue
+            self.orchestrator.run_one(target, image, panel.current_params())
 
     # ----- Auto Detect mode: plugin resolution, run dispatch, signal forwarding -----
 
@@ -572,6 +601,10 @@ class MainWindow(QMainWindow):
                 panel.clear_roi_requested.connect(
                     lambda target_=plugin.target: self._on_panel_clear_roi_requested(target_),
                 )
+            if hasattr(panel, "show_mask_toggled"):
+                panel.show_mask_toggled.connect(
+                    lambda on, target_=plugin.target: self._on_panel_show_mask_toggled(target_, on),
+                )
             # Seed the viewer's ROI store from the project-saved params so
             # the rectangle is rendered immediately when Auto Detect mode
             # is entered.
@@ -612,30 +645,20 @@ class MainWindow(QMainWindow):
             return
         self.orchestrator.run_one(plugin.target, image, params)
 
-    def _on_run_auto_detect(self) -> None:
-        """Run every enabled plugin in dependency order on the current image."""
-        image = self.image_viewer.get_current_image_grayscale()
-        if image is None:
-            self.statusBar().showMessage("Auto Detect: no image loaded.", 5000)
-            return
-        per_target_params: dict[Target, dict] = {}
-        for target, plugin in self._enabled_plugins.items():
-            panel = self.annotation_controls.auto_detect_panel(plugin.name)
-            if panel is not None:
-                per_target_params[target] = panel.current_params()
-        # Pending live re-runs would race against the chain; drop them.
-        self._pending_run_one = None
-        self._auto_detect_debounce.stop()
-        self.orchestrator.run_all(image, per_target_params)
-
     def _on_plugin_ready(self, target: str, result: dict) -> None:
-        """Render the new detection result on the image viewer and mark modified."""
+        """Render the new detection result + its optional mask, mark modified."""
+        # The mask (if any) lives under the standard ``"mask"`` key per
+        # the plugin contract — split it off from the geometry overlay so
+        # the viewer's mask renderer and its detection renderer stay on
+        # their own paths.
+        self.image_viewer.set_target_mask(target, result.get("mask"))
         self.image_viewer.set_detection_overlay(target, result)
         self.set_annotation_modified(True)
 
     def _on_plugin_failed(self, target: str) -> None:
-        """Clear the per-target overlay and surface the failure in the status bar."""
+        """Clear the per-target overlay + mask and surface the failure in the status bar."""
         self.image_viewer.clear_detection_overlay(target)
+        self.image_viewer.clear_target_mask(target)
         self.statusBar().showMessage(f"Auto Detect: {target} failed at current parameters.", 5000)
 
     def _on_clear_all(self) -> None:
@@ -669,11 +692,21 @@ class MainWindow(QMainWindow):
             panel.set_params(plugin.default_params())
             self.orchestrator.set_cached_result(target, None)
             self.image_viewer.clear_detection_overlay(target)
+            self.image_viewer.clear_target_mask(target)
             self.image_viewer.set_target_roi(target, None)
         # Active drag-edit target was likely tied to one of the panels we
         # just reset; drop it so the canvas isn't waiting on a phantom drag.
         self.image_viewer.set_active_roi_target(None)
         self.set_annotation_modified(True)
+
+    def _on_panel_show_mask_toggled(self, target: str, on: bool) -> None:
+        """Forward the panel's "Show mask" toggle to the viewer.
+
+        Masks are transient: a loaded image has no mask until a plugin
+        runs against it. Nudging any slider re-runs the cheap plugins
+        and populates the mask; nothing implicit happens on toggle.
+        """
+        self.image_viewer.set_show_target_mask(target, on)
 
     def _on_panel_roi_edit_requested(self, target: str, active: bool) -> None:
         """Enter (or leave) drag-edit mode for ``target``'s ROI on the canvas."""
