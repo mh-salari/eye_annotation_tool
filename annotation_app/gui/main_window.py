@@ -3,7 +3,7 @@
 import ast
 from pathlib import Path
 
-from PyQt5.QtCore import QEvent, QRect, Qt
+from PyQt5.QtCore import QEvent, QRect, Qt, QTimer
 from PyQt5.QtGui import QCloseEvent, QIcon, QPixmap, QScreen
 from PyQt5.QtWidgets import (
     QApplication,
@@ -26,14 +26,21 @@ from PyQt5.QtWidgets import (
 
 from ..auto_detectors import PluginManager
 from ..auto_detectors.orchestrator import DetectorOrchestrator
+from ..auto_detectors.plugin_interface import DetectorPlugin, Target
 from ..controllers.annotation_controller import AnnotationController
 from ..controllers.navigation_controller import NavigationController
-from ..utils.project_settings import load_project_settings, save_project_settings
+from ..utils.project_settings import DETECTOR_TARGETS, load_project_settings, save_project_settings
 from .annotation_controls import MODE_AUTO_DETECT, MODE_MANUAL, AnnotationControlPanel
 from .custom_widgets import MaterialButton
 from .image_viewer import ImageViewer
 from .menu_handler import MenuHandler
 from .shortcut_handler import ShortcutHandler
+
+# Slider-change → run_one debounce window. Slider drags fire many
+# params_changed events per second; we collapse the burst to a single
+# detector run ~100 ms after the last change so the orchestrator isn't
+# flooded with stale intermediates.
+AUTO_DETECT_DEBOUNCE_MS = 100
 
 
 class MainWindow(QMainWindow):
@@ -58,6 +65,18 @@ class MainWindow(QMainWindow):
         # propagate to every entry so any one of them can be reopened later
         # with the same configuration.
         self.project_dirs: list[str] = []
+
+        # Resolved plugin instance per target, kept in sync with the current
+        # project's "detectors" block. Targets whose project setting is
+        # ``"disabled"`` are absent from this dict.
+        self._enabled_plugins: dict[Target, DetectorPlugin] = {}
+
+        # Buffered (plugin_name, params) pair for the next debounced run_one.
+        # Cleared when the timer fires or when the user clicks Run Auto Detect.
+        self._pending_run_one: tuple[str, dict] | None = None
+        self._auto_detect_debounce = QTimer(self)
+        self._auto_detect_debounce.setSingleShot(True)
+        self._auto_detect_debounce.setInterval(AUTO_DETECT_DEBOUNCE_MS)
 
         self.setup_ui()
         self.setup_variables()
@@ -188,6 +207,11 @@ class MainWindow(QMainWindow):
         self.image_viewer.annotation_type_changed.connect(self.annotation_controls.set_current_annotation)
         self.image_viewer.image_loaded.connect(self.orchestrator.clear_cache)
 
+        self.annotation_controls.auto_detect_run_requested.connect(self._on_run_auto_detect)
+        self._auto_detect_debounce.timeout.connect(self._on_auto_detect_debounce_fired)
+        self.orchestrator.plugin_ready.connect(self._on_plugin_ready)
+        self.orchestrator.plugin_failed.connect(self._on_plugin_failed)
+
     IMAGE_SUFFIXES = (".png", ".jpg", ".jpeg", ".bmp")
 
     def load_images(self) -> None:
@@ -280,6 +304,7 @@ class MainWindow(QMainWindow):
         project_settings = chosen
         effective_single_eye = self._cli_single_eye or bool(project_settings.get("single_eye_mode", False))
         self._apply_single_eye_mode(effective_single_eye)
+        self._apply_enabled_plugins(project_settings.get("detectors", {}))
         # Restore the last used mode for this project; setChecked fires the
         # button's toggled signal which drives _on_mode_changed.
         saved_mode = project_settings.get("current_mode", MODE_MANUAL)
@@ -407,8 +432,9 @@ class MainWindow(QMainWindow):
     def collect_detections_for_save(self) -> dict:
         """Return the per-plugin serialised detection results to persist with this image.
 
-        Placeholder: the orchestrator + per-plugin save path lands in the
-        next refactor step. Returning an empty dict keeps the annotation
+        Placeholder: the per-image save path lands in the next refactor
+        step (which adds the viewer's overlay rendering and the
+        per-image restore). Returning an empty dict keeps the annotation
         controller's save flow functional in the meantime.
         """
         return {}
@@ -416,9 +442,116 @@ class MainWindow(QMainWindow):
     def apply_loaded_detections(self, detections: dict) -> None:
         """Hand the deserialised detection blocks back to the orchestrator/viewer.
 
-        Placeholder: the orchestrator + per-plugin restore path lands in
-        the next refactor step.
+        Placeholder: the per-image restore path lands in the next refactor step.
         """
+
+    # ----- Auto Detect mode: plugin resolution, run dispatch, signal forwarding -----
+
+    def _apply_enabled_plugins(self, detectors_settings: dict) -> None:
+        """Resolve enabled plugins from project settings and (re)build the Auto Detect stack.
+
+        ``detectors_settings`` is the ``"detectors"`` block from the project
+        settings file: ``{target: {"plugin": name, "params": {...}}, ...}``.
+        Targets whose plugin is ``"disabled"`` are skipped. An unknown
+        plugin name raises ``RuntimeError`` — silent skipping would hide
+        typos in the project file.
+
+        The previous Auto Detect panel stack is replaced, its widgets are
+        scheduled for deletion (their signal connections drop with them),
+        and the orchestrator is refreshed via ``set_enabled_plugins``.
+        """
+        self._enabled_plugins = {}
+        panels: list[tuple[str, QWidget]] = []
+        for target in DETECTOR_TARGETS:
+            entry = detectors_settings.get(target) or {}
+            plugin_name = entry.get("plugin", "disabled")
+            if plugin_name == "disabled":
+                continue
+            plugin = self.plugin_manager.get(plugin_name)
+            if plugin is None:
+                raise RuntimeError(
+                    f"project settings reference unknown plugin {plugin_name!r} for target {target!r}; "
+                    f"available: {sorted(self.plugin_manager.all())}",
+                )
+            if plugin.target != target:
+                raise RuntimeError(
+                    f"plugin {plugin_name!r} targets {plugin.target!r} but is configured for {target!r}",
+                )
+            self._enabled_plugins[target] = plugin
+            panel = plugin.make_panel(self)
+            panel.set_params(entry.get("params", {}))
+            panel.params_changed.connect(
+                # ``name`` and ``target`` are captured at connect time so the
+                # closure stays valid even after the panel widget is replaced.
+                lambda params, name=plugin.name, target_=plugin.target: self._on_plugin_params_changed(
+                    name,
+                    target_,
+                    params,
+                ),
+            )
+            panels.append((plugin.name, panel))
+        self.annotation_controls.set_auto_detect_panels(panels)
+        self.orchestrator.set_enabled_plugins(dict(self._enabled_plugins))
+
+    def _on_plugin_params_changed(self, plugin_name: str, target: Target, params: dict) -> None:
+        """Buffer the latest params for ``plugin_name`` and (re)start the debounce."""
+        self._pending_run_one = (plugin_name, dict(params))
+        self._auto_detect_debounce.start()
+        self.set_annotation_modified(True)
+        # Target is carried only to short-circuit the dispatch lookup; the
+        # _on_auto_detect_debounce_fired path re-resolves it from
+        # _enabled_plugins so a stale plugin (after a project reload) does
+        # not leak into the orchestrator.
+        del target
+
+    def _on_auto_detect_debounce_fired(self) -> None:
+        """Dispatch the buffered run_one to the orchestrator.
+
+        Skipped silently when no image grayscale is available (no image
+        loaded yet) or the plugin was disabled between buffering and firing.
+        """
+        pending = self._pending_run_one
+        self._pending_run_one = None
+        if pending is None:
+            return
+        plugin_name, params = pending
+        image = self.image_viewer.get_current_image_grayscale()
+        if image is None:
+            return
+        plugin = self.plugin_manager.get(plugin_name)
+        if plugin is None or self._enabled_plugins.get(plugin.target) is not plugin:
+            return
+        self.orchestrator.run_one(plugin.target, image, params)
+
+    def _on_run_auto_detect(self) -> None:
+        """Run every enabled plugin in dependency order on the current image."""
+        image = self.image_viewer.get_current_image_grayscale()
+        if image is None:
+            self.statusBar().showMessage("Auto Detect: no image loaded.", 5000)
+            return
+        per_target_params: dict[Target, dict] = {}
+        for target, plugin in self._enabled_plugins.items():
+            panel = self.annotation_controls.auto_detect_panel(plugin.name)
+            if panel is not None:
+                per_target_params[target] = panel.current_params()
+        # Pending live re-runs would race against the chain; drop them.
+        self._pending_run_one = None
+        self._auto_detect_debounce.stop()
+        self.orchestrator.run_all(image, per_target_params)
+
+    def _on_plugin_ready(self, target: str, result: dict) -> None:
+        """Surface a successful detection in the status bar.
+
+        Overlay rendering on the image viewer lands in the next refactor
+        step; for now the only user-visible feedback is a transient
+        status-bar message. ``result`` is not consumed here.
+        """
+        del result
+        self.statusBar().showMessage(f"Auto Detect: {target} updated.", 2000)
+
+    def _on_plugin_failed(self, target: str) -> None:
+        """Surface a detection failure (None result or unmet dependency) in the status bar."""
+        self.statusBar().showMessage(f"Auto Detect: {target} failed at current parameters.", 5000)
 
     def get_current_screen(self) -> QScreen | None:
         """Get the screen that currently contains the window."""

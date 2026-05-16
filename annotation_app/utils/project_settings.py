@@ -33,11 +33,14 @@ PROJECT_SETTINGS_FILENAME = ".eye_annotation_project.json"
 # Anatomical targets the project can configure a detector plugin for.
 DETECTOR_TARGETS = ("pupil", "glint", "limbus", "eyelid")
 
-DEFAULT_PROJECT_SETTINGS = {
-    "single_eye_mode": False,
-    "autosave": False,
-    "current_mode": "manual",
-    "detectors": {target: {"plugin": "disabled", "params": {}} for target in DETECTOR_TARGETS},
+# Default plugin slug per target. ``"disabled"`` means the target is off for
+# this project. Pupil defaults to the threshold-based detector since every
+# downstream target depends on a pupil result.
+DEFAULT_DETECTOR_PLUGINS: dict[str, str] = {
+    "pupil": "threshold_pupil",
+    "glint": "disabled",
+    "limbus": "disabled",
+    "eyelid": "disabled",
 }
 
 
@@ -47,12 +50,14 @@ def project_settings_path(project_dir: str | Path) -> Path:
 
 
 def _default_settings() -> dict:
-    """Return a fresh deep copy of :data:`DEFAULT_PROJECT_SETTINGS`."""
+    """Return a fresh deep dict of the project-settings defaults."""
     return {
         "single_eye_mode": False,
         "autosave": False,
         "current_mode": "manual",
-        "detectors": {target: {"plugin": "disabled", "params": {}} for target in DETECTOR_TARGETS},
+        "detectors": {
+            target: {"plugin": DEFAULT_DETECTOR_PLUGINS[target], "params": {}} for target in DETECTOR_TARGETS
+        },
     }
 
 

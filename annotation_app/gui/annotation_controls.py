@@ -43,6 +43,10 @@ class AnnotationControlPanel(QWidget):
     clear_selected_annotation_requested = pyqtSignal()
     # Emitted when the top mode switcher flips. Carries one of the MODE_* slugs.
     mode_changed = pyqtSignal(str)
+    # Emitted when the user clicks the "Run Auto Detect" button at the bottom
+    # of the Auto Detect page. MainWindow gathers params and calls the
+    # orchestrator's run_all.
+    auto_detect_run_requested = pyqtSignal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
         """Initialise the AnnotationControlPanel."""
@@ -154,17 +158,69 @@ class AnnotationControlPanel(QWidget):
         return page
 
     def _build_auto_detect_page(self) -> QWidget:
-        """Placeholder for the Auto Detect page until the orchestrator wires plugins in."""
+        """Build the Auto Detect page: a dynamic stack of plugin panels + Run button.
+
+        The stack starts empty; ``set_auto_detect_panels`` is called by
+        MainWindow on every project-settings change to install the panels
+        for the currently enabled plugins. The Run Auto Detect button is
+        permanently mounted at the bottom of the page.
+        """
         page = QWidget()
         layout = QVBoxLayout()
         layout.setContentsMargins(0, 0, 0, 0)
-        placeholder = QLabel("Auto Detect plugins will appear here when enabled in project settings.")
-        placeholder.setWordWrap(True)
-        placeholder.setStyleSheet("QLabel { color: #888888; padding: 12px; }")
-        layout.addWidget(placeholder)
+
+        # Container that holds one plugin panel per enabled target. Replaced
+        # wholesale by set_auto_detect_panels — old widgets are deleted so
+        # their signal connections drop with them.
+        self._auto_detect_panels_container = QVBoxLayout()
+        self._auto_detect_panels_container.setContentsMargins(0, 0, 0, 0)
+        layout.addLayout(self._auto_detect_panels_container)
+
+        # Empty-state notice; hidden once any panel is mounted.
+        self._auto_detect_empty_label = QLabel(
+            "No Auto Detect plugin is enabled for this project.",
+        )
+        self._auto_detect_empty_label.setWordWrap(True)
+        self._auto_detect_empty_label.setStyleSheet("QLabel { color: #888888; padding: 12px; }")
+        layout.addWidget(self._auto_detect_empty_label)
+
         layout.addStretch(1)
+
+        self.run_auto_detect_button = MaterialButton("Run Auto Detect")
+        self.run_auto_detect_button.clicked.connect(self.auto_detect_run_requested.emit)
+        layout.addWidget(self.run_auto_detect_button)
+
         page.setLayout(layout)
+        self._auto_detect_panels: dict[str, QWidget] = {}
         return page
+
+    def set_auto_detect_panels(self, panels: list[tuple[str, QWidget]]) -> None:
+        """Replace the Auto Detect page's plugin-panel stack.
+
+        ``panels`` is a list of ``(plugin_name, panel_widget)`` pairs in the
+        order they should be displayed top-to-bottom. Previously installed
+        panel widgets are removed from the layout and scheduled for
+        deletion via ``deleteLater`` so their signal connections drop.
+        """
+        while self._auto_detect_panels_container.count():
+            item = self._auto_detect_panels_container.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
+        self._auto_detect_panels.clear()
+        for name, widget in panels:
+            self._auto_detect_panels_container.addWidget(widget)
+            self._auto_detect_panels[name] = widget
+        self._auto_detect_empty_label.setVisible(not panels)
+        self.run_auto_detect_button.setEnabled(bool(panels))
+
+    def auto_detect_panel(self, plugin_name: str) -> QWidget | None:
+        """Return the currently mounted Auto Detect panel for ``plugin_name``, or None."""
+        return self._auto_detect_panels.get(plugin_name)
+
+    def auto_detect_plugin_names(self) -> list[str]:
+        """Return the slugs of every currently mounted Auto Detect plugin."""
+        return list(self._auto_detect_panels.keys())
 
     def set_current_annotation(self, annotation_type: str) -> None:
         """Tick the radio for ``annotation_type`` (pupil/limbus/eyelid_contour/glint)."""
