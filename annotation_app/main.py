@@ -24,13 +24,15 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         ),
     )
     parser.add_argument(
-        "--folder",
+        "--folders",
         type=Path,
+        nargs="+",
         default=None,
         help=(
-            "Folder to load on startup (same effect as clicking Load Folder). "
-            "Recursively picks up every supported image; per-project settings "
-            "from this folder are applied."
+            "One or more folders to load on startup (same effect as clicking "
+            "Load Folder, repeated). Each is walked recursively for supported "
+            "images and the union is presented as a single sorted session. "
+            "Per-project settings are taken from the first folder."
         ),
     )
     return parser.parse_args(argv)
@@ -47,8 +49,8 @@ def run_app() -> None:
 
     main_window = MainWindow(cli_single_eye=args.single_eye)
     main_window.show()
-    if args.folder is not None:
-        main_window.load_folder_path(str(args.folder))
+    if args.folders is not None:
+        main_window.load_folder_paths([str(p) for p in args.folders])
     sys.exit(app.exec_())
 
 

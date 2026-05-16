@@ -7,13 +7,17 @@ from PyQt5.QtCore import QEvent, QRect, Qt, QThread, QTimer, pyqtSignal
 from PyQt5.QtGui import QCloseEvent, QIcon, QPixmap, QScreen
 from PyQt5.QtWidgets import (
     QApplication,
+    QButtonGroup,
     QCheckBox,
+    QDialog,
+    QDialogButtonBox,
     QFileDialog,
     QHBoxLayout,
     QLabel,
     QListWidget,
     QMainWindow,
     QMessageBox,
+    QRadioButton,
     QScrollArea,
     QStatusBar,
     QVBoxLayout,
@@ -62,7 +66,10 @@ class MainWindow(QMainWindow):
         self._cli_single_eye = bool(cli_single_eye)
         self.single_eye_mode = self._cli_single_eye
         self.autosave_enabled = False
-        self.project_dir: str | None = None
+        # All folders loaded for the current session. Project-settings writes
+        # propagate to every entry so any one of them can be reopened later
+        # with the same configuration.
+        self.project_dirs: list[str] = []
 
         self.setup_ui()
         self.setup_variables()
@@ -170,6 +177,16 @@ class MainWindow(QMainWindow):
         self.current_image_index = -1
         self.annotation_modified = False
 
+    @property
+    def project_dir(self) -> str | None:
+        """Primary (first) loaded project dir, or None if no folders are loaded."""
+        return self.project_dirs[0] if self.project_dirs else None
+
+    def _save_to_all_projects(self, settings: dict) -> None:
+        """Persist ``settings`` to every loaded project folder."""
+        for project_dir in self.project_dirs:
+            save_project_settings(project_dir, settings)
+
     def set_annotation_modified(self, modified: bool) -> None:
         """Set the annotation modified flag and refresh the GUI save-state indicator."""
         self.annotation_modified = modified
@@ -259,50 +276,80 @@ class MainWindow(QMainWindow):
             self.load_current_image()
 
     def load_folder(self) -> None:
-        """Pick a folder via dialog and load every supported image recursively."""
+        """Pick a folder via dialog and load every supported image (non-recursive)."""
         folder = QFileDialog.getExistingDirectory(self, "Select Image Folder", "")
         if folder:
-            self.load_folder_path(folder)
+            self.load_folder_paths([folder])
 
-    def load_folder_path(self, folder: str) -> None:
-        """Recursively load every supported image under ``folder``.
+    def load_folder_paths(self, folders: list[str]) -> None:
+        """Load every supported image directly inside each of ``folders``.
 
-        Used by both the Load Folder dialog and the ``--folder`` CLI flag.
-        The chosen folder is the project root (project settings live here),
-        not whichever subdir an image happens to be in.
+        Listing is non-recursive — subdirectories are ignored. The aggregated
+        image list is sorted lexicographically. If the loaded folders carry
+        different project-settings files, the user is asked which to use and
+        the chosen settings are written back to every folder.
         """
-        folder_path = Path(folder)
-        image_paths = sorted(
-            str(p) for p in folder_path.rglob("*") if p.is_file() and p.suffix.lower() in self.IMAGE_SUFFIXES
-        )
+        if not folders:
+            return
+        suffixes = self.IMAGE_SUFFIXES
+        seen: set[str] = set()
+        for folder in folders:
+            for p in Path(folder).iterdir():
+                if p.is_file() and p.suffix.lower() in suffixes:
+                    seen.add(str(p))
+        image_paths = sorted(seen)
         if not image_paths:
             QMessageBox.warning(
                 self,
                 "No Images Found",
-                f"No image files found under {folder_path}.",
+                "No image files found in: " + ", ".join(str(Path(f)) for f in folders),
             )
+            return
+        if not self._apply_project_settings([str(Path(f)) for f in folders]):
             return
         self.image_paths = image_paths
         self.current_image_index = 0
-        self._apply_project_settings(str(folder_path))
         self.update_image_list()
         self.load_current_image()
 
     def _load_project_settings_from(self, image_path: str) -> None:
         """Read the project settings file in the image's folder and apply it."""
-        self._apply_project_settings(str(Path(image_path).parent))
+        self._apply_project_settings([str(Path(image_path).parent)])
 
-    def _apply_project_settings(self, project_dir: str) -> None:
-        """Set the active project directory and apply every value in its file.
+    def _apply_project_settings(self, project_dirs: list[str]) -> bool:
+        """Apply project settings across ``project_dirs`` and propagate to all of them.
 
-        Applies both ``single_eye_mode`` (CLI ``--single-eye`` still wins so
-        an explicit invocation override is never silently downgraded) and
-        the per-project auto-detector choices. Detector overrides are pushed
-        into ``settings_handler`` so the rest of the app sees them, and the
-        Auto Detectors menu is refreshed.
+        Loads each folder's settings file; if non-empty configs differ, asks
+        the user which one to use as the source (default = first). The chosen
+        settings are immediately written to every folder so any of them can be
+        reopened later with the same configuration.
+
+        Returns ``False`` if the user cancels the chooser dialog; ``True``
+        otherwise (including the no-conflict path).
         """
-        self.project_dir = project_dir
-        project_settings = load_project_settings(project_dir)
+        if not project_dirs:
+            self.project_dirs = []
+            return True
+        per_dir = {d: load_project_settings(d) for d in project_dirs}
+        # Group folders by configuration. Stable order = order of first
+        # appearance, so the first folder's settings stay the default.
+        groups: list[tuple[dict, list[str]]] = []
+        for d, settings in per_dir.items():
+            for cfg, dirs in groups:
+                if cfg == settings:
+                    dirs.append(d)
+                    break
+            else:
+                groups.append((settings, [d]))
+        if len(groups) == 1:
+            chosen = groups[0][0]
+        else:
+            chosen = self._choose_settings_among(groups)
+            if chosen is None:
+                return False
+        self.project_dirs = list(project_dirs)
+        self._save_to_all_projects(chosen)
+        project_settings = chosen
         effective_single_eye = self._cli_single_eye or bool(project_settings.get("single_eye_mode", False))
         self._apply_single_eye_mode(effective_single_eye)
         detectors_changed = False
@@ -326,6 +373,40 @@ class MainWindow(QMainWindow):
         self.autosave_checkbox.blockSignals(True)
         self.autosave_checkbox.setChecked(autosave)
         self.autosave_checkbox.blockSignals(False)
+        return True
+
+    def _choose_settings_among(self, groups: list[tuple[dict, list[str]]]) -> dict | None:
+        """Modal radio chooser when loaded folders carry different settings.
+
+        ``groups`` is a list of ``(settings, [folders])`` tuples. Defaults to
+        the first group. Returns the chosen settings dict, or ``None`` if the
+        user cancels.
+        """
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Project settings differ")
+        layout = QVBoxLayout(dialog)
+        layout.addWidget(
+            QLabel(
+                "The selected folders carry different project settings. Pick the\n"
+                "configuration to use — it will be saved to all loaded folders."
+            )
+        )
+        button_group = QButtonGroup(dialog)
+        for i, (cfg, dirs) in enumerate(groups):
+            preview_pairs = [f"{k}={v}" for k, v in cfg.items()]
+            preview = ", ".join(preview_pairs) if preview_pairs else "(defaults)"
+            radio = QRadioButton(f"{', '.join(Path(d).name for d in dirs)}\n    {preview}")
+            if i == 0:
+                radio.setChecked(True)
+            button_group.addButton(radio, i)
+            layout.addWidget(radio)
+        button_box = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        button_box.accepted.connect(dialog.accept)
+        button_box.rejected.connect(dialog.reject)
+        layout.addWidget(button_box)
+        if dialog.exec_() != QDialog.Accepted:
+            return None
+        return groups[button_group.checkedId()][0]
 
     def _apply_single_eye_mode(self, enabled: bool) -> None:
         """Propagate the single-eye flag to the dependent widgets."""
@@ -341,10 +422,10 @@ class MainWindow(QMainWindow):
             if self.single_eye_mode:
                 self._apply_single_eye_mode(False)
             self.image_viewer.switch_eye(eye)
-        if self.project_dir is not None:
+        if self.project_dirs:
             settings = load_project_settings(self.project_dir)
             settings["single_eye_mode"] = self.single_eye_mode
-            save_project_settings(self.project_dir, settings)
+            self._save_to_all_projects(settings)
 
     def update_image_list(self) -> None:
         """Update the image list widget with current image paths.
@@ -390,10 +471,10 @@ class MainWindow(QMainWindow):
     def _on_autosave_changed(self, enabled: bool) -> None:
         """Persist the autosave toggle in project settings."""
         self.autosave_enabled = enabled
-        if self.project_dir is not None:
+        if self.project_dirs:
             project_settings = load_project_settings(self.project_dir)
             project_settings["autosave"] = enabled
-            save_project_settings(self.project_dir, project_settings)
+            self._save_to_all_projects(project_settings)
 
     def get_current_tuning(self) -> dict | None:
         """Collect Manual-Threshold state for persistence; ``None`` if nothing to save."""
@@ -501,10 +582,10 @@ class MainWindow(QMainWindow):
             if saved is not None and saved != self.single_eye_mode:
                 self._apply_single_eye_mode(saved)
         # Persist the new mode for this project.
-        if self.project_dir is not None:
+        if self.project_dirs:
             project_settings = load_project_settings(self.project_dir)
             project_settings["current_mode"] = mode
-            save_project_settings(self.project_dir, project_settings)
+            self._save_to_all_projects(project_settings)
 
     def _on_pupil_roi_mode_changed(self, active: bool) -> None:
         """Activate or deactivate pupil-ROI drag editing on the image viewer."""
@@ -575,10 +656,10 @@ class MainWindow(QMainWindow):
         the same project later restores the same detectors.
         """
         self.settings_handler.set_setting(detector_type, detector_name)
-        if self.project_dir is not None and detector_type in PROJECT_DETECTOR_KEYS:
+        if self.project_dirs and detector_type in PROJECT_DETECTOR_KEYS:
             project_settings = load_project_settings(self.project_dir)
             project_settings[detector_type] = detector_name
-            save_project_settings(self.project_dir, project_settings)
+            self._save_to_all_projects(project_settings)
         self.menu_handler.update_menu_checks()
         self._sync_auto_detector_buttons()
 
