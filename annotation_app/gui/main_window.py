@@ -254,6 +254,8 @@ class MainWindow(QMainWindow):
         self._mt_worker.detection_failed.connect(self._on_manual_threshold_detection_failed)
         self.image_viewer.image_loaded.connect(self._on_image_loaded_for_manual_threshold)
         panel.detect_requested.connect(self._kick_detection_if_active)
+        panel.show_pupil_mask_toggled.connect(self.image_viewer.set_show_pupil_mask)
+        panel.show_glint_mask_toggled.connect(self.image_viewer.set_show_glint_mask)
 
         # Pupil/Glint ROI flow: panel toggle -> viewer drag-edit mode; viewer
         # roi changes -> re-trigger detection with the new ROI.
@@ -645,6 +647,11 @@ class MainWindow(QMainWindow):
         save prompt (or autosave). Skipped exactly once after a tuning was
         restored from disk — that first re-run is in sync with the file.
         """
+        # Split the saved-state fields (which go through the JSON tuning file)
+        # from the transient binary masks (view-only — never persisted).
+        pupil_mask = payload.pop("pupil_mask", None)
+        glint_search_area = payload.pop("glint_search_area", None)
+        self.image_viewer.set_threshold_masks(pupil_mask, glint_search_area)
         self.image_viewer.set_manual_threshold_detection(payload)
         self.annotation_controls.manual_threshold_panel.set_detect_button_enabled(False)
         self.statusBar().clearMessage()

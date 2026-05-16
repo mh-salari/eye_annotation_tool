@@ -5,7 +5,7 @@ from collections import deque
 import cv2
 import numpy as np
 from PyQt5.QtCore import QEvent, QPoint, QPointF, QSizeF, Qt, pyqtSignal
-from PyQt5.QtGui import QColor, QKeyEvent, QPainter, QPen, QPixmap
+from PyQt5.QtGui import QColor, QImage, QKeyEvent, QPainter, QPen, QPixmap
 from PyQt5.QtWidgets import QLabel, QMessageBox, QScrollArea, QVBoxLayout, QWidget
 
 from ..utils.image_processing import find_closest_point, fit_ellipse
@@ -124,6 +124,15 @@ class ImageViewer(QWidget):
         self._is_manual_threshold_mode = False
 
         self.manual_threshold_detection: dict | None = None
+        # Transient view-only masks (numpy uint8, 0/255) carried separately
+        # from manual_threshold_detection so they never leak into the saved
+        # JSON. Each one paints as a semi-transparent fill when its toggle
+        # is on; the two toggles are independent so the user can see either
+        # mask alone or both together.
+        self._mt_pupil_mask: np.ndarray | None = None
+        self._mt_glint_search_area: np.ndarray | None = None
+        self._show_pupil_mask = False
+        self._show_glint_mask = False
 
         # Manual Threshold per-image ROIs. ``_mt_active_roi`` names which one
         # (if any) is currently in drag-edit mode — toggled via the panel.
@@ -152,13 +161,15 @@ class ImageViewer(QWidget):
         # manual annotations so the visual language stays consistent: pupil
         # in teal, glints in orange, limbus in dark purple.
         self.mt_pupil_color = self.pupil_ellipse_color
-        self.mt_pupil_center_color = self.pupil_color
-        self.mt_glint_color = self.glint_color
+        self.mt_pupil_center_color = QColor(40, 220, 60, 255)  # green
+        self.mt_glint_color = QColor(255, 40, 40, 255)  # red
         self.mt_limbus_color = self.limbus_ellipse_color
         # Manual Threshold ROIs: yellow rectangle for the pupil search region,
         # orange-red for the glint search region.
-        self.pupil_roi_color = QColor(255, 220, 0, 255)
-        self.glint_roi_color = QColor(255, 100, 60, 255)
+        # ROIs share the hue of the corresponding centre marker so it's obvious
+        # at a glance which ROI controls which detection.
+        self.pupil_roi_color = QColor(40, 220, 60, 255)  # green, matches pupil centre
+        self.glint_roi_color = QColor(255, 40, 40, 255)  # red, matches glint centre
         self.glint_select_color = QColor(255, 215, 0, 255)  # Gold
 
         self.roi_color = QColor(0, 188, 212, 255)  # Cyan
@@ -608,6 +619,30 @@ class ImageViewer(QWidget):
         Passing ``None`` clears the overlay.
         """
         self.manual_threshold_detection = detection
+        if detection is None:
+            self._mt_pupil_mask = None
+            self._mt_glint_search_area = None
+        self.update_image()
+
+    def set_threshold_masks(
+        self,
+        pupil_mask: np.ndarray | None,
+        glint_search_area: np.ndarray | None,
+    ) -> None:
+        """Store the binary masks rendered by the per-mask toggles."""
+        self._mt_pupil_mask = pupil_mask
+        self._mt_glint_search_area = glint_search_area
+        if self._show_pupil_mask or self._show_glint_mask:
+            self.update_image()
+
+    def set_show_pupil_mask(self, on: bool) -> None:
+        """Toggle the pupil threshold-mask overlay."""
+        self._show_pupil_mask = bool(on)
+        self.update_image()
+
+    def set_show_glint_mask(self, on: bool) -> None:
+        """Toggle the glint threshold-mask overlay."""
+        self._show_glint_mask = bool(on)
         self.update_image()
 
     def eventFilter(self, source: QWidget, event: QEvent) -> bool:  # noqa: N802
@@ -676,6 +711,12 @@ class ImageViewer(QWidget):
             self._draw_named_roi(painter, self.pupil_roi, self.pupil_roi_color, "pupil")
         if self.glint_roi:
             self._draw_named_roi(painter, self.glint_roi, self.glint_roi_color, "glint")
+
+        # Threshold-mask overlays (under the markers so the user can read
+        # where each mask falls + see the detected center on top). Each toggle
+        # is independent so either mask can be shown alone.
+        if self._show_pupil_mask or self._show_glint_mask:
+            self._draw_threshold_masks(painter)
 
         # Manual Threshold live detection overlay (on top of everything else
         # so the user can see it against any manual annotation underneath).
@@ -869,6 +910,35 @@ class ImageViewer(QWidget):
         painter.setPen(QPen(self.mt_glint_color, 3, Qt.SolidLine))
         for gx, gy in glints:
             painter.drawEllipse(QPointF(gx * self.factor, gy * self.factor), 1.5, 1.5)
+
+    def _draw_threshold_masks(self, painter: QPainter) -> None:
+        """Paint each enabled threshold-mask overlay as a semi-transparent fill."""
+        # Cyan reads on the dark pupil region; magenta reads on the bright glint.
+        if self._show_pupil_mask:
+            self._draw_mask(painter, self._mt_pupil_mask, QColor(0, 200, 220, 64))
+        if self._show_glint_mask:
+            self._draw_mask(painter, self._mt_glint_search_area, QColor(255, 0, 200, 110))
+
+    def _draw_mask(self, painter: QPainter, mask: np.ndarray | None, color: QColor) -> None:
+        """Convert a uint8 0/255 mask into a transparent coloured QPixmap and blit it."""
+        if mask is None or mask.size == 0:
+            return
+        h, w = mask.shape[:2]
+        rgba = np.zeros((h, w, 4), dtype=np.uint8)
+        bool_mask = mask > 0
+        rgba[bool_mask, 0] = color.red()
+        rgba[bool_mask, 1] = color.green()
+        rgba[bool_mask, 2] = color.blue()
+        rgba[bool_mask, 3] = color.alpha()
+        rgba = np.ascontiguousarray(rgba)
+        qimg = QImage(rgba.data, w, h, w * 4, QImage.Format_RGBA8888)
+        scaled = QPixmap.fromImage(qimg).scaled(
+            int(w * self.factor),
+            int(h * self.factor),
+            Qt.IgnoreAspectRatio,
+            Qt.FastTransformation,
+        )
+        painter.drawPixmap(0, 0, scaled)
 
     def fit_annotation(self) -> bool:
         """Fit an ellipse to the current annotation points."""

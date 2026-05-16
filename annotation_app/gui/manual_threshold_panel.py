@@ -13,6 +13,7 @@ from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtWidgets import (
     QAbstractSpinBox,
     QButtonGroup,
+    QCheckBox,
     QGroupBox,
     QHBoxLayout,
     QLabel,
@@ -49,6 +50,8 @@ class ManualThresholdPanel(QGroupBox):
 
     params_changed = pyqtSignal(dict)
     detect_requested = pyqtSignal()
+    show_pupil_mask_toggled = pyqtSignal(bool)
+    show_glint_mask_toggled = pyqtSignal(bool)
     # Pupil/Glint ROI mode toggles. Bool payload: True = activate that ROI's
     # drag-edit mode, False = deactivate. Only one ROI active at a time
     # (enforced inside the panel via mutex on toggle).
@@ -189,6 +192,20 @@ class ManualThresholdPanel(QGroupBox):
         glint_row.addWidget(self.glint_roi_button)
         glint_row.addWidget(self.clear_glint_roi_button)
         layout.addLayout(glint_row)
+
+        # Threshold-mask overlays: independent toggles for the pupil mask and
+        # the glint search area, so the user can isolate either one to see
+        # what its threshold is selecting.
+        masks_row = QHBoxLayout()
+        masks_row.addWidget(QLabel("Show mask:"))
+        self.show_pupil_mask_checkbox = QCheckBox("pupil")
+        self.show_pupil_mask_checkbox.toggled.connect(self.show_pupil_mask_toggled.emit)
+        masks_row.addWidget(self.show_pupil_mask_checkbox)
+        self.show_glint_mask_checkbox = QCheckBox("glint")
+        self.show_glint_mask_checkbox.toggled.connect(self.show_glint_mask_toggled.emit)
+        masks_row.addWidget(self.show_glint_mask_checkbox)
+        masks_row.addStretch()
+        layout.addLayout(masks_row)
 
         # Explicit detection trigger. Opening a fresh image does not auto-detect,
         # so the displayed overlay is unambiguous: present = loaded from disk

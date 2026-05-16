@@ -373,10 +373,17 @@ def detect_pupil_and_glints(
             ellipse = cv2.fitEllipse(c) if len(c) >= 5 else None
             glints.append({"contour": c, "center": (cx, cy), "ellipse": ellipse})
 
+    # Surface the binary masks so callers can show the user what the current
+    # thresholds actually select. ``glint_search_area`` is the intersection of
+    # the bright mask with the glint search region — exactly the pixels that
+    # are evaluated for glint candidates.
+    glint_search_area = cv2.bitwise_and(glint_mask, glint_search_mask)
     return {
         "pupil_contour": pupil_contour,
         "pupil_center": pupil_center,
         "pupil_ellipse": pupil_ellipse,
         "glints": glints,
         "limbus": limbus,
+        "pupil_mask": pupil_mask,
+        "glint_search_area": glint_search_area,
     }

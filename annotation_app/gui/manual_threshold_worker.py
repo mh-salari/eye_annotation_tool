@@ -44,11 +44,16 @@ class DetectionWorker(QObject):
         # Limbus is computed inside detect_pupil_and_glints (it's needed for
         # positive glint_margin_ratio scaling). ``pupil_contour`` is omitted —
         # it's an ndarray, not JSON serialisable for the tuning save path.
+        # ``pupil_mask`` and ``glint_search_area`` are numpy arrays kept on
+        # the payload for live in-process overlay rendering and stripped
+        # before any save path that needs to be JSON serialisable.
         payload = {
             "pupil_center": list(result["pupil_center"]),
             "pupil_ellipse": _ellipse_to_json(result["pupil_ellipse"]),
             "glints": [list(g["center"]) for g in result["glints"]],
             "limbus": result.get("limbus"),
+            "pupil_mask": result.get("pupil_mask"),
+            "glint_search_area": result.get("glint_search_area"),
         }
         self.detection_ready.emit(payload)
 
