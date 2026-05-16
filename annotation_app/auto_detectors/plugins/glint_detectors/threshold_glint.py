@@ -68,6 +68,7 @@ DEFAULTS: dict = {
     "keep_below": True,
     "keep_left": True,
     "keep_right": True,
+    "filter_margin_px": 5,
     "coalesce_into_one": True,
     "split_widest_for_target": False,
 }
@@ -99,6 +100,7 @@ class _ThresholdGlintPanel(QGroupBox):
         layout.addLayout(self._build_method_row())
         layout.addLayout(self._build_max_area_row())
         layout.addLayout(self._build_keep_row())
+        layout.addLayout(self._build_filter_margin_row())
         layout.addLayout(self._build_flags_row())
 
         self.show_mask_check = QCheckBox("Show mask")
@@ -237,6 +239,27 @@ class _ThresholdGlintPanel(QGroupBox):
         box.toggled.connect(lambda checked, h=half: self._on_keep_changed(h, checked))
         return box
 
+    def _build_filter_margin_row(self) -> QHBoxLayout:
+        row = QHBoxLayout()
+        label = QLabel("Filter margin (px):")
+        label.setMinimumWidth(110)
+        label.setToolTip(
+            "When only one half of an axis is kept (e.g. only 'below'), a "
+            "glint whose centroid sits within this many pixels past the "
+            "pupil-centre line on the opposite side still passes the filter.",
+        )
+        row.addWidget(label)
+        self.filter_margin_spin = QSpinBox()
+        self.filter_margin_spin.setRange(0, 100)
+        self.filter_margin_spin.setValue(self._params["filter_margin_px"])
+        self.filter_margin_spin.setButtonSymbols(QAbstractSpinBox.NoButtons)
+        self.filter_margin_spin.setMinimumWidth(60)
+        self.filter_margin_spin.setMaximumWidth(90)
+        self.filter_margin_spin.valueChanged.connect(self._on_filter_margin_changed)
+        row.addWidget(self.filter_margin_spin)
+        row.addStretch()
+        return row
+
     def _build_flags_row(self) -> QVBoxLayout:
         # Two boolean refiners stacked vertically — each gets its own
         # row so the label has space to read.
@@ -291,6 +314,10 @@ class _ThresholdGlintPanel(QGroupBox):
         self._params[f"keep_{half}"] = bool(checked)
         self.params_changed.emit(dict(self._params))
 
+    def _on_filter_margin_changed(self, value: int) -> None:
+        self._params["filter_margin_px"] = int(value)
+        self.params_changed.emit(dict(self._params))
+
     def _on_coalesce_changed(self, checked: bool) -> None:
         self._params["coalesce_into_one"] = bool(checked)
         self.params_changed.emit(dict(self._params))
@@ -324,6 +351,7 @@ class _ThresholdGlintPanel(QGroupBox):
             self.keep_below_box,
             self.keep_left_box,
             self.keep_right_box,
+            self.filter_margin_spin,
             self.coalesce_check,
             self.split_widest_check,
         )
@@ -362,6 +390,9 @@ class _ThresholdGlintPanel(QGroupBox):
                 if key in params:
                     box.setChecked(bool(params[key]))
                     self._params[key] = bool(params[key])
+            if "filter_margin_px" in params:
+                self.filter_margin_spin.setValue(int(params["filter_margin_px"]))
+                self._params["filter_margin_px"] = int(params["filter_margin_px"])
             if "coalesce_into_one" in params:
                 self.coalesce_check.setChecked(bool(params["coalesce_into_one"]))
                 self._params["coalesce_into_one"] = bool(params["coalesce_into_one"])
@@ -421,6 +452,7 @@ class ThresholdGlint(DetectorPlugin):
             keep_below=bool(params["keep_below"]),
             keep_left=bool(params["keep_left"]),
             keep_right=bool(params["keep_right"]),
+            filter_margin_px=int(params["filter_margin_px"]),
             glints_target=int(params["glints_target"]),
             coalesce_into_one=bool(params["coalesce_into_one"]),
             split_widest_for_target=bool(params["split_widest_for_target"]),
