@@ -39,6 +39,7 @@ from PyQt5.QtWidgets import (
 )
 
 from annotation_app.auto_detectors.plugin_interface import DetectorPlugin
+from annotation_app.gui.custom_widgets import MaterialButton
 
 # Same shape as the pupil plugin's centre-method dropdown — the four
 # methods come from pgd's _contour_center helper, which both plugins
@@ -71,6 +72,10 @@ DEFAULTS: dict = {
     "filter_margin_px": 5,
     "coalesce_into_one": True,
     "split_widest_for_target": False,
+    # An ``(x, y, w, h)`` tuple set by the canvas drag handler, or None
+    # when no ROI is active. Intersects with the pupil-centred search
+    # disk in pgd.detect_glints.
+    "glint_roi": None,
 }
 
 
@@ -82,6 +87,13 @@ class _ThresholdGlintPanel(QGroupBox):
     # forwards to the image viewer so the threshold mask paint path is
     # gated independently per plugin.
     show_mask_toggled = pyqtSignal(bool)
+    # Emitted when the user toggles the "Glint ROI" button. The image
+    # viewer puts itself in drag-edit mode for the glint ROI rectangle
+    # while this is True.
+    roi_edit_requested = pyqtSignal(bool)
+    # Emitted when the user clicks Clear next to the ROI button — the
+    # canvas drops the rectangle and the plugin re-runs without it.
+    clear_roi_requested = pyqtSignal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
         """Build the panel widgets and seed them with :data:`DEFAULTS`."""
@@ -102,6 +114,7 @@ class _ThresholdGlintPanel(QGroupBox):
         layout.addLayout(self._build_keep_row())
         layout.addLayout(self._build_filter_margin_row())
         layout.addLayout(self._build_flags_row())
+        layout.addLayout(self._build_roi_row())
 
         self.show_mask_check = QCheckBox("Show mask")
         self.show_mask_check.setChecked(False)
@@ -109,6 +122,17 @@ class _ThresholdGlintPanel(QGroupBox):
         layout.addWidget(self.show_mask_check)
 
         self.setLayout(layout)
+
+    def _build_roi_row(self) -> QHBoxLayout:
+        row = QHBoxLayout()
+        self.roi_button = MaterialButton("Glint ROI")
+        self.roi_button.setCheckable(True)
+        self.roi_button.toggled.connect(self.roi_edit_requested.emit)
+        self.clear_roi_button = MaterialButton("Clear")
+        self.clear_roi_button.clicked.connect(self.clear_roi_requested.emit)
+        row.addWidget(self.roi_button)
+        row.addWidget(self.clear_roi_button)
+        return row
 
     def _build_threshold_row(self) -> QHBoxLayout:
         row = QHBoxLayout()
@@ -399,9 +423,21 @@ class _ThresholdGlintPanel(QGroupBox):
             if "split_widest_for_target" in params:
                 self.split_widest_check.setChecked(bool(params["split_widest_for_target"]))
                 self._params["split_widest_for_target"] = bool(params["split_widest_for_target"])
+            if "glint_roi" in params:
+                self._params["glint_roi"] = params["glint_roi"]
         finally:
             for w in widgets:
                 w.blockSignals(False)
+
+    def set_glint_roi(self, roi: tuple | None) -> None:
+        """Push a canvas-edited ROI into the params dict and emit ``params_changed``.
+
+        Called by MainWindow when the image viewer finishes a drag on
+        the glint ROI rectangle. Triggers the usual debounce → run_one
+        cycle so the new search region applies immediately.
+        """
+        self._params["glint_roi"] = tuple(roi) if roi is not None else None
+        self.params_changed.emit(dict(self._params))
 
 
 class ThresholdGlint(DetectorPlugin):
@@ -440,12 +476,14 @@ class ThresholdGlint(DetectorPlugin):
         pupil_radius = max(ew, eh) / 2.0
 
         max_area = int(params.get("max_area_px", 0)) or None
+        glint_roi = params.get("glint_roi")
         result = detect_glints(
             image,
             pupil_center=pupil_center,
             pupil_radius=pupil_radius,
             glint_threshold=int(params["glint_threshold"]),
             search_radius_factor=float(params["search_radius_factor"]),
+            glint_roi=tuple(glint_roi) if glint_roi is not None else None,
             glint_center_method=params["glint_center_method"],
             max_area_px=max_area,
             keep_above=bool(params["keep_above"]),
