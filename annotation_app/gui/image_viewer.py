@@ -161,13 +161,16 @@ class ImageViewer(QWidget):
         # distinct bright green so it reads on top of the iris.
         self.detection_pupil_ellipse_color = self.pupil_ellipse_color
         self.detection_pupil_center_color = QColor(40, 220, 60, 255)
+        # Glint centres are drawn as small filled red dots — saturated red
+        # reads on both bright glint highlights and the surrounding iris.
+        self.detection_glint_color = QColor(255, 40, 40, 255)
 
         # Per-target ROI rectangle colours. Each target's ROI is drawn in
         # the same hue as its detection marker so the association is
-        # obvious at a glance. Glint / limbus / eyelid entries will be
-        # added when those plugins land.
+        # obvious at a glance.
         self.target_roi_colors: dict[str, QColor] = {
             "pupil": self.detection_pupil_center_color,
+            "glint": self.detection_glint_color,
         }
 
     def setup_undo_system(self) -> None:
@@ -840,6 +843,18 @@ class ImageViewer(QWidget):
         pupil = self._detection_overlays.get("pupil")
         if pupil is not None:
             self._draw_pupil_detection(painter, pupil)
+        glint = self._detection_overlays.get("glint")
+        if glint is not None:
+            self._draw_glint_detection(painter, glint)
+
+    def _draw_glint_detection(self, painter: QPainter, result: dict) -> None:
+        """Render glint-target detection markers as small filled red dots."""
+        glints = result.get("glints") or []
+        painter.setBrush(self.detection_glint_color)
+        painter.setPen(QPen(self.detection_glint_color, 3, Qt.SolidLine))
+        for g in glints:
+            gx, gy = g["center"]
+            painter.drawEllipse(QPointF(gx * self.factor, gy * self.factor), 1.5, 1.5)
 
     def _draw_target_rois(self, painter: QPainter) -> None:
         """Render every stored per-target ROI rectangle.

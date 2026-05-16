@@ -1,21 +1,18 @@
 """Threshold-based pupil detector plugin.
 
-Wraps ``pupil_glint_detector.detect_pupil_and_glints`` for the pupil-only
-portion of its output. The panel exposes:
+Wraps ``pupil_glint_detector.detect_pupil`` — pupil-only, no implicit
+limbus or glint pass. The panel exposes:
 
   - pupil threshold (slider + linked spinbox),
   - centre-method dropdown (four methods from the underlying algorithm),
   - pupil-ROI toggle + clear (drives canvas drag-edit mode).
 
-``detect`` calls ``detect_pupil_and_glints`` with a negative
-``glint_margin_ratio`` so the glint search collapses to an empty region;
-this plugin only reports the pupil ellipse and centre. The result feeds
-downstream targets (glint, limbus) via the orchestrator's
-``shared_results`` dict.
+The result feeds downstream targets (glint, limbus) via the
+orchestrator's ``shared_results`` dict.
 """
 
 import numpy as np
-from pupil_glint_detector import detect_pupil_and_glints
+from pupil_glint_detector import detect_pupil
 from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtWidgets import (
     QAbstractSpinBox,
@@ -216,22 +213,19 @@ class ThresholdPupil(DetectorPlugin):
     ) -> dict | None:
         """Run the threshold pupil detection on ``image``.
 
-        ``shared_results`` is unused because the pupil target has no
-        upstream dependencies. A negative ``glint_margin_ratio`` collapses
-        the underlying call's glint-search region to nothing so we don't
-        pay the glint cost we don't consume.
+        ``shared_results`` is unused — pupil is a root in the orchestrator
+        dependency graph.
         """
-        result = detect_pupil_and_glints(
+        result = detect_pupil(
             image,
             pupil_threshold=int(params["pupil_threshold"]),
             pupil_center_method=params["pupil_center_method"],
             pupil_roi=params.get("pupil_roi"),
-            glint_margin_ratio=-1.0,
         )
         if result is None:
             return None
-        cx, cy = result["pupil_center"]
-        (ecx, ecy), (w, h), angle = result["pupil_ellipse"]
+        cx, cy = result["center"]
+        (ecx, ecy), (w, h), angle = result["ellipse"]
         return {
             "center": [float(cx), float(cy)],
             "ellipse": {
@@ -239,9 +233,11 @@ class ThresholdPupil(DetectorPlugin):
                 "size": [float(w), float(h)],
                 "angle": float(angle),
             },
-            # Carried for live overlay rendering only; serialize drops it
-            # because numpy arrays don't belong in the per-image JSON.
-            "pupil_mask": result.get("pupil_mask"),
+            # Carried for downstream plugins that consume the pupil
+            # contour (glint search region) and for the live mask overlay.
+            # Stripped from the serialised result.
+            "contour": result["contour"],
+            "pupil_mask": result["mask"],
         }
 
     def serialize(self, result: dict) -> dict:
