@@ -1,75 +1,82 @@
-"""Plugin manager for loading and managing detector plugins."""
+"""Discovery and lookup for detector plugins.
+
+:class:`PluginManager` walks ``plugins/<target>_detectors/*.py`` at startup,
+instantiates every subclass of :class:`DetectorPlugin`, and indexes them by
+unique ``name`` slug and by ``target``. Discovery is strict — a plugin file
+that does not yield a concrete ``DetectorPlugin`` subclass, or whose class
+fails to instantiate (e.g. abstract methods not implemented), raises
+``RuntimeError`` so partially-migrated plugins are visible at boot rather
+than silently skipped.
+"""
 
 import importlib.util
+import sys
 from pathlib import Path
 
-from .plugin_interface import DetectorPlugin
+from .plugin_interface import DetectorPlugin, Target
 
 
 class PluginManager:
-    """Manages loading and accessing detector plugins for pupil, limbus, glint and eyelid detection."""
+    """Load detector plugins from ``plugins/`` and index them by name and target."""
+
+    PLUGINS_ROOT = Path(__file__).parent / "plugins"
 
     def __init__(self) -> None:
-        """Initialize the PluginManager."""
-        self.pupil_detectors = {}
-        self.limbus_detectors = {}
-        self.eyelid_detectors = {}
-        self.load_plugins()
+        """Discover and instantiate every plugin under :attr:`PLUGINS_ROOT`."""
+        self._by_name: dict[str, DetectorPlugin] = {}
+        self._by_target: dict[Target, list[DetectorPlugin]] = {
+            "pupil": [],
+            "glint": [],
+            "limbus": [],
+            "eyelid": [],
+        }
+        self._discover()
 
-    def load_plugins(self) -> None:
-        """Load all detector plugins from the plugins directory."""
-        plugin_dirs = [
-            Path(__file__).parent / "plugins" / "pupil_detectors",
-            Path(__file__).parent / "plugins" / "limbus_detectors",
-            Path(__file__).parent / "plugins" / "eyelid_detectors",
-        ]
+    def _discover(self) -> None:
+        """Walk :attr:`PLUGINS_ROOT` and register every concrete subclass."""
+        for path in sorted(self.PLUGINS_ROOT.rglob("*.py")):
+            if path.name.startswith("__"):
+                continue
+            module = self._import_path(path)
+            for attr in vars(module).values():
+                if isinstance(attr, type) and issubclass(attr, DetectorPlugin) and attr is not DetectorPlugin:
+                    self._register(attr, path)
 
-        for plugin_dir in plugin_dirs:
-            self.load_plugins_from_directory(plugin_dir)
+    @staticmethod
+    def _import_path(path: Path) -> object:
+        """Import a single plugin file as an isolated module."""
+        # Each plugin module gets a unique sys.modules key so two plugins with
+        # the same filename in different target dirs cannot shadow each other.
+        module_name = f"_eat_plugin_{path.parent.name}_{path.stem}"
+        spec = importlib.util.spec_from_file_location(module_name, path)
+        if spec is None or spec.loader is None:
+            raise RuntimeError(f"could not build import spec for plugin {path}")
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[module_name] = module
+        spec.loader.exec_module(module)
+        return module
 
-    def load_plugins_from_directory(self, directory: Path) -> None:
-        """Load plugins from a specific directory and register them by type."""
-        plugin_type = Path(directory).name
-        for file_path in Path(directory).iterdir():
-            if file_path.suffix == ".py" and not file_path.name.startswith("__"):
-                module_name = file_path.stem
-                module_path = str(file_path)
-                spec = importlib.util.spec_from_file_location(module_name, module_path)
-                module = importlib.util.module_from_spec(spec)
-                spec.loader.exec_module(module)
-                for item_name in dir(module):
-                    item = getattr(module, item_name)
-                    if isinstance(item, type) and issubclass(item, DetectorPlugin) and item is not DetectorPlugin:
-                        plugin_instance = item()
-                        if plugin_type == "pupil_detectors":
-                            self.pupil_detectors[plugin_instance.name] = plugin_instance
-                        elif plugin_type == "limbus_detectors":
-                            self.limbus_detectors[plugin_instance.name] = plugin_instance
-                        elif plugin_type == "eyelid_detectors":
-                            self.eyelid_detectors[plugin_instance.name] = plugin_instance
-                        else:
-                            print(f"Unknown plugin type: {plugin_type}")
+    def _register(self, plugin_cls: type[DetectorPlugin], path: Path) -> None:
+        """Instantiate the plugin class and index it by name and target."""
+        plugin = plugin_cls()
+        if not plugin.name:
+            raise RuntimeError(f"plugin {plugin_cls!r} (from {path}) has empty .name")
+        if plugin.name in self._by_name:
+            other = type(self._by_name[plugin.name])
+            raise RuntimeError(
+                f"duplicate plugin name {plugin.name!r}: {plugin_cls!r} clashes with {other!r}",
+            )
+        self._by_name[plugin.name] = plugin
+        self._by_target[plugin.target].append(plugin)
 
-    def get_pupil_detector(self, name: str) -> DetectorPlugin | None:
-        """Get a pupil detector plugin by name."""
-        return self.pupil_detectors.get(name)
+    def get(self, name: str) -> DetectorPlugin | None:
+        """Return the plugin registered under ``name``, or ``None`` if not loaded."""
+        return self._by_name.get(name)
 
-    def get_limbus_detector(self, name: str) -> DetectorPlugin | None:
-        """Get a limbus detector plugin by name."""
-        return self.limbus_detectors.get(name)
+    def for_target(self, target: Target) -> list[DetectorPlugin]:
+        """Return every plugin whose ``target`` matches ``target``."""
+        return list(self._by_target.get(target, ()))
 
-    def get_pupil_detector_names(self) -> list[str]:
-        """Get list of available pupil detector names."""
-        return list(self.pupil_detectors.keys())
-
-    def get_limbus_detector_names(self) -> list[str]:
-        """Get list of available limbus detector names."""
-        return list(self.limbus_detectors.keys())
-
-    def get_eyelid_detector(self, name: str) -> DetectorPlugin | None:
-        """Get an eyelid detector plugin by name."""
-        return self.eyelid_detectors.get(name)
-
-    def get_eyelid_detector_names(self) -> list[str]:
-        """Get list of available eyelid detector names."""
-        return list(self.eyelid_detectors.keys())
+    def all(self) -> dict[str, DetectorPlugin]:
+        """Return every loaded plugin keyed by name."""
+        return dict(self._by_name)
