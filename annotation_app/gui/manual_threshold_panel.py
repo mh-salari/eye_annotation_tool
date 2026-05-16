@@ -197,6 +197,13 @@ class ManualThresholdPanel(QGroupBox):
         # Detect computes one (unsaved until the user explicitly saves).
         self.detect_button = MaterialButton("Detect")
         self.detect_button.clicked.connect(self.detect_requested.emit)
+        # Disabled state needs to read as "no-op for now" at a glance —
+        # Qt's default greyscale on top of the MaterialButton dark theme is
+        # too subtle. Hollow out the button: faint background, dim text.
+        self.detect_button.setStyleSheet(
+            "QPushButton:disabled {"
+            " background-color: #1f1f1f; color: #4a4a4a; }"
+        )
         layout.addWidget(self.detect_button)
 
         self.setLayout(layout)
