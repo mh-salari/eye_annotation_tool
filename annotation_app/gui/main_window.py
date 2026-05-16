@@ -618,15 +618,20 @@ class MainWindow(QMainWindow):
         self._mt_debounce.start()
 
     def _on_image_loaded_for_manual_threshold(self) -> None:
-        """Refresh the saved/unsaved indicator on image change.
+        """Refresh save-state indicator + arm the Detect button on image change.
 
-        Manual Threshold mode does not auto-detect on image load — the
-        overlay is loaded directly from the per-image annotation file
-        (when present) by `apply_tuning`, and a fresh detection requires
-        an explicit Detect-button press. Slider / ROI changes still
-        debounce-detect for live preview.
+        Manual Threshold mode does not auto-detect on image load. The overlay
+        is loaded from the per-image annotation file when present; otherwise
+        a fresh detection requires the explicit Detect button (or any slider
+        movement, which triggers the live debounce). The Detect button is
+        enabled only when there is no overlay yet — so the user has an
+        obvious "compute now" trigger for a never-detected image and isn't
+        left wondering whether pressing it does anything when an overlay is
+        already on screen.
         """
         self._refresh_save_state_indicator()
+        has_overlay = self.image_viewer.manual_threshold_detection is not None
+        self.annotation_controls.manual_threshold_panel.set_detect_button_enabled(not has_overlay)
 
     def _on_manual_threshold_detection_ready(self, payload: dict) -> None:
         """Forward the worker's detection result into the image viewer.
@@ -636,6 +641,7 @@ class MainWindow(QMainWindow):
         restored from disk — that first re-run is in sync with the file.
         """
         self.image_viewer.set_manual_threshold_detection(payload)
+        self.annotation_controls.manual_threshold_panel.set_detect_button_enabled(False)
         self.statusBar().clearMessage()
         if self._mt_skip_next_modified_mark:
             self._mt_skip_next_modified_mark = False

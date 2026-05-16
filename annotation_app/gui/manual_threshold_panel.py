@@ -270,6 +270,10 @@ class ManualThresholdPanel(QGroupBox):
         self.pupil_roi_button.setChecked(False)
         self.glint_roi_button.setChecked(False)
 
+    def set_detect_button_enabled(self, enabled: bool) -> None:
+        """Toggle the Detect button — useful state only when there is no overlay yet."""
+        self.detect_button.setEnabled(enabled)
+
     def set_save_state(self, saved: bool) -> None:
         """Update the per-image save-state badge: True → saved (green), False → unsaved (orange)."""
         self.save_state_label.setText("● SAVED" if saved else "● UNSAVED")
