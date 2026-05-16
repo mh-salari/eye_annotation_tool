@@ -47,6 +47,7 @@ build-backend = "hatchling.build"
 
 [dependency-groups]
 dev = [
+    "ruff>=0.13.0",
     "pytest>=9.0.3",
 ]
 
@@ -150,21 +151,20 @@ lint.ignore = [
     "TID252", # Flake8-tidy-imports - Prefer absolute imports over relative imports from parent modules
     "FBT001", # Flake8-boolean-trap - Boolean-typed positional argument in function definition
     "FBT002", # Flake8-boolean-trap - Boolean default positional argument in function definition
+    "PLR0911", # Pylint - Too many return statements
+    "C901",  # McCabe - Function is too complex
+    "PLR0912", # Pylint - Too many branches
     "PLR0913", # Pylint - Too many arguments
     "PLR0914", # Pylint - Too many local variables
-    "PLR0904", # Pylint - Too many public methods
     "PLR0915", # Pylint - Too many statements
     "PLR0917", # Pylint - Too many positional arguments
     "TRY003", # Tryceratops - Avoid specifying long messages outside the exception class
     "EM101", # Flake8-errmsg - Exception must not use a string literal, assign to variable first
     "EM102", # Flake8-errmsg - Exception must not use an f-string literal, assign to variable first
     "D401", # Pydocstyle - First line of docstring should be in imperative mood
-    "PLW3201", # Pylint - Bad dunder method name
-    "PT011", # Flake8-pytest-style - pytest.raises() is too broad
-    "TD002", # Flake8-todos - Missing author in TODO
-    "TD003", # Flake8-todos - Missing issue link in TODO
-    "FIX002", # Flake8-fixme - Line contains TODO
-    "N803", # PEP8-naming - Argument name should be lowercase
-    "C901", # McCabe - Function is too complex
-    "PLR0912", # Pylint - Too many branches
 ]
+
+[tool.ruff.lint.per-file-ignores]
+# GUI domain objects with many UI handlers — many public methods are intentional.
+"annotation_app/gui/image_viewer.py" = ["PLR0904"]
+"annotation_app/gui/main_window.py" = ["PLR0904"]

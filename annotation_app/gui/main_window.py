@@ -181,9 +181,7 @@ class MainWindow(QMainWindow):
         self.annotation_controls.manual_threshold_panel.set_save_state(saved)
         if 0 <= self.current_image_index < len(self.image_paths):
             name = Path(self.image_paths[self.current_image_index]).name
-            self.setWindowTitle(
-                f"EyE Annotation Tool - {name}{'' if saved else ' *'}"
-            )
+            self.setWindowTitle(f"EyE Annotation Tool - {name}{'' if saved else ' *'}")
         else:
             self.setWindowTitle("EyE Annotation Tool" + ("" if saved else " *"))
 
