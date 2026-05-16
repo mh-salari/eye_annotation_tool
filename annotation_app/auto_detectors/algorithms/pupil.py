@@ -158,6 +158,41 @@ def _roi_mask(shape: tuple[int, ...], roi: tuple[int, int, int, int]) -> np.ndar
     return mask
 
 
+def _contour_center(contour: np.ndarray, method: str) -> tuple[float, float]:
+    """Geometric centre of ``contour`` chosen by ``method``.
+
+    Methods:
+      - ``convex_hull_centroid``: moments centroid of the filled convex hull.
+      - ``center_of_mass``: moments centroid of the contour itself.
+      - ``ellipse_fit_center``: centre of ``cv2.fitEllipse`` (needs >= 5 points).
+      - ``min_area_rect_center``: centre of the minimum-area rotated rect.
+
+    """
+    if method == "convex_hull_centroid":
+        hull = cv2.convexHull(contour)
+        m = cv2.moments(hull)
+        if m["m00"] <= 0:
+            raise ValueError("convex_hull_centroid: zero-area hull")
+        return (m["m10"] / m["m00"], m["m01"] / m["m00"])
+    if method == "center_of_mass":
+        m = cv2.moments(contour)
+        if m["m00"] <= 0:
+            raise ValueError("center_of_mass: zero-area contour")
+        return (m["m10"] / m["m00"], m["m01"] / m["m00"])
+    if method == "ellipse_fit_center":
+        if len(contour) < 5:
+            raise ValueError("ellipse_fit_center: contour needs >= 5 points")
+        (cx, cy), _, _ = cv2.fitEllipse(contour)
+        return (cx, cy)
+    if method == "min_area_rect_center":
+        (cx, cy), _, _ = cv2.minAreaRect(contour)
+        return (cx, cy)
+    raise ValueError(
+        f"unknown center method {method!r}; expected one of "
+        "'convex_hull_centroid', 'center_of_mass', 'ellipse_fit_center', 'min_area_rect_center'",
+    )
+
+
 def detect_pupil_and_glints(
     img: np.ndarray,
     pupil_threshold: int = 30,
@@ -166,6 +201,7 @@ def detect_pupil_and_glints(
     glints_target: int = 1,
     glint_max_area_ratio: float = 0.1,
     pupil_center_method: str = "convex_hull_centroid",
+    glint_center_method: str = "min_area_rect_center",
     pupil_roi: tuple[int, int, int, int] | None = None,
     glint_roi: tuple[int, int, int, int] | None = None,
 ) -> dict:
@@ -246,13 +282,10 @@ def detect_pupil_and_glints(
         cx, cy = spline["center"]
     elif pupil_center_method == "ellipse_fit_center":
         if ellipse_fit is None:
-            raise ValueError("ellipse_fit_center: hull has fewer than 5 points, cv2.fitEllipse unavailable")
+            raise ValueError("ellipse_fit_center: hull has fewer than 5 points")
         (cx, cy), _, _ = ellipse_fit
     else:
-        raise ValueError(
-            f"unknown pupil_center_method {pupil_center_method!r}; "
-            f"expected 'convex_hull_centroid', 'center_of_mass', or 'ellipse_fit_center'",
-        )
+        cx, cy = _contour_center(pupil_contour, pupil_center_method)
     pupil_center = (round(cx), round(cy))
     if ellipse_fit is not None:
         _, (w, h), angle = ellipse_fit
@@ -366,12 +399,9 @@ def detect_pupil_and_glints(
 
     glints = []
     for c in filtered:
-        gm = cv2.moments(c)
-        if gm["m00"] > 0:
-            cx = int(gm["m10"] / gm["m00"])
-            cy = int(gm["m01"] / gm["m00"])
-            ellipse = cv2.fitEllipse(c) if len(c) >= 5 else None
-            glints.append({"contour": c, "center": (cx, cy), "ellipse": ellipse})
+        cx, cy = _contour_center(c, glint_center_method)
+        ellipse = cv2.fitEllipse(c) if len(c) >= 5 else None
+        glints.append({"contour": c, "center": (round(cx), round(cy)), "ellipse": ellipse})
 
     # Surface the binary masks so callers can show the user what the current
     # thresholds actually select. ``glint_search_area`` is the intersection of

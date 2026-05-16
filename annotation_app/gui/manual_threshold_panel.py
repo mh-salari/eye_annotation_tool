@@ -12,12 +12,11 @@ process and surfacing it just added a confusing knob.
 from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtWidgets import (
     QAbstractSpinBox,
-    QButtonGroup,
     QCheckBox,
+    QComboBox,
     QGroupBox,
     QHBoxLayout,
     QLabel,
-    QRadioButton,
     QSlider,
     QSpinBox,
     QVBoxLayout,
@@ -26,10 +25,12 @@ from PyQt5.QtWidgets import (
 
 from .custom_widgets import MaterialButton
 
-PUPIL_CENTER_METHODS = (
+# Shared between the pupil-centre and glint-centre dropdowns.
+CENTER_METHODS = (
     ("Convex hull centroid", "convex_hull_centroid"),
     ("Center of mass", "center_of_mass"),
     ("Ellipse fit center", "ellipse_fit_center"),
+    ("Min area rect", "min_area_rect_center"),
 )
 
 # Defaults match the docstring defaults on
@@ -42,6 +43,7 @@ DEFAULT_PARAMS = {
     "glints_target": 1,
     "glint_max_area_ratio": 0.1,
     "pupil_center_method": "convex_hull_centroid",
+    "glint_center_method": "min_area_rect_center",
 }
 
 
@@ -155,21 +157,20 @@ class ManualThresholdPanel(QGroupBox):
             "-100% = shrink inward to the pupil centre",
         )
 
-        # Pupil-centre method (3 radio buttons).
-        layout.addWidget(QLabel("Pupil center method:"))
-        self.method_group = QButtonGroup(self)
-        self.method_buttons = {}
-        method_row = QHBoxLayout()
-        for label, key in PUPIL_CENTER_METHODS:
-            btn = QRadioButton(label)
-            if key == self._params["pupil_center_method"]:
-                btn.setChecked(True)
-            btn.toggled.connect(lambda checked, k=key: self._on_method_toggled(checked, k))
-            self.method_group.addButton(btn)
-            self.method_buttons[key] = btn
-            method_row.addWidget(btn)
-        method_row.addStretch()
-        layout.addLayout(method_row)
+        # Pupil and glint centre methods as dropdowns. Both share the same
+        # option list so the user can pick independently for each.
+        self.pupil_method_combo = self._add_center_method_combo(
+            layout,
+            "Pupil center:",
+            self._params["pupil_center_method"],
+            "pupil_center_method",
+        )
+        self.glint_method_combo = self._add_center_method_combo(
+            layout,
+            "Glint center:",
+            self._params["glint_center_method"],
+            "glint_center_method",
+        )
 
         # Pupil ROI / Glint ROI controls. Toggle on a button to drag a
         # rectangle on the image; press Clear to remove it.
@@ -273,10 +274,33 @@ class ManualThresholdPanel(QGroupBox):
         self._params["glints_target"] = int(value)
         self.params_changed.emit(dict(self._params))
 
-    def _on_method_toggled(self, checked: bool, key: str) -> None:
-        if not checked:
-            return
-        self._params["pupil_center_method"] = key
+    def _add_center_method_combo(
+        self,
+        parent_layout: QVBoxLayout,
+        title: str,
+        initial: str,
+        params_key: str,
+    ) -> QComboBox:
+        """Build a labelled dropdown of CENTER_METHODS and wire it to ``params_key``."""
+        row = QHBoxLayout()
+        label = QLabel(title)
+        label.setMinimumWidth(120)
+        row.addWidget(label)
+        combo = QComboBox()
+        for display, key in CENTER_METHODS:
+            combo.addItem(display, key)
+        index = next((i for i, (_, k) in enumerate(CENTER_METHODS) if k == initial), 0)
+        combo.setCurrentIndex(index)
+        combo.currentIndexChanged.connect(
+            lambda i, k=params_key, c=combo: self._on_center_method_changed(k, c.itemData(i)),
+        )
+        row.addWidget(combo)
+        row.addStretch()
+        parent_layout.addLayout(row)
+        return combo
+
+    def _on_center_method_changed(self, key: str, value: str) -> None:
+        self._params[key] = value
         self.params_changed.emit(dict(self._params))
 
     def _on_pupil_roi_toggled(self, checked: bool) -> None:
@@ -362,12 +386,18 @@ class ManualThresholdPanel(QGroupBox):
         finally:
             for widget in widgets:
                 widget.blockSignals(False)
-        # Method radios use a QButtonGroup; click the right one so the others untoggle.
-        method = params.get("pupil_center_method")
-        if method and method in self.method_buttons:
-            btn = self.method_buttons[method]
-            btn.blockSignals(True)
-            btn.setChecked(True)
-            btn.blockSignals(False)
-            self._params["pupil_center_method"] = method
+        for key, combo in (
+            ("pupil_center_method", self.pupil_method_combo),
+            ("glint_center_method", self.glint_method_combo),
+        ):
+            method = params.get(key)
+            if not method:
+                continue
+            index = next((i for i, (_, k) in enumerate(CENTER_METHODS) if k == method), -1)
+            if index < 0:
+                continue
+            combo.blockSignals(True)
+            combo.setCurrentIndex(index)
+            combo.blockSignals(False)
+            self._params[key] = method
         self.params_changed.emit(dict(self._params))

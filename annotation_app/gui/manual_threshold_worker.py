@@ -34,6 +34,7 @@ class DetectionWorker(QObject):
                 glints_target=int(params["glints_target"]),
                 glint_max_area_ratio=float(params["glint_max_area_ratio"]),
                 pupil_center_method=params["pupil_center_method"],
+                glint_center_method=params.get("glint_center_method", "min_area_rect_center"),
                 pupil_roi=params.get("pupil_roi"),
                 glint_roi=params.get("glint_roi"),
             )
