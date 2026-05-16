@@ -34,13 +34,13 @@ PROJECT_SETTINGS_FILENAME = ".eye_annotation_project.json"
 DETECTOR_TARGETS = ("pupil", "glint", "limbus", "eyelid")
 
 # Default plugin slug per target. ``"disabled"`` means the target is off for
-# this project. Pupil + glint both default to the threshold-based detectors
-# — pupil is needed for any downstream target, and the glint plugin depends
-# on the pupil result so it makes sense to enable both together.
+# this project. Pupil + glint + limbus all default to enabled — pupil is
+# needed for any downstream target, glint depends on the pupil result, and
+# limbus is opt-out for use cases that need an iris circle.
 DEFAULT_DETECTOR_PLUGINS: dict[str, str] = {
     "pupil": "threshold_pupil",
     "glint": "threshold_glint",
-    "limbus": "disabled",
+    "limbus": "daugman_limbus",
     "eyelid": "disabled",
 }
 

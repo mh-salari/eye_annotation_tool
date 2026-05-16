@@ -605,6 +605,10 @@ class MainWindow(QMainWindow):
                 panel.show_mask_toggled.connect(
                     lambda on, target_=plugin.target: self._on_panel_show_mask_toggled(target_, on),
                 )
+            if hasattr(panel, "detect_requested"):
+                panel.detect_requested.connect(
+                    lambda name=plugin.name, target_=plugin.target: self._on_panel_detect_requested(name, target_),
+                )
             # Seed the viewer's ROI store from the project-saved params so
             # the rectangle is rendered immediately when Auto Detect mode
             # is entered.
@@ -616,15 +620,26 @@ class MainWindow(QMainWindow):
         self.orchestrator.set_enabled_plugins(dict(self._enabled_plugins))
 
     def _on_plugin_params_changed(self, plugin_name: str, target: Target, params: dict) -> None:
-        """Buffer the latest params for ``plugin_name`` and (re)start the debounce."""
-        self._pending_run_one = (plugin_name, dict(params))
-        self._auto_detect_debounce.start()
+        """Route a panel parameter change by the plugin's ``live`` flag.
+
+        Live plugins re-run via the debounce path so slider drags collapse
+        to a single ``run_one`` call. Non-live plugins (e.g. Daugman
+        limbus) drop their cached result + overlay + mask immediately so
+        the user is never looking at a stale visualisation that no longer
+        matches the panel's current parameters; the next detection only
+        happens when the user clicks the plugin's Detect button.
+        """
         self.set_annotation_modified(True)
-        # Target is carried only to short-circuit the dispatch lookup; the
-        # _on_auto_detect_debounce_fired path re-resolves it from
-        # _enabled_plugins so a stale plugin (after a project reload) does
-        # not leak into the orchestrator.
-        del target
+        plugin = self.plugin_manager.get(plugin_name)
+        if plugin is None:
+            return
+        if plugin.live:
+            self._pending_run_one = (plugin_name, dict(params))
+            self._auto_detect_debounce.start()
+            return
+        self.orchestrator.set_cached_result(target, None)
+        self.image_viewer.clear_detection_overlay(target)
+        self.image_viewer.clear_target_mask(target)
 
     def _on_auto_detect_debounce_fired(self) -> None:
         """Dispatch the buffered run_one to the orchestrator.
@@ -698,6 +713,25 @@ class MainWindow(QMainWindow):
         # just reset; drop it so the canvas isn't waiting on a phantom drag.
         self.image_viewer.set_active_roi_target(None)
         self.set_annotation_modified(True)
+
+    def _on_panel_detect_requested(self, plugin_name: str, target: Target) -> None:
+        """Run a non-live plugin once on the current image.
+
+        Wired to the plugin panel's Detect button. The orchestrator
+        invokes ``detect`` synchronously and emits ``plugin_ready`` (or
+        ``plugin_failed``) which lands the new overlay via the usual
+        ``_on_plugin_ready`` path.
+        """
+        plugin = self._enabled_plugins.get(target)
+        if plugin is None or plugin.name != plugin_name:
+            return
+        panel = self.annotation_controls.auto_detect_panel(plugin_name)
+        if panel is None:
+            return
+        image = self.image_viewer.get_current_image_grayscale()
+        if image is None:
+            return
+        self.orchestrator.run_one(target, image, panel.current_params())
 
     def _on_panel_show_mask_toggled(self, target: str, on: bool) -> None:
         """Forward the panel's "Show mask" toggle to the viewer.

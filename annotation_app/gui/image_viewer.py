@@ -173,6 +173,9 @@ class ImageViewer(QWidget):
         # Glint centres are drawn as small filled red dots — saturated red
         # reads on both bright glint highlights and the surrounding iris.
         self.detection_glint_color = QColor(255, 40, 40, 255)
+        # Limbus circles reuse the Annotate-mode limbus colour for
+        # visual continuity between modes.
+        self.detection_limbus_color = self.limbus_ellipse_color
 
         # Per-target ROI rectangle colours. Each target's ROI is drawn in
         # the same hue as its detection marker so the association is
@@ -900,12 +903,32 @@ class ImageViewer(QWidget):
         # ellipses remain legible on top of the mask. Each plugin's mask
         # paints only when its "Show mask" toggle is on.
         self._draw_target_masks(painter)
+        limbus = self._detection_overlays.get("limbus")
+        if limbus is not None:
+            self._draw_limbus_detection(painter, limbus)
         pupil = self._detection_overlays.get("pupil")
         if pupil is not None:
             self._draw_pupil_detection(painter, pupil)
         glint = self._detection_overlays.get("glint")
         if glint is not None:
             self._draw_glint_detection(painter, glint)
+
+    def _draw_limbus_detection(self, painter: QPainter, result: dict) -> None:
+        """Render a limbus-target detection result as a single circle outline."""
+        center = result.get("center")
+        radius = result.get("radius")
+        if center is None or radius is None:
+            return
+        cx, cy = center
+        painter.save()
+        painter.setPen(QPen(self.detection_limbus_color, 1, Qt.SolidLine))
+        painter.setBrush(Qt.NoBrush)
+        painter.drawEllipse(
+            QPointF(cx * self.factor, cy * self.factor),
+            float(radius) * self.factor,
+            float(radius) * self.factor,
+        )
+        painter.restore()
 
     def _draw_target_masks(self, painter: QPainter) -> None:
         """Render each visible per-target threshold mask as a semi-transparent fill."""
