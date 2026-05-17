@@ -17,11 +17,11 @@ The panel exposes:
     bright spot).
 
 All refiners are off / neutral by default so the panel works out of
-the box for a single-LED rig at the pgd defaults.
+the box for a single-LED rig at the lavan.detect defaults.
 """
 
 import numpy as np
-from pupil_glint_detector import detect_glints
+from lavan.detect import detect_glints
 from PyQt5.QtCore import QPointF, Qt, pyqtSignal
 from PyQt5.QtGui import QColor, QPainter, QPen
 from PyQt5.QtWidgets import (
@@ -49,7 +49,7 @@ ROI_COLOR = GLINT_COLOR
 MASK_COLOR = QColor(255, 0, 200, 110)
 
 # Same shape as the pupil plugin's centre-method dropdown — the four
-# methods come from pgd's _contour_center helper, which both plugins
+# methods come from lavan's _contour_center helper, which both plugins
 # pass into their detector calls via the ``glint_center_method`` /
 # ``pupil_center_method`` parameter.
 CENTER_METHODS: tuple[tuple[str, str], ...] = (
@@ -69,7 +69,7 @@ DEFAULTS: dict = {
     "search_radius_factor": 2.0,
     "glints_target": 1,
     "glint_center_method": "min_area_rect_center",
-    # ``0`` means "no area cap"; pgd interprets ``None`` the same way
+    # ``0`` means "no area cap"; lavan interprets ``None`` the same way
     # and the plugin maps 0 → None when calling.
     "max_area_px": 0,
     "keep_above": True,
@@ -80,9 +80,9 @@ DEFAULTS: dict = {
     "split_widest_for_target": False,
     # An ``(x, y, w, h)`` tuple set by the canvas drag handler, or None
     # when no ROI is active. Intersects with the pupil-centred search
-    # disk in pgd.detect_glints.
+    # disk in lavan.detect.detect_glints.
     "glint_roi": None,
-    # Shape-quality gates forwarded to pgd.detect_glints. Match the
+    # Shape-quality gates forwarded to lavan.detect.detect_glints. Match the
     # pupil panel's defaults — fill on at 80 % catches obvious junk
     # (eyelash slivers, partial reflections) while roundness stays off
     # by default since tiny glints discretise unevenly and would
@@ -522,7 +522,7 @@ class _ThresholdGlintPanel(QGroupBox):
 
 
 class ThresholdGlint(DetectorPlugin):
-    """Threshold-based glint detection backed by ``pupil-glint-detector``."""
+    """Threshold-based glint detection backed by ``lavan.detect``."""
 
     name = "threshold_glint"
     target = "glint"

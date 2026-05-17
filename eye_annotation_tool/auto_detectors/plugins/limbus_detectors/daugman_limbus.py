@@ -1,6 +1,6 @@
 """Daugman integro-differential operator limbus detector plugin.
 
-Backed by ``pupil_glint_detector.detect_limbus``. The Daugman sweep
+Backed by ``lavan.detect.detect_limbus``. The Daugman sweep
 is too slow for live re-runs on slider drag, so this plugin declares
 ``live = False``: the orchestrator only invokes ``detect`` when the
 user clicks the panel's per-plugin **Detect** button. Changing any
@@ -18,7 +18,7 @@ The panel exposes:
 from collections.abc import Callable
 
 import numpy as np
-from pupil_glint_detector import detect_limbus
+from lavan.detect import detect_limbus
 from PyQt5.QtCore import QPointF, Qt, pyqtSignal
 from PyQt5.QtGui import QColor, QPainter, QPen
 from PyQt5.QtWidgets import (

@@ -1,6 +1,6 @@
 """Threshold-based pupil detector plugin.
 
-Wraps ``pupil_glint_detector.detect_pupil`` — pupil-only, no implicit
+Wraps ``lavan.detect.detect_pupil`` — pupil-only, no implicit
 limbus or glint pass. The panel exposes:
 
   - pupil threshold (slider + linked spinbox),
@@ -12,7 +12,7 @@ orchestrator's ``shared_results`` dict.
 """
 
 import numpy as np
-from pupil_glint_detector import detect_pupil
+from lavan.detect import detect_pupil
 from PyQt5.QtCore import QPointF, Qt, pyqtSignal
 from PyQt5.QtGui import QColor, QPainter, QPen
 from PyQt5.QtWidgets import (
@@ -40,7 +40,7 @@ ROI_COLOR = CENTER_COLOR
 MASK_COLOR = QColor(50, 180, 80, 70)
 
 # Display label / serialised key for each of the four centre-computation
-# methods exposed by pupil_glint_detector. Shared shape with the glint
+# methods exposed by lavan.detect. Shared shape with the glint
 # plugin, but each plugin keeps its own combo so the user can choose
 # pupil and glint independently.
 CENTER_METHODS: tuple[tuple[str, str], ...] = (
@@ -57,9 +57,9 @@ DEFAULTS: dict = {
     # when no ROI is active. Stored in the same params dict as the
     # numeric knobs so a single ``set_params`` call restores everything.
     "pupil_roi": None,
-    # Optional shape-quality gates forwarded to pgd.detect_pupil. Each
+    # Optional shape-quality gates forwarded to lavan.detect.detect_pupil. Each
     # pair is a checkbox + integer percentage (50..100); the plugin
-    # divides by 100 before passing the ratio to pgd.
+    # divides by 100 before passing the ratio to lavan.detect.
     "min_ellipse_fit_enabled": True,
     "min_ellipse_fit_pct": 80,
     "min_roundness_enabled": False,
@@ -296,7 +296,7 @@ class _ThresholdPupilPanel(QGroupBox):
 
 
 class ThresholdPupil(DetectorPlugin):
-    """Threshold-based pupil detection backed by ``pupil-glint-detector``."""
+    """Threshold-based pupil detection backed by ``lavan.detect``."""
 
     name = "threshold_pupil"
     target = "pupil"

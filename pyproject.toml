@@ -23,8 +23,7 @@ dependencies = [
     "numpy>=1.20.0",
     "opencv-python>=4.5.0",
     "scipy>=1.7.0",
-    "daugman-derived-boundary-detectors",
-    "pupil-glint-detector",
+    "lavan",
 ]
 
 [project.urls]
@@ -35,12 +34,11 @@ Issues = "https://github.com/mh-salari/eye_annotation_tool/issues"
 [project.scripts]
 eye_annotation_tool = "eye_annotation_tool.main:run_app"
 
-# Local editable installs during development. When these packages get
+# Local editable install of lavan during development. When lavan is
 # published to PyPI (before we publish eye-annotation-tool), the source
-# overrides can be removed and the public wheels will be used instead.
+# override can be removed and the public wheel will be used instead.
 [tool.uv.sources]
-daugman-derived-boundary-detectors = { path = "../daugman-derived-boundary-detectors", editable = true }
-pupil-glint-detector = { path = "../pupil-glint-detector", editable = true }
+lavan = { path = "../lavan", editable = true }
 
 [build-system]
 requires = ["hatchling", "hatch-vcs"]
