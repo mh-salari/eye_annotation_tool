@@ -533,10 +533,14 @@ class MainWindow(QMainWindow):
 
         ``groups`` is a list of ``(settings, [folders])`` tuples. Defaults to
         the first group. Returns the chosen settings dict, or ``None`` if the
-        user cancels.
+        user cancels. The per-group preview is a short summary of the
+        meaningful fields (binocular flag, mode, autosave, enabled
+        detectors) rather than the raw dict, so the dialog stays
+        readable when multi-target carry-roi blocks bloat the settings.
         """
         dialog = QDialog(self)
         dialog.setWindowTitle("Project settings differ")
+        dialog.setMinimumWidth(520)
         layout = QVBoxLayout(dialog)
         layout.addWidget(
             QLabel(
@@ -546,9 +550,8 @@ class MainWindow(QMainWindow):
         )
         button_group = QButtonGroup(dialog)
         for i, (cfg, dirs) in enumerate(groups):
-            preview_pairs = [f"{k}={v}" for k, v in cfg.items()]
-            preview = ", ".join(preview_pairs) if preview_pairs else "(defaults)"
-            radio = QRadioButton(f"{', '.join(Path(d).name for d in dirs)}\n    {preview}")
+            dirs_label = ", ".join(Path(d).name for d in dirs)
+            radio = QRadioButton(f"{dirs_label}\n    {self._format_project_settings_summary(cfg)}")
             if i == 0:
                 radio.setChecked(True)
             button_group.addButton(radio, i)
@@ -560,6 +563,26 @@ class MainWindow(QMainWindow):
         if dialog.exec_() != QDialog.Accepted:
             return None
         return groups[button_group.checkedId()][0]
+
+    @staticmethod
+    def _format_project_settings_summary(settings: dict) -> str:
+        """Compact one-liner of the human-meaningful project-settings fields.
+
+        Skips bulky internals (carry-roi rectangles, per-plugin params)
+        and surfaces only what differs between two saved configurations
+        in practice: binocular flag, current mode, autosave, and which
+        detector targets are enabled.
+        """
+        parts: list[str] = [
+            "binocular" if settings.get("binocular_mode", True) else "monocular",
+            f"mode={settings.get('current_mode', 'manual')}",
+        ]
+        if settings.get("autosave"):
+            parts.append("autosave")
+        detectors = settings.get("detectors") or {}
+        enabled = [t for t, block in detectors.items() if block.get("plugin", "disabled") != "disabled"]
+        parts.append(f"detectors=[{', '.join(enabled) if enabled else 'none'}]")
+        return ", ".join(parts)
 
     # ----- CLI override session policy ---------------------------------
 
