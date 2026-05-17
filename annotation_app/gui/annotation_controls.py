@@ -92,9 +92,12 @@ class AnnotationControlPanel(QWidget):
 
         layout.addStretch(1)
 
+        # Clear All is created here so its signal wiring stays with the
+        # rest of the panel, but it's NOT added to ``layout`` — MainWindow
+        # pins it outside the scrollable area so it remains visible in
+        # both modes regardless of how tall the plugin-panel stack grows.
         self.clear_all_button = MaterialButton("Clear All")
         self.clear_all_button.clicked.connect(self.clear_all_requested.emit)
-        layout.addWidget(self.clear_all_button)
 
         self.setLayout(layout)
 

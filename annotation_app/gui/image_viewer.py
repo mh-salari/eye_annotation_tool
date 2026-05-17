@@ -1,6 +1,7 @@
 """Image viewer widget for displaying and annotating eye images."""
 
 from collections import deque
+from typing import ClassVar
 
 import cv2
 import numpy as np
@@ -13,6 +14,16 @@ from ..utils.image_processing import find_closest_point, fit_ellipse
 
 class ImageViewer(QWidget):
     """Widget for viewing and annotating eye images with pupil, limbus, eyelid, and glint markers."""
+
+    # Maps a plugin target slug (used by the project settings file and the
+    # auto-detector orchestrator) to the matching manual annotation slug
+    # (used by ``current_annotation`` and the eye_data dict fields).
+    _PLUGIN_TARGET_TO_ANNOTATION: ClassVar[dict[str, str]] = {
+        "pupil": "pupil",
+        "limbus": "limbus",
+        "eyelid": "eyelid_contour",
+        "glint": "glint",
+    }
 
     annotation_changed = pyqtSignal()
     annotation_type_changed = pyqtSignal(str)
@@ -115,16 +126,16 @@ class ImageViewer(QWidget):
         # Per-target Auto Detect overlay results, keyed by anatomical target
         # ("pupil" / "glint" / "limbus" / "eyelid"). The shape of each entry
         # matches the corresponding plugin's serialise/deserialise contract.
-        # Drawing of these overlays is gated on ``_show_detection_overlays``
-        # so they stay hidden in Manual mode without losing the data.
         self._detection_overlays: dict[str, dict] = {}
-        self._show_detection_overlays = False
 
-        # Manual-mode annotations (point markers, fitted ellipses, the
-        # Annotate-mode ROI rectangle) are hidden in Auto Detect mode so
-        # the detection overlay isn't visually contaminated by manual
-        # clicks. The data itself stays in memory.
-        self._show_manual_annotations = True
+        # Plugin targets currently owned by an auto detector. Manual
+        # painting and click-to-place for these targets is suppressed so
+        # each target has a single source of truth (auto OR manual,
+        # never both). Carries plugin-target slugs ("pupil"/"glint"/
+        # "limbus"/"eyelid"); the painter and click paths translate to
+        # the annotation-slug naming via ``_PLUGIN_TARGET_TO_ANNOTATION``.
+        self._auto_managed_targets: set[str] = set()
+        self._auto_managed_annotations: set[str] = set()
 
         # Per-target Auto Detect ROI rectangles (target → ``(x, y, w, h)``
         # tuple or None). ``_active_roi_target`` is the target whose
@@ -445,6 +456,11 @@ class ImageViewer(QWidget):
                     if selected_annotation != self.current_annotation:
                         self.current_annotation = selected_annotation
                         self.annotation_type_changed.emit(self.current_annotation)
+                elif self.current_annotation in self._auto_managed_annotations:
+                    # The current target is owned by an auto detector; manual
+                    # click-to-place is disabled so the auto overlay stays the
+                    # single source of truth for this target.
+                    return
                 elif self.current_annotation == "pupil":
                     self.pupil_points.append(image_pos)
                 elif self.current_annotation == "limbus":
@@ -574,23 +590,53 @@ class ImageViewer(QWidget):
 
     # ----- Auto Detect overlays -----
 
-    def set_show_detection_overlays(self, on: bool) -> None:
-        """Toggle visibility of every Auto Detect overlay.
+    def set_auto_managed_targets(self, plugin_targets: set[str]) -> None:
+        """Declare which plugin targets are now owned by an auto detector.
 
-        Underlying results stay in memory; only the paint path is gated.
-        Called by MainWindow when the user flips the mode switcher.
+        Manual annotations and click-to-place for these targets are
+        suppressed; the auto-detector overlay is the only visible source
+        for those targets. Targets not in the set fall back to the
+        manual annotation path.
         """
-        self._show_detection_overlays = bool(on)
+        self._auto_managed_targets = set(plugin_targets)
+        self._auto_managed_annotations = {
+            self._PLUGIN_TARGET_TO_ANNOTATION[t]
+            for t in self._auto_managed_targets
+            if t in self._PLUGIN_TARGET_TO_ANNOTATION
+        }
         self.update_image()
 
-    def set_show_manual_annotations(self, on: bool) -> None:
-        """Toggle visibility of manual-mode markers + the Annotate-mode ROI.
+    def clear_manual_for_target(self, plugin_target: str) -> None:
+        """Wipe manual points + fitted ellipse for ``plugin_target`` on both eyes.
 
-        Underlying point/ellipse/ROI data stays in memory; only the paint
-        path is gated. Flipped to False when MainWindow enters Auto Detect
-        mode and back to True when returning to Manual mode.
+        Called when an auto detector takes ownership of ``plugin_target``
+        so the previously placed manual annotations don't linger in the
+        eye_data store. The current undo state is pushed first so Ctrl-Z
+        can restore the wiped points.
         """
-        self._show_manual_annotations = bool(on)
+        annotation = self._PLUGIN_TARGET_TO_ANNOTATION.get(plugin_target)
+        if annotation is None:
+            return
+        field_map = {
+            "pupil": ("pupil_points", "pupil_ellipse"),
+            "limbus": ("limbus_points", "limbus_ellipse"),
+            "eyelid_contour": ("eyelid_contour_points", None),
+            "glint": ("glint_points", None),
+        }
+        points_field, ellipse_field = field_map[annotation]
+        had_data = False
+        for eye in ("left", "right"):
+            if self.eye_data[eye][points_field]:
+                had_data = True
+                self.eye_data[eye][points_field] = []
+            if ellipse_field and self.eye_data[eye][ellipse_field] is not None:
+                had_data = True
+                self.eye_data[eye][ellipse_field] = None
+        if not had_data:
+            return
+        self.load_current_eye_data()
+        self.save_state()
+        self.annotation_changed.emit()
         self.update_image()
 
     def set_detection_overlay(self, target: str, result: dict) -> None:
@@ -742,14 +788,12 @@ class ImageViewer(QWidget):
         painter = QPainter(self.pixmap)
         painter.drawPixmap(0, 0, scaled_pixmap)
 
-        if self._show_manual_annotations:
-            self.draw_eye_annotations(painter, "left")
-            if not self.single_eye_mode:
-                self.draw_eye_annotations(painter, "right")
+        self.draw_eye_annotations(painter, "left")
+        if not self.single_eye_mode:
+            self.draw_eye_annotations(painter, "right")
 
-        if self._show_detection_overlays:
-            self._draw_detection_overlays(painter)
-            self._draw_target_rois(painter)
+        self._draw_detection_overlays(painter)
+        self._draw_target_rois(painter)
 
         painter.end()
         self.image_label.setPixmap(self.pixmap)
@@ -782,6 +826,8 @@ class ImageViewer(QWidget):
             (eye_data["eyelid_contour_points"], self.eyelid_color, "eyelid_contour"),
             (eye_data["glint_points"], self.glint_color, "glint"),
         ]:
+            if annotation_type in self._auto_managed_annotations:
+                continue
             for point in points:
                 scaled_point = QPointF(point.x() * self.factor, point.y() * self.factor)
                 # Only show selection highlight for active eye
@@ -809,13 +855,27 @@ class ImageViewer(QWidget):
                     painter.drawText(text_pos, eye_label)
 
     def draw_ellipses_for_eye(self, painter: QPainter, eye_data: dict) -> None:
-        """Draw fitted ellipses for a specific eye."""
-        if eye_data["pupil_ellipse"]:
+        """Draw fitted ellipses + their centre markers for a specific eye."""
+        if eye_data["pupil_ellipse"] and "pupil" not in self._auto_managed_annotations:
             painter.setPen(QPen(self.pupil_ellipse_color, 1, Qt.SolidLine))
             self.draw_single_ellipse(painter, eye_data["pupil_ellipse"])
-        if eye_data["limbus_ellipse"]:
+            self._draw_ellipse_center(painter, eye_data["pupil_ellipse"], self.pupil_ellipse_color)
+        if eye_data["limbus_ellipse"] and "limbus" not in self._auto_managed_annotations:
             painter.setPen(QPen(self.limbus_ellipse_color, 1, Qt.SolidLine))
             self.draw_single_ellipse(painter, eye_data["limbus_ellipse"])
+            self._draw_ellipse_center(painter, eye_data["limbus_ellipse"], self.limbus_ellipse_color)
+
+    def _draw_ellipse_center(self, painter: QPainter, ellipse: tuple, color: QColor) -> None:
+        """Render a small filled dot at the centre of a manually fitted ellipse."""
+        if ellipse is None:
+            return
+        center, _size, _angle = ellipse
+        scaled = QPointF(center.x() * self.factor, center.y() * self.factor)
+        painter.save()
+        painter.setBrush(color)
+        painter.setPen(QPen(color, 1, Qt.SolidLine))
+        painter.drawEllipse(scaled, 2.0, 2.0)
+        painter.restore()
 
     def _draw_detection_overlays(self, painter: QPainter) -> None:
         """Render every per-target Auto Detect overlay in ``self._detection_overlays``."""
@@ -1023,7 +1083,12 @@ class ImageViewer(QWidget):
         painter.restore()
 
     def find_closest_point_and_type(self, pos: QPointF) -> tuple[QPointF | None, str | None]:
-        """Find the closest point and its annotation type."""
+        """Find the closest point and its annotation type.
+
+        Skips any annotation type currently owned by an auto detector so
+        the user can't accidentally drag a hidden manual point belonging
+        to an auto-managed target.
+        """
         pupil_point = find_closest_point(self.pupil_points, pos, self.factor)
         limbus_point = find_closest_point(self.limbus_points, pos, self.factor)
         eyelid_point = find_closest_point(self.eyelid_contour_points, pos, self.factor)
@@ -1039,7 +1104,7 @@ class ImageViewer(QWidget):
             (eyelid_point, "eyelid_contour"),
             (glint_point, "glint"),
         ]:
-            if point:
+            if point and point_type not in self._auto_managed_annotations:
                 dist = (point.x() - pos.x()) ** 2 + (point.y() - pos.y()) ** 2
                 if dist < min_dist:
                     min_dist = dist

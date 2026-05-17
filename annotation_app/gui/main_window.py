@@ -145,19 +145,29 @@ class MainWindow(QMainWindow):
 
         self.image_viewer = ImageViewer()
 
-        # Right panel for annotation controls. Wrapped in a QScrollArea so
-        # taller Manual-mode content can't push the window past the screen.
+        # Right panel: AnnotationControlPanel inside a QScrollArea so taller
+        # Auto Detect plugin stacks scroll instead of pushing the window
+        # past the screen. Clear All sits below the scroll area as a fixed
+        # footer so it stays visible regardless of how tall the panel
+        # contents grow.
         self.annotation_controls = AnnotationControlPanel()
         right_scroll = QScrollArea()
         right_scroll.setWidget(self.annotation_controls)
         right_scroll.setWidgetResizable(True)
         right_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        right_scroll.setFixedWidth(360)  # 340 panel + room for the vertical scrollbar
         right_scroll.setFrameShape(QScrollArea.NoFrame)
+
+        right_panel = QWidget()
+        right_layout = QVBoxLayout()
+        right_layout.setContentsMargins(0, 0, 0, 0)
+        right_layout.addWidget(right_scroll, 1)
+        right_layout.addWidget(self.annotation_controls.clear_all_button)
+        right_panel.setLayout(right_layout)
+        right_panel.setFixedWidth(360)  # 340 panel + room for the vertical scrollbar
 
         main_layout.addWidget(left_panel)
         main_layout.addWidget(self.image_viewer, 1)
-        main_layout.addWidget(right_scroll)
+        main_layout.addWidget(right_panel)
 
         central_widget.setLayout(main_layout)
         self.setCentralWidget(central_widget)
@@ -170,6 +180,11 @@ class MainWindow(QMainWindow):
         self.image_paths: list[str] = []
         self.current_image_index = -1
         self.annotation_modified = False
+        # Hashable identity of the last manual pupil ellipse we mirrored
+        # into the orchestrator cache; lets on_annotation_changed cheaply
+        # detect when the user has refitted the manual pupil so we can
+        # republish the synthetic pupil result for dependent plugins.
+        self._last_manual_pupil_signature: tuple | None = None
 
     @property
     def project_dir(self) -> str | None:
@@ -395,21 +410,41 @@ class MainWindow(QMainWindow):
             self._save_to_all_projects(settings)
 
     def _on_mode_changed(self, mode: str) -> None:
-        """Persist the new mode and toggle which set of overlays the viewer paints.
+        """Persist the new mode and cancel any Auto-Detect ROI drag state.
 
-        Manual mode shows the manual click-points + Annotate ROI; Auto
-        Detect shows the per-target detection ellipses / centres + ROIs.
-        Modes never overlap visually — the underlying data for both
-        stays in memory regardless of which paint path is active.
+        Manual annotations and detection overlays both paint regardless of
+        the active mode; visibility is decided per-target by which side
+        owns that target (manual or an auto detector). The mode switcher
+        only controls which panel is on the right and which side of the
+        per-target data the user is allowed to edit.
+
+        Switching to Manual cancels any ROI drag-edit toggle the user
+        left active on an Auto Detect panel so canvas clicks in Manual
+        mode aren't intercepted by a stale ROI drag handler.
         """
-        is_auto = mode == MODE_AUTO_DETECT
-        self.image_viewer.set_show_manual_annotations(not is_auto)
-        self.image_viewer.set_show_detection_overlays(is_auto)
+        if mode == MODE_MANUAL:
+            self._cancel_active_roi_edit()
         if not self.project_dirs:
             return
         settings = load_project_settings(self.project_dir)
         settings["current_mode"] = mode
         self._save_to_all_projects(settings)
+
+    def _cancel_active_roi_edit(self) -> None:
+        """Drop the active ROI drag-edit state on the canvas and untoggle every panel button.
+
+        Used when leaving Auto Detect mode so the canvas stops treating
+        clicks as ROI edits and so the panel button doesn't stay stuck
+        in its checked state when the user comes back.
+        """
+        self.image_viewer.set_active_roi_target(None)
+        for plugin in self._enabled_plugins.values():
+            panel = self.annotation_controls.auto_detect_panel(plugin.name)
+            button = getattr(panel, "roi_button", None) if panel is not None else None
+            if button is not None and button.isChecked():
+                button.blockSignals(True)
+                button.setChecked(False)
+                button.blockSignals(False)
 
     def update_image_list(self) -> None:
         """Update the image list widget with current image paths.
@@ -448,8 +483,25 @@ class MainWindow(QMainWindow):
         self.annotation_controller.save_current_annotations()
 
     def on_annotation_changed(self) -> None:
-        """Handle annotation change event."""
+        """Handle annotation change event.
+
+        Detects when the manual pupil ellipse identity changed and
+        republishes a synthetic pupil result so downstream auto
+        detectors (glint, limbus) pick up the updated centre / radius
+        through their usual ``shared_results["pupil"]`` path. Live
+        downstream plugins are re-run so their overlay tracks the new
+        manual pupil immediately.
+        """
         self.set_annotation_modified(True)
+        if "pupil" in self._enabled_plugins:
+            return
+        new_sig = self._manual_pupil_signature()
+        if new_sig == self._last_manual_pupil_signature:
+            return
+        self._last_manual_pupil_signature = new_sig
+        self._refresh_manual_pupil_in_cache()
+        self._refresh_live_plugin_results()
+        self._refresh_panel_availability()
 
     def _on_autosave_changed(self, enabled: bool) -> None:
         """Persist the autosave toggle in project settings."""
@@ -520,7 +572,66 @@ class MainWindow(QMainWindow):
                 plugin.target,
                 tuple(saved_roi) if saved_roi is not None else None,
             )
+        # Sync the manual-pupil mirror to the freshly loaded image's
+        # ellipse before live plugins re-run so glint / limbus pick up
+        # the right pupil source on first paint.
+        self._last_manual_pupil_signature = self._manual_pupil_signature()
+        self._refresh_manual_pupil_in_cache()
         self._refresh_live_plugin_results()
+        self._refresh_panel_availability()
+
+    def _manual_pupil_signature(self) -> tuple | None:
+        """Return a hashable identity of the current eye's manual pupil ellipse."""
+        pupil_ellipse = self.image_viewer.pupil_ellipse
+        if pupil_ellipse is None:
+            return None
+        center, size, angle = pupil_ellipse
+        return (center.x(), center.y(), size.width(), size.height(), angle)
+
+    def _build_synthetic_pupil_from_manual(self) -> dict | None:
+        """Build a pupil-plugin-shaped result from the current manual pupil ellipse, or None."""
+        pupil_ellipse = self.image_viewer.pupil_ellipse
+        if pupil_ellipse is None:
+            return None
+        center, size, angle = pupil_ellipse
+        cx, cy = float(center.x()), float(center.y())
+        return {
+            "center": [cx, cy],
+            "ellipse": {
+                "center": [cx, cy],
+                "size": [float(size.width()), float(size.height())],
+                "angle": float(angle),
+            },
+        }
+
+    def _refresh_manual_pupil_in_cache(self) -> None:
+        """Mirror the current manual pupil ellipse into the orchestrator cache.
+
+        Lets glint / limbus auto detectors consume a manually fitted pupil
+        through the same ``shared_results["pupil"]`` path they use for an
+        auto pupil result. No-op when an auto pupil plugin is enabled —
+        that plugin owns the cache slot.
+        """
+        if "pupil" in self._enabled_plugins:
+            return
+        synthetic = self._build_synthetic_pupil_from_manual()
+        self.orchestrator.set_cached_result("pupil", synthetic)
+
+    def _refresh_panel_availability(self) -> None:
+        """Disable each Auto Detect panel whose ``requires`` are unmet.
+
+        A dep is met when the orchestrator carries a non-None cached
+        result for it (either from a successful auto plugin run or from
+        the manual-pupil synthetic). Disabled panels grey out their
+        controls so the user sees that the upstream target needs to be
+        provided first.
+        """
+        for plugin in self._enabled_plugins.values():
+            panel = self.annotation_controls.auto_detect_panel(plugin.name)
+            if panel is None:
+                continue
+            deps_met = all(self.orchestrator.cached_result(dep) is not None for dep in plugin.requires)
+            panel.setEnabled(deps_met)
 
     def _refresh_live_plugin_results(self) -> None:
         """Re-run every enabled live plugin on the current image, in dep order.
@@ -588,6 +699,11 @@ class MainWindow(QMainWindow):
         self.image_viewer.clear_detection_overlay(target)
         self.image_viewer.set_target_roi(target, None)
         self.image_viewer.clear_target_mask(target)
+        # Enabling a detector takes the target away from the manual side;
+        # wipe any previously placed manual annotations for it so each
+        # target has a single source of truth.
+        if plugin_name != "disabled":
+            self.image_viewer.clear_manual_for_target(target)
         # Capture in-memory slider state of every other panel so the
         # rebuild does not silently revert their live tuning to the
         # project-saved values.
@@ -734,6 +850,48 @@ class MainWindow(QMainWindow):
             panels.append((plugin.name, panel))
         self.annotation_controls.set_auto_detect_panels(panels)
         self.orchestrator.set_enabled_plugins(dict(self._enabled_plugins))
+        self._sync_manual_for_auto_targets()
+        # Re-publish the manual pupil synthetic in case pupil ownership
+        # just flipped from auto back to manual, and gate the freshly
+        # mounted panels by their dependency availability.
+        self._last_manual_pupil_signature = self._manual_pupil_signature()
+        self._refresh_manual_pupil_in_cache()
+        self._refresh_panel_availability()
+
+    def _sync_manual_for_auto_targets(self) -> None:
+        """Mirror per-target detector ownership into the Manual panel + viewer.
+
+        For each target with an enabled auto detector the matching
+        Manual-panel row is hidden entirely (rather than greyed in
+        place) — leaving a disabled row dangling looked broken. The
+        viewer is told to suppress that target's manual painting and
+        click-add. If the currently selected Manual row just got
+        hidden, selection jumps to the first still-visible row so
+        canvas clicks don't fall through to an invisible target.
+        """
+        target_rows = (
+            ("pupil", self.annotation_controls.pupil_group, "pupil"),
+            ("limbus", self.annotation_controls.limbus_group, "limbus"),
+            ("eyelid", self.annotation_controls.eyelid_group, "eyelid_contour"),
+            ("glint", self.annotation_controls.glint_group, "glint"),
+        )
+        auto_targets: set[str] = set()
+        first_visible: tuple[object, str] | None = None
+        selected_hidden = False
+        for plugin_target, group, annotation in target_rows:
+            has_auto = plugin_target in self._enabled_plugins
+            group.setVisible(not has_auto)
+            if has_auto:
+                auto_targets.add(plugin_target)
+                if group.is_checked():
+                    selected_hidden = True
+            elif first_visible is None:
+                first_visible = (group, annotation)
+        self.image_viewer.set_auto_managed_targets(auto_targets)
+        if selected_hidden and first_visible is not None:
+            group, annotation = first_visible
+            group.set_checked(True)
+            self.image_viewer.set_current_annotation(annotation)
 
     def _on_plugin_params_changed(self, plugin_name: str, target: Target, params: dict) -> None:
         """Route a panel parameter change by the plugin's ``live`` flag.
@@ -785,27 +943,25 @@ class MainWindow(QMainWindow):
         self.image_viewer.set_target_mask(target, result.get("mask"))
         self.image_viewer.set_detection_overlay(target, result)
         self.set_annotation_modified(True)
+        self._refresh_panel_availability()
 
     def _on_plugin_failed(self, target: str) -> None:
         """Clear the per-target overlay + mask and surface the failure in the status bar."""
         self.image_viewer.clear_detection_overlay(target)
         self.image_viewer.clear_target_mask(target)
         self.statusBar().showMessage(f"Auto Detect: {target} failed at current parameters.", 5000)
+        self._refresh_panel_availability()
 
     def _on_clear_all(self) -> None:
-        """Route the Clear All button by current mode.
+        """Wipe every manual annotation AND every Auto Detect result on the current image.
 
-        Manual mode clears every manual annotation type (pupil / limbus /
-        eyelid / glint points). Auto Detect mode resets every mounted
-        plugin panel to its defaults, drops the orchestrator's cached
-        results, clears the viewer's overlays and per-target ROIs, and
-        cancels any in-flight debounced re-run. No detection runs — the
-        user clicks Run Auto Detect when ready.
+        Clear All is mode-agnostic by design: it drops the manual
+        point/ellipse sets across both eyes and resets every mounted
+        plugin panel + cached detection + overlay + mask + ROI. No
+        detection re-runs after the clear.
         """
-        if self.annotation_controls.current_mode() == MODE_AUTO_DETECT:
-            self._clear_all_auto_detect()
-        else:
-            self.image_viewer.clear_all()
+        self.image_viewer.clear_all()
+        self._clear_all_auto_detect()
 
     def _clear_all_auto_detect(self) -> None:
         """Reset every Auto Detect plugin panel, the orchestrator cache, and the viewer state."""
