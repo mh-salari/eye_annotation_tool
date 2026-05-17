@@ -22,16 +22,29 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "annotation schema). Overrides the per-project binocular setting."
         ),
     )
-    parser.add_argument(
+    sources = parser.add_mutually_exclusive_group()
+    sources.add_argument(
         "--folders",
         type=Path,
         nargs="+",
         default=None,
         help=(
             "One or more folders to load on startup (same effect as clicking "
-            "Load Folder, repeated). Each is walked recursively for supported "
-            "images and the union is presented as a single sorted session. "
-            "Per-project settings are taken from the first folder."
+            "Load Folder, repeated). Each is walked (non-recursively) for "
+            "supported images and the union is presented as a single sorted "
+            "session. Per-project settings are taken from the first folder."
+        ),
+    )
+    sources.add_argument(
+        "--images",
+        type=Path,
+        nargs="+",
+        default=None,
+        help=(
+            "Explicit list of image files to load on startup, in sorted order. "
+            "Useful for narrow-scope launches that want to show only a curated "
+            "set of images (e.g. a calibration helper). Mutually exclusive "
+            "with --folders."
         ),
     )
     parser.add_argument(
@@ -73,6 +86,8 @@ def run_app() -> None:
     main_window.show()
     if args.folders is not None:
         main_window.load_folder_paths([str(p) for p in args.folders])
+    elif args.images is not None:
+        main_window.load_image_paths([str(p) for p in args.images])
     sys.exit(app.exec_())
 
 

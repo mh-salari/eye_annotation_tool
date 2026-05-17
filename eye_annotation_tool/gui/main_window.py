@@ -419,6 +419,44 @@ class MainWindow(QMainWindow):
         self.update_image_list()
         self.load_current_image()
 
+    def load_image_paths(self, images: list[str]) -> None:
+        """Load an explicit list of image files in sorted order.
+
+        Lets a caller (or the ``--images`` CLI flag) hand-pick which
+        images to load, ignoring other files in the same folder.
+        Project settings are taken from the union of each image's
+        parent folder via the same chooser path as
+        :meth:`load_folder_paths`; non-image paths are dropped, missing
+        files are surfaced once.
+        """
+        if not images:
+            return
+        suffixes = self.IMAGE_SUFFIXES
+        missing = [str(p) for p in images if not Path(p).is_file()]
+        valid_paths = [Path(p) for p in images if Path(p).is_file() and Path(p).suffix.lower() in suffixes]
+        image_paths = sorted({str(p) for p in valid_paths})
+        if not image_paths:
+            QMessageBox.warning(
+                self,
+                "No Images Loaded",
+                "None of the supplied paths resolved to a supported image file. "
+                + (f"Missing or unreadable: {missing}" if missing else ""),
+            )
+            return
+        if missing:
+            QMessageBox.information(
+                self,
+                "Some Images Skipped",
+                "Some supplied paths were not loadable images:\n  - " + "\n  - ".join(missing),
+            )
+        parent_dirs = sorted({str(p.parent) for p in valid_paths})
+        if not self._apply_project_settings(parent_dirs):
+            return
+        self.image_paths = image_paths
+        self.current_image_index = 0
+        self.update_image_list()
+        self.load_current_image()
+
     def _load_project_settings_from(self, image_path: str) -> None:
         """Read the project settings file in the image's folder and apply it."""
         self._apply_project_settings([str(Path(image_path).parent)])
