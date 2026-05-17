@@ -120,22 +120,22 @@ class AnnotationControlPanel(QWidget):
         )
         layout.addWidget(self.annotation_types_title)
 
-        self.pupil_group = AnnotationGroup("Pupil", has_fit=True, has_auto_detector=False)
+        self.pupil_group = AnnotationGroup("Pupil", has_fit=True)
         self.pupil_group.selected.connect(lambda: self.annotation_changed.emit("pupil"))
         self.pupil_group.fit_requested.connect(self.fit_annotation_requested.emit)
         self.pupil_group.clear_requested.connect(self.clear_pupil_requested.emit)
         self.pupil_group.set_checked(True)
 
-        self.limbus_group = AnnotationGroup("Limbus", has_fit=True, has_auto_detector=False)
+        self.limbus_group = AnnotationGroup("Limbus", has_fit=True)
         self.limbus_group.selected.connect(lambda: self.annotation_changed.emit("limbus"))
         self.limbus_group.fit_requested.connect(self.fit_annotation_requested.emit)
         self.limbus_group.clear_requested.connect(self.clear_limbus_requested.emit)
 
-        self.eyelid_group = AnnotationGroup("Eyelid Contour", has_fit=False, has_auto_detector=False)
+        self.eyelid_group = AnnotationGroup("Eyelid Contour", has_fit=False)
         self.eyelid_group.selected.connect(lambda: self.annotation_changed.emit("eyelid_contour"))
         self.eyelid_group.clear_requested.connect(self.clear_eyelid_points_requested.emit)
 
-        self.glint_group = AnnotationGroup("Glint", has_fit=False, has_auto_detector=False)
+        self.glint_group = AnnotationGroup("Glint", has_fit=False)
         self.glint_group.selected.connect(lambda: self.annotation_changed.emit("glint"))
         self.glint_group.clear_requested.connect(self.clear_glint_points_requested.emit)
 

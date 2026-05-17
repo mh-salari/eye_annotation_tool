@@ -45,7 +45,6 @@ def _serialize_eye_block(block: dict) -> dict:
         "glint_points": [(p.x(), p.y()) for p in block["glint_points"]],
         "pupil_ellipse": ellipse_to_dict(block["pupil_ellipse"]),
         "limbus_ellipse": ellipse_to_dict(block["limbus_ellipse"]),
-        "roi": block.get("roi"),
     }
 
 
@@ -82,14 +81,11 @@ def _empty_eye_block() -> dict:
         "glint_points": [],
         "pupil_ellipse": None,
         "limbus_ellipse": None,
-        "roi": None,
     }
 
 
 def _deserialize_eye_block(block: dict) -> dict:
     """Convert one on-disk eye block back to in-memory form."""
-    roi_data = block.get("roi")
-    roi = tuple(roi_data) if roi_data and isinstance(roi_data, (list, tuple)) and len(roi_data) == 4 else None
     return {
         "pupil_points": list(starmap(QPointF, block.get("pupil_points", []))),
         "limbus_points": list(starmap(QPointF, block.get("limbus_points", []))),
@@ -97,7 +93,6 @@ def _deserialize_eye_block(block: dict) -> dict:
         "glint_points": list(starmap(QPointF, block.get("glint_points", []))),
         "pupil_ellipse": dict_to_ellipse(block.get("pupil_ellipse")),
         "limbus_ellipse": dict_to_ellipse(block.get("limbus_ellipse")),
-        "roi": roi,
     }
 
 

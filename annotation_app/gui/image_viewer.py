@@ -63,7 +63,6 @@ class ImageViewer(QWidget):
                 "glint_points": [],
                 "pupil_ellipse": None,
                 "limbus_ellipse": None,
-                "roi": None,  # (x, y, width, height)
             },
             "right": {
                 "pupil_points": [],
@@ -72,7 +71,6 @@ class ImageViewer(QWidget):
                 "glint_points": [],
                 "pupil_ellipse": None,
                 "limbus_ellipse": None,
-                "roi": None,  # (x, y, width, height)
             },
         }
 
@@ -83,7 +81,6 @@ class ImageViewer(QWidget):
         self.glint_points = []
         self.pupil_ellipse = None
         self.limbus_ellipse = None
-        self.roi = None  # Current eye's ROI
 
         self.current_annotation = "pupil"
         self.original_pixmap = None
@@ -97,8 +94,8 @@ class ImageViewer(QWidget):
         self.last_mouse_pos = None
         self.moving_all_points = False
 
-        # ROI drawing variables
-        self.roi_drawing_mode = False
+        # Per-target ROI drag state. Used by both mouse-event paths for
+        # any plugin whose panel exposes roi_edit_requested.
         self.drawing_roi = False
         self.roi_start_pos = None
         self.moving_roi = False
@@ -163,8 +160,6 @@ class ImageViewer(QWidget):
         self.glint_color = QColor(255, 165, 0, 255)  # Orange
         self.glint_select_color = QColor(255, 215, 0, 255)  # Gold
 
-        self.roi_color = QColor(0, 188, 212, 255)  # Cyan
-
         # Auto Detect overlay colours. Pupil ellipse reuses the Annotate-mode
         # pupil ellipse colour for visual continuity; the centre marker is a
         # distinct bright green so it reads on top of the iris.
@@ -207,7 +202,6 @@ class ImageViewer(QWidget):
         self.eye_data[self.current_eye]["glint_points"] = self.glint_points.copy()
         self.eye_data[self.current_eye]["pupil_ellipse"] = self.pupil_ellipse
         self.eye_data[self.current_eye]["limbus_ellipse"] = self.limbus_ellipse
-        self.eye_data[self.current_eye]["roi"] = self.roi
 
     def load_current_eye_data(self) -> None:
         """Load the data for the current eye into working variables."""
@@ -217,7 +211,6 @@ class ImageViewer(QWidget):
         self.glint_points = self.eye_data[self.current_eye]["glint_points"].copy()
         self.pupil_ellipse = self.eye_data[self.current_eye]["pupil_ellipse"]
         self.limbus_ellipse = self.eye_data[self.current_eye]["limbus_ellipse"]
-        self.roi = self.eye_data[self.current_eye]["roi"]
 
     def switch_eye(self, eye: str) -> None:
         """Switch between left and right eye annotations."""
@@ -262,27 +255,6 @@ class ImageViewer(QWidget):
         """Set annotation data for both eyes."""
         self.eye_data = eye_data.copy()
         self.load_current_eye_data()
-        self.update_image()
-
-    def toggle_roi_mode(self) -> None:
-        """Toggle ROI drawing mode on/off."""
-        self.roi_drawing_mode = not self.roi_drawing_mode
-        if not self.roi_drawing_mode:
-            self.drawing_roi = False
-            self.moving_roi = False
-            self.resizing_roi = False
-            self.roi_resize_handle = None
-        self.update_image()
-
-    def get_roi(self) -> tuple | None:
-        """Get the current eye's ROI."""
-        return self.roi
-
-    def clear_roi(self) -> None:
-        """Clear the current eye's ROI."""
-        self.roi = None
-        self.save_current_eye_data()
-        self.annotation_changed.emit()
         self.update_image()
 
     def reset_undo_stack(self, initial_state: dict | None = None) -> None:
@@ -373,18 +345,14 @@ class ImageViewer(QWidget):
                 self.update_image()
 
     def _active_drag_roi(self) -> tuple | None:
-        """Return the rectangle currently being drag-edited (Annotate self.roi or a target ROI)."""
-        if self.roi_drawing_mode:
-            return self.roi
-        if self._active_roi_target is not None:
-            return self._target_rois.get(self._active_roi_target)
-        return None
+        """Return the per-target rectangle currently being drag-edited (or None)."""
+        if self._active_roi_target is None:
+            return None
+        return self._target_rois.get(self._active_roi_target)
 
     def _set_active_drag_roi(self, value: tuple | None) -> None:
-        """Write the in-progress drag rectangle to its owner (Annotate or target store)."""
-        if self.roi_drawing_mode:
-            self.roi = value
-        elif self._active_roi_target is not None:
+        """Write the in-progress drag rectangle to its target store."""
+        if self._active_roi_target is not None:
             self._target_rois[self._active_roi_target] = value
 
     def _drag_active_roi(self, new_pos: QPointF) -> None:
@@ -392,8 +360,7 @@ class ImageViewer(QWidget):
 
         Dispatches by ``drawing_roi`` / ``moving_roi`` / ``resizing_roi``
         flags. The active rectangle is read via :meth:`_active_drag_roi`
-        and written back via :meth:`_set_active_drag_roi` so this works
-        for both the Annotate-mode ROI and per-target Auto Detect ROIs.
+        and written back via :meth:`_set_active_drag_roi`.
         """
         if self.drawing_roi:
             x = min(self.roi_start_pos.x(), new_pos.x())
@@ -462,12 +429,8 @@ class ImageViewer(QWidget):
         elif event.button() == Qt.LeftButton:
             image_pos = self.get_image_position(event.pos())
             if image_pos:
-                # Annotate-mode self.roi drag takes priority over the
-                # per-target Auto Detect ROIs and the annotation-point flow.
-                if self.roi_drawing_mode:
-                    self._try_begin_roi_drag(image_pos, self.roi)
-                    return
-                # A per-target ROI in drag-edit mode consumes the click too.
+                # A per-target ROI in drag-edit mode consumes the click
+                # before any Manual-mode click-to-place flow runs.
                 if self._active_roi_target is not None:
                     self._try_begin_roi_drag(image_pos, self._target_rois.get(self._active_roi_target))
                     return
@@ -555,11 +518,7 @@ class ImageViewer(QWidget):
                 self.moving_roi = False
                 self.resizing_roi = False
                 self.roi_resize_handle = None
-                if self.roi_drawing_mode:
-                    if self.roi:
-                        self.save_current_eye_data()
-                        self.annotation_changed.emit()
-                elif self._active_roi_target is not None:
+                if self._active_roi_target is not None:
                     target = self._active_roi_target
                     self.target_roi_changed.emit(target, self._target_rois.get(target))
                 return
@@ -787,8 +746,6 @@ class ImageViewer(QWidget):
             self.draw_eye_annotations(painter, "left")
             if not self.single_eye_mode:
                 self.draw_eye_annotations(painter, "right")
-            if self.roi:
-                self.draw_roi(painter)
 
         if self._show_detection_overlays:
             self._draw_detection_overlays(painter)
@@ -859,43 +816,6 @@ class ImageViewer(QWidget):
         if eye_data["limbus_ellipse"]:
             painter.setPen(QPen(self.limbus_ellipse_color, 1, Qt.SolidLine))
             self.draw_single_ellipse(painter, eye_data["limbus_ellipse"])
-
-    def draw_roi(self, painter: QPainter) -> None:
-        """Draw the ROI rectangle with dashed lines and corner handles."""
-        if not self.roi:
-            return
-
-        x, y, w, h = self.roi
-        scaled_x = x * self.factor
-        scaled_y = y * self.factor
-        scaled_w = w * self.factor
-        scaled_h = h * self.factor
-
-        # Draw dashed rectangle
-        pen = QPen(self.roi_color, 2, Qt.DashLine)
-        painter.setPen(pen)
-        painter.drawRect(int(scaled_x), int(scaled_y), int(scaled_w), int(scaled_h))
-
-        # Draw corner handles if in ROI drawing mode
-        if self.roi_drawing_mode:
-            handle_size = 8
-            painter.setPen(QPen(self.roi_color, 2, Qt.SolidLine))
-            painter.setBrush(self.roi_color)
-
-            # Draw corner handles
-            corners = [
-                (scaled_x, scaled_y),  # top-left
-                (scaled_x + scaled_w, scaled_y),  # top-right
-                (scaled_x, scaled_y + scaled_h),  # bottom-left
-                (scaled_x + scaled_w, scaled_y + scaled_h),  # bottom-right
-            ]
-            for cx, cy in corners:
-                painter.drawRect(
-                    int(cx - handle_size / 2),
-                    int(cy - handle_size / 2),
-                    handle_size,
-                    handle_size,
-                )
 
     def _draw_detection_overlays(self, painter: QPainter) -> None:
         """Render every per-target Auto Detect overlay in ``self._detection_overlays``."""
@@ -1254,21 +1174,20 @@ class ImageViewer(QWidget):
         for i in range(len(points)):
             points[i] = QPointF(points[i].x() + delta_x, points[i].y() + delta_y)
 
-    def is_point_in_roi(self, point: QPointF, roi: tuple | None = None) -> bool:
-        """Check if a point is inside the given rectangle (defaults to ``self.roi``)."""
-        rect = roi if roi is not None else self.roi
-        if not rect:
+    @staticmethod
+    def is_point_in_roi(point: QPointF, roi: tuple | None) -> bool:
+        """Check if a point is inside the given rectangle."""
+        if not roi:
             return False
-        x, y, w, h = rect
+        x, y, w, h = roi
         return x <= point.x() <= x + w and y <= point.y() <= y + h
 
-    def get_roi_handle_at_pos(self, point: QPointF, roi: tuple | None = None) -> str | None:
+    def get_roi_handle_at_pos(self, point: QPointF, roi: tuple | None) -> str | None:
         """Get the corner-handle name (tl/tr/bl/br) at ``point`` for the given rectangle."""
-        rect = roi if roi is not None else self.roi
-        if not rect:
+        if not roi:
             return None
 
-        x, y, w, h = rect
+        x, y, w, h = roi
         handle_size = 8 / self.factor  # in image coordinates
 
         if abs(point.x() - x) < handle_size and abs(point.y() - y) < handle_size:
