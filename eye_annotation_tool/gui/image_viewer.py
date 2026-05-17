@@ -78,6 +78,10 @@ class ImageViewer(QWidget):
     def setup_variables(self) -> None:
         """Initialize instance variables."""
         self.factor = 1.0
+        # Set on the first ``load_image`` so the zoom factor only auto-fits
+        # the inaugural image; subsequent navigations keep whatever zoom the
+        # user has dialed in.
+        self._zoom_initialized = False
         self.current_eye = "left"
 
         # Store annotations for both eyes separately
@@ -748,7 +752,9 @@ class ImageViewer(QWidget):
         self._target_rois.clear()
         self._target_masks.clear()
         self.reset_undo_stack()
-        self._fit_to_viewport()
+        if not self._zoom_initialized:
+            self._fit_to_viewport()
+            self._zoom_initialized = True
         self.update_image()
         self.image_loaded.emit()
         return True
@@ -818,9 +824,10 @@ class ImageViewer(QWidget):
     def _fit_to_viewport(self) -> None:
         """Pick a zoom factor so the loaded image fits inside the scroll viewport.
 
-        Reset on every image load so a wide binocular image is fully
-        visible without manual zoom-out, while smaller images don't get
-        scaled up past 1x (we never enlarge — only shrink to fit).
+        Called on the first ``load_image`` and by the user-facing
+        ``reset_zoom_to_fit`` action. A wide binocular image is fully
+        visible without manual zoom-out; smaller images don't get scaled
+        up past 1x (we never enlarge — only shrink to fit).
         """
         if self.original_pixmap is None or self.original_pixmap.isNull():
             return
