@@ -513,10 +513,10 @@ class ImageViewer(QWidget):
     def _try_begin_roi_drag(self, image_pos: QPointF, current: tuple | None) -> bool:
         """Convert a click on or near ``current`` into a resize/move/draw state.
 
-        Returns True iff this click consumes the event (i.e. it landed on
-        an ROI handle / inside the rectangle, or it began a fresh draw).
-        Always returns True under the present caller — the caller has
-        already established that some ROI drag mode is active.
+        Returns True — the click is always consumed by ROI-drag mode. A
+        click on the inactive eye's half in binocular mode is consumed
+        without starting a fresh draw, so the user can't accidentally
+        annotate the wrong side; switch eyes first.
         """
         if current:
             handle = self.get_roi_handle_at_pos(image_pos, current)
@@ -529,6 +529,8 @@ class ImageViewer(QWidget):
                 self.moving_roi = True
                 self.roi_start_pos = image_pos
                 return True
+        if not self._point_on_active_side(image_pos):
+            return True
         # Begin a fresh draw, but keep the previous rectangle in place
         # until the user actually drags past the threshold — a stray
         # click without movement leaves the existing ROI untouched.
