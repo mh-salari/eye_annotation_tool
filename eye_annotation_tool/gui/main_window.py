@@ -4,7 +4,8 @@ import ast
 from pathlib import Path
 
 import numpy as np
-from PyQt5.QtCore import QEvent, QRect, Qt, QTimer
+import qtawesome as qta
+from PyQt5.QtCore import QEvent, QRect, QSize, Qt, QTimer
 from PyQt5.QtGui import QCloseEvent, QIcon, QPixmap, QScreen
 from PyQt5.QtWidgets import (
     QApplication,
@@ -210,20 +211,42 @@ class MainWindow(QMainWindow):
         # left panel — fixed rows so they stay reachable regardless of
         # how long the loaded-images list grows. Brightness only changes
         # the canvas; detector plugins keep seeing the unmodified source.
+        # Icons are Material Design Icons via qtawesome (mdi6.*); tooltips
+        # carry the full label so the icon-only buttons stay accessible.
+        icon_colour = "#e0e0e0"
+        icon_size = QSize(18, 18)
         zoom_row = QHBoxLayout()
         zoom_row.setContentsMargins(0, 0, 0, 0)
-        self.zoom_in_button = MaterialButton("Zoom +")
-        self.zoom_out_button = MaterialButton("Zoom -")
-        self.zoom_reset_button = MaterialButton("Reset Zoom")
+        self.zoom_in_button = MaterialButton("", compact=True)
+        self.zoom_in_button.setIcon(qta.icon("mdi6.magnify-plus-outline", color=icon_colour))
+        self.zoom_in_button.setIconSize(icon_size)
+        self.zoom_in_button.setToolTip("Zoom in")
+        self.zoom_out_button = MaterialButton("", compact=True)
+        self.zoom_out_button.setIcon(qta.icon("mdi6.magnify-minus-outline", color=icon_colour))
+        self.zoom_out_button.setIconSize(icon_size)
+        self.zoom_out_button.setToolTip("Zoom out")
+        self.zoom_reset_button = MaterialButton("", compact=True)
+        self.zoom_reset_button.setIcon(qta.icon("mdi6.fit-to-screen-outline", color=icon_colour))
+        self.zoom_reset_button.setIconSize(icon_size)
+        self.zoom_reset_button.setToolTip("Fit image to viewport")
         zoom_row.addWidget(self.zoom_in_button)
         zoom_row.addWidget(self.zoom_out_button)
         zoom_row.addWidget(self.zoom_reset_button)
         left_layout.addLayout(zoom_row)
         brightness_row = QHBoxLayout()
         brightness_row.setContentsMargins(0, 0, 0, 0)
-        self.brighter_button = MaterialButton("Brighter")
-        self.darker_button = MaterialButton("Darker")
-        self.brightness_reset_button = MaterialButton("Reset Brightness")
+        self.brighter_button = MaterialButton("", compact=True)
+        self.brighter_button.setIcon(qta.icon("mdi6.brightness-7", color=icon_colour))
+        self.brighter_button.setIconSize(icon_size)
+        self.brighter_button.setToolTip("Brighten the displayed image")
+        self.darker_button = MaterialButton("", compact=True)
+        self.darker_button.setIcon(qta.icon("mdi6.brightness-4", color=icon_colour))
+        self.darker_button.setIconSize(icon_size)
+        self.darker_button.setToolTip("Darken the displayed image")
+        self.brightness_reset_button = MaterialButton("", compact=True)
+        self.brightness_reset_button.setIcon(qta.icon("mdi6.brightness-auto", color=icon_colour))
+        self.brightness_reset_button.setIconSize(icon_size)
+        self.brightness_reset_button.setToolTip("Restore original brightness")
         brightness_row.addWidget(self.brighter_button)
         brightness_row.addWidget(self.darker_button)
         brightness_row.addWidget(self.brightness_reset_button)
