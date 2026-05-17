@@ -19,7 +19,8 @@ from collections.abc import Callable
 
 import numpy as np
 from pupil_glint_detector import detect_limbus
-from PyQt5.QtCore import Qt, pyqtSignal
+from PyQt5.QtCore import QPointF, Qt, pyqtSignal
+from PyQt5.QtGui import QColor, QPainter, QPen
 from PyQt5.QtWidgets import (
     QAbstractSpinBox,
     QDoubleSpinBox,
@@ -34,6 +35,11 @@ from PyQt5.QtWidgets import (
 
 from annotation_app.auto_detectors.plugin_interface import DetectorPlugin
 from annotation_app.gui.custom_widgets import MaterialButton
+
+# Overlay palette for the Daugman Limbus plugin. Re-uses the muted
+# limbus hue so it harmonises with the manual-mode limbus ellipse a
+# user might have drawn in a previous session.
+LIMBUS_COLOR = QColor(139, 122, 162, 255)
 
 # Slider scale for the two float ring-factor knobs: slider carries an
 # int in [1, 100], divided by 10 to recover the actual multiplier in
@@ -237,6 +243,9 @@ class DaugmanLimbus(DetectorPlugin):
     target = "limbus"
     requires = ("pupil",)
     live = False
+    # Drawn behind pupil + glint markers so the iris ring frames them
+    # without obscuring the bright details.
+    overlay_z_order = -10
 
     @classmethod
     def default_params(cls) -> dict:
@@ -287,3 +296,20 @@ class DaugmanLimbus(DetectorPlugin):
             "center": list(blob["center"]),
             "radius": float(blob["radius"]),
         }
+
+    def draw_overlay(self, painter: QPainter, result: dict, scale: float) -> None:
+        """Render the detected limbus as a single circle outline."""
+        center = result.get("center")
+        radius = result.get("radius")
+        if center is None or radius is None:
+            return
+        cx, cy = center
+        painter.save()
+        painter.setPen(QPen(LIMBUS_COLOR, 1, Qt.SolidLine))
+        painter.setBrush(Qt.NoBrush)
+        painter.drawEllipse(
+            QPointF(cx * scale, cy * scale),
+            float(radius) * scale,
+            float(radius) * scale,
+        )
+        painter.restore()

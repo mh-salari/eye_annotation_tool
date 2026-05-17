@@ -1,6 +1,7 @@
 """Image viewer widget for displaying and annotating eye images."""
 
 from collections import deque
+from operator import itemgetter
 from typing import ClassVar
 
 import cv2
@@ -128,6 +129,13 @@ class ImageViewer(QWidget):
         # matches the corresponding plugin's serialise/deserialise contract.
         self._detection_overlays: dict[str, dict] = {}
 
+        # Plugin instance currently owning each target. Populated by
+        # MainWindow when panels are mounted (and cleared when a target's
+        # plugin is set to "disabled"). The viewer reads each plugin's
+        # ``draw_overlay`` method + ``roi_color`` / ``mask_color`` attrs
+        # so adding a new plugin needs no edits here.
+        self._active_plugins: dict[str, object] = {}
+
         # Plugin targets currently owned by an auto detector. Manual
         # painting and click-to-place for these targets is suppressed so
         # each target has a single source of truth (auto OR manual,
@@ -171,34 +179,13 @@ class ImageViewer(QWidget):
         self.glint_color = QColor(255, 165, 0, 255)  # Orange
         self.glint_select_color = QColor(255, 215, 0, 255)  # Gold
 
-        # Auto Detect overlay colours. Pupil ellipse reuses the Annotate-mode
-        # pupil ellipse colour for visual continuity; the centre marker is a
-        # distinct bright green so it reads on top of the iris.
-        self.detection_pupil_ellipse_color = self.pupil_ellipse_color
-        self.detection_pupil_center_color = QColor(40, 220, 60, 255)
-        # Glint centres are drawn as small filled red dots — saturated red
-        # reads on both bright glint highlights and the surrounding iris.
-        self.detection_glint_color = QColor(255, 40, 40, 255)
-        # Limbus circles reuse the Annotate-mode limbus colour for
-        # visual continuity between modes.
-        self.detection_limbus_color = self.limbus_ellipse_color
-
-        # Per-target ROI rectangle colours. Each target's ROI is drawn in
-        # the same hue as its detection marker so the association is
-        # obvious at a glance.
-        self.target_roi_colors: dict[str, QColor] = {
-            "pupil": self.detection_pupil_center_color,
-            "glint": self.detection_glint_color,
-        }
-
-        # Per-target threshold-mask colours. Lower alpha than the marker
-        # palette so the underlying image is still readable through the
-        # overlay; cyan on the dark pupil and magenta on the bright glint
-        # both contrast well with their respective backgrounds.
-        self.target_mask_colors: dict[str, QColor] = {
-            "pupil": QColor(0, 200, 220, 64),
-            "glint": QColor(255, 0, 200, 110),
-        }
+        # Fallback colours used when an Auto Detect ROI or threshold mask
+        # belongs to a plugin that didn't declare its own colour. Plugins
+        # are expected to set ``roi_color`` / ``mask_color`` on the class
+        # body — these defaults exist only so a misconfigured plugin
+        # still renders something visible instead of crashing.
+        self._fallback_roi_color = QColor(255, 255, 255, 200)
+        self._fallback_mask_color = QColor(255, 255, 255, 64)
 
     def setup_undo_system(self) -> None:
         """Initialize the undo/redo system."""
@@ -639,6 +626,20 @@ class ImageViewer(QWidget):
         self.annotation_changed.emit()
         self.update_image()
 
+    def set_active_plugin(self, target: str, plugin: object) -> None:
+        """Record the plugin instance currently owning ``target``.
+
+        Called by MainWindow whenever a plugin panel is mounted so the
+        viewer can later route detection overlay drawing through
+        ``plugin.draw_overlay`` and pick up the plugin's own
+        ``roi_color`` / ``mask_color`` palette.
+        """
+        self._active_plugins[target] = plugin
+
+    def clear_active_plugin(self, target: str) -> None:
+        """Drop the plugin reference for ``target`` (panel unmounted / disabled)."""
+        self._active_plugins.pop(target, None)
+
     def set_detection_overlay(self, target: str, result: dict) -> None:
         """Store an Auto Detect result for ``target`` and re-paint."""
         self._detection_overlays[target] = result
@@ -878,45 +879,43 @@ class ImageViewer(QWidget):
         painter.restore()
 
     def _draw_detection_overlays(self, painter: QPainter) -> None:
-        """Render every per-target Auto Detect overlay in ``self._detection_overlays``."""
+        """Render every per-target Auto Detect overlay via the plugins themselves.
+
+        Each plugin owns its ``draw_overlay(painter, result, scale)`` and
+        declares an integer ``overlay_z_order`` — overlays are drawn in
+        ascending z-order so a plugin can sit visually behind or on top
+        of others (e.g. limbus iris ring goes under the pupil + glint
+        markers).
+        """
         # Threshold-mask fills go under the markers so the centres and
         # ellipses remain legible on top of the mask. Each plugin's mask
         # paints only when its "Show mask" toggle is on.
         self._draw_target_masks(painter)
-        limbus = self._detection_overlays.get("limbus")
-        if limbus is not None:
-            self._draw_limbus_detection(painter, limbus)
-        pupil = self._detection_overlays.get("pupil")
-        if pupil is not None:
-            self._draw_pupil_detection(painter, pupil)
-        glint = self._detection_overlays.get("glint")
-        if glint is not None:
-            self._draw_glint_detection(painter, glint)
-
-    def _draw_limbus_detection(self, painter: QPainter, result: dict) -> None:
-        """Render a limbus-target detection result as a single circle outline."""
-        center = result.get("center")
-        radius = result.get("radius")
-        if center is None or radius is None:
-            return
-        cx, cy = center
-        painter.save()
-        painter.setPen(QPen(self.detection_limbus_color, 1, Qt.SolidLine))
-        painter.setBrush(Qt.NoBrush)
-        painter.drawEllipse(
-            QPointF(cx * self.factor, cy * self.factor),
-            float(radius) * self.factor,
-            float(radius) * self.factor,
-        )
-        painter.restore()
+        pairs: list[tuple[int, str, object, dict]] = []
+        for target, result in self._detection_overlays.items():
+            if result is None:
+                continue
+            plugin = self._active_plugins.get(target)
+            if plugin is None:
+                continue
+            z = int(getattr(plugin, "overlay_z_order", 0))
+            pairs.append((z, target, plugin, result))
+        pairs.sort(key=itemgetter(0))
+        for _z, _target, plugin, result in pairs:
+            plugin.draw_overlay(painter, result, self.factor)
 
     def _draw_target_masks(self, painter: QPainter) -> None:
-        """Render each visible per-target threshold mask as a semi-transparent fill."""
-        fallback_color = QColor(255, 255, 255, 64)
+        """Render each visible per-target threshold mask as a semi-transparent fill.
+
+        Colour is read from the active plugin's :attr:`mask_color`; a
+        plugin that didn't declare one falls back to neutral white so
+        the mask is still visible.
+        """
         for target, mask in self._target_masks.items():
             if mask is None or not self._show_target_masks.get(target):
                 continue
-            color = self.target_mask_colors.get(target, fallback_color)
+            plugin = self._active_plugins.get(target)
+            color = getattr(plugin, "mask_color", None) or self._fallback_mask_color
             self._draw_mask(painter, mask, color)
 
     def _draw_mask(self, painter: QPainter, mask: "np.ndarray", color: QColor) -> None:
@@ -940,27 +939,19 @@ class ImageViewer(QWidget):
         )
         painter.drawPixmap(0, 0, scaled)
 
-    def _draw_glint_detection(self, painter: QPainter, result: dict) -> None:
-        """Render glint-target detection markers as small filled red dots."""
-        glints = result.get("glints") or []
-        painter.setBrush(self.detection_glint_color)
-        painter.setPen(QPen(self.detection_glint_color, 3, Qt.SolidLine))
-        for g in glints:
-            gx, gy = g["center"]
-            painter.drawEllipse(QPointF(gx * self.factor, gy * self.factor), 1.5, 1.5)
-
     def _draw_target_rois(self, painter: QPainter) -> None:
         """Render every stored per-target ROI rectangle.
 
-        All targets are drawn dashed in their plugin colour; the currently
-        active target additionally gets corner handles so the user can see
-        which one accepts mouse drags.
+        Colour is read from the active plugin's :attr:`roi_color`; a
+        plugin that didn't declare one falls back to neutral white. The
+        currently active drag-edit target additionally gets corner
+        handles so the user can see which one accepts mouse drags.
         """
-        fallback_color = QColor(255, 255, 255, 200)
         for target, roi in self._target_rois.items():
             if roi is None:
                 continue
-            color = self.target_roi_colors.get(target, fallback_color)
+            plugin = self._active_plugins.get(target)
+            color = getattr(plugin, "roi_color", None) or self._fallback_roi_color
             self._draw_target_roi_box(
                 painter,
                 roi,
@@ -1001,35 +992,6 @@ class ImageViewer(QWidget):
                     handle_size,
                     handle_size,
                 )
-
-    def _draw_pupil_detection(self, painter: QPainter, result: dict) -> None:
-        """Render a pupil-target detection result.
-
-        ``result`` matches the shape produced by a pupil plugin's
-        deserialise: ``{"center": [cx, cy], "ellipse": {"center", "size",
-        "angle"}}``. The ellipse outlines the pupil contour; the centre is
-        drawn as a small filled dot on top.
-        """
-        ellipse = result.get("ellipse")
-        if ellipse is not None:
-            ecx, ecy = ellipse["center"]
-            ew, eh = ellipse["size"]
-            angle = float(ellipse["angle"])
-            painter.save()
-            painter.setPen(QPen(self.detection_pupil_ellipse_color, 1, Qt.SolidLine))
-            painter.setBrush(Qt.NoBrush)
-            painter.translate(QPointF(ecx * self.factor, ecy * self.factor))
-            painter.rotate(angle)
-            painter.drawEllipse(QPointF(0, 0), (ew / 2) * self.factor, (eh / 2) * self.factor)
-            painter.restore()
-
-        center = result.get("center")
-        if center is not None:
-            cx, cy = center
-            scaled = QPointF(cx * self.factor, cy * self.factor)
-            painter.setBrush(self.detection_pupil_center_color)
-            painter.setPen(QPen(self.detection_pupil_center_color, 3, Qt.SolidLine))
-            painter.drawEllipse(scaled, 1.5, 1.5)
 
     def fit_annotation(self) -> bool:
         """Fit an ellipse to the current annotation points."""

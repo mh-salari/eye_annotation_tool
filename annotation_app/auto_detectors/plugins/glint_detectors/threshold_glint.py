@@ -23,7 +23,8 @@ the box for a single-LED rig at the pgd defaults.
 
 import numpy as np
 from pupil_glint_detector import detect_glints
-from PyQt5.QtCore import Qt, pyqtSignal
+from PyQt5.QtCore import QPointF, Qt, pyqtSignal
+from PyQt5.QtGui import QColor, QPainter, QPen
 from PyQt5.QtWidgets import (
     QAbstractSpinBox,
     QCheckBox,
@@ -40,6 +41,13 @@ from PyQt5.QtWidgets import (
 
 from annotation_app.auto_detectors.plugin_interface import DetectorPlugin
 from annotation_app.gui.custom_widgets import MaterialButton
+
+# Overlay palette for the Threshold Glint plugin. Saturated red reads
+# on bright glint highlights and on the surrounding iris; the mask fill
+# uses magenta so it contrasts with the pupil mask cyan.
+GLINT_COLOR = QColor(255, 40, 40, 255)
+ROI_COLOR = GLINT_COLOR
+MASK_COLOR = QColor(255, 0, 200, 110)
 
 # Same shape as the pupil plugin's centre-method dropdown — the four
 # methods come from pgd's _contour_center helper, which both plugins
@@ -447,6 +455,9 @@ class ThresholdGlint(DetectorPlugin):
     target = "glint"
     requires = ("pupil",)
     live = True
+    overlay_z_order = 10
+    roi_color = ROI_COLOR
+    mask_color = MASK_COLOR
 
     @classmethod
     def default_params(cls) -> dict:
@@ -511,3 +522,12 @@ class ThresholdGlint(DetectorPlugin):
     def deserialize(self, blob: dict) -> dict:
         """Reconstruct an in-memory result dict from a stored JSON blob."""
         return {"glints": [{"center": list(g["center"])} for g in blob.get("glints", [])]}
+
+    def draw_overlay(self, painter: QPainter, result: dict, scale: float) -> None:
+        """Render each detected glint as a small filled red dot."""
+        glints = result.get("glints") or []
+        painter.setBrush(GLINT_COLOR)
+        painter.setPen(QPen(GLINT_COLOR, 3, Qt.SolidLine))
+        for g in glints:
+            gx, gy = g["center"]
+            painter.drawEllipse(QPointF(gx * scale, gy * scale), 1.5, 1.5)

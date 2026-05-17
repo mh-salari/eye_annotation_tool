@@ -13,7 +13,8 @@ orchestrator's ``shared_results`` dict.
 
 import numpy as np
 from pupil_glint_detector import detect_pupil
-from PyQt5.QtCore import Qt, pyqtSignal
+from PyQt5.QtCore import QPointF, Qt, pyqtSignal
+from PyQt5.QtGui import QColor, QPainter, QPen
 from PyQt5.QtWidgets import (
     QAbstractSpinBox,
     QCheckBox,
@@ -29,6 +30,14 @@ from PyQt5.QtWidgets import (
 
 from annotation_app.auto_detectors.plugin_interface import DetectorPlugin
 from annotation_app.gui.custom_widgets import MaterialButton
+
+# Overlay palette for the Threshold Pupil plugin. Kept local to the
+# plugin so adding a new pupil detector with a different look does not
+# need core edits.
+ELLIPSE_COLOR = QColor(0, 127, 118, 255)
+CENTER_COLOR = QColor(40, 220, 60, 255)
+ROI_COLOR = CENTER_COLOR
+MASK_COLOR = QColor(0, 200, 220, 64)
 
 # Display label / serialised key for each of the four centre-computation
 # methods exposed by pupil_glint_detector. Shared shape with the glint
@@ -205,6 +214,9 @@ class ThresholdPupil(DetectorPlugin):
     target = "pupil"
     requires = ()
     live = True
+    overlay_z_order = 0
+    roi_color = ROI_COLOR
+    mask_color = MASK_COLOR
 
     @classmethod
     def default_params(cls) -> dict:
@@ -271,3 +283,25 @@ class ThresholdPupil(DetectorPlugin):
                 "angle": float(blob["ellipse"]["angle"]),
             },
         }
+
+    def draw_overlay(self, painter: QPainter, result: dict, scale: float) -> None:
+        """Render the fitted pupil ellipse and its centre dot."""
+        ellipse = result.get("ellipse")
+        if ellipse is not None:
+            ecx, ecy = ellipse["center"]
+            ew, eh = ellipse["size"]
+            angle = float(ellipse["angle"])
+            painter.save()
+            painter.setPen(QPen(ELLIPSE_COLOR, 1, Qt.SolidLine))
+            painter.setBrush(Qt.NoBrush)
+            painter.translate(QPointF(ecx * scale, ecy * scale))
+            painter.rotate(angle)
+            painter.drawEllipse(QPointF(0, 0), (ew / 2) * scale, (eh / 2) * scale)
+            painter.restore()
+        center = result.get("center")
+        if center is not None:
+            cx, cy = center
+            scaled = QPointF(cx * scale, cy * scale)
+            painter.setBrush(CENTER_COLOR)
+            painter.setPen(QPen(CENTER_COLOR, 3, Qt.SolidLine))
+            painter.drawEllipse(scaled, 1.5, 1.5)

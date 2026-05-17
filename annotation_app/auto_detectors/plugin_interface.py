@@ -45,6 +45,7 @@ from abc import ABC, abstractmethod
 from typing import Literal
 
 import numpy as np
+from PyQt5.QtGui import QColor, QPainter
 from PyQt5.QtWidgets import QWidget
 
 Target = Literal["pupil", "glint", "limbus", "eyelid"]
@@ -72,6 +73,21 @@ class DetectorPlugin(ABC):
     # When ``False``, the plugin only runs via the global "Run Auto Detect"
     # button — appropriate for slow algorithms (e.g. Daugman IDO limbus).
     live: bool = True
+
+    # Z-order for the canvas overlay paint pass. Lower values are drawn
+    # first (behind). Sensible defaults: limbus = -10 so its iris ring
+    # sits under the pupil/glint markers; pupil = 0; glint = 10.
+    overlay_z_order: int = 0
+
+    # Optional colour for the per-target ROI rectangle the image viewer
+    # draws when this plugin's panel exposes ``roi_edit_requested``.
+    # Leave ``None`` for plugins that don't surface an ROI control.
+    roi_color: QColor | None = None
+
+    # Optional colour for the threshold-mask overlay the image viewer
+    # paints when the user toggles this plugin's "Show mask" checkbox.
+    # Set only on plugins whose ``detect`` returns a ``"mask"`` key.
+    mask_color: QColor | None = None
 
     @classmethod
     @abstractmethod
@@ -104,6 +120,28 @@ class DetectorPlugin(ABC):
         ``serialize`` consumes, or ``None`` if the chosen method cannot
         produce a result at the current parameters.
         """
+
+    def draw_overlay(  # noqa: PLR6301 - subclasses override with stateful work
+        self,
+        painter: QPainter,  # noqa: ARG002 - default impl paints nothing
+        result: dict,  # noqa: ARG002
+        scale: float,  # noqa: ARG002
+    ) -> None:
+        """Render this plugin's detection geometry on the canvas.
+
+        ``result`` is the in-memory dict ``deserialize`` produces (or
+        ``detect`` returns). ``scale`` is the image-viewer zoom factor
+        — multiply every image-space coordinate by it before painting.
+
+        Default implementation paints nothing; plugins whose result is
+        only consumed by downstream plugins (no on-screen geometry to
+        show) can leave it as-is. Threshold-mask and per-target ROI
+        rectangles are drawn separately by the image viewer using
+        :attr:`mask_color` / :attr:`roi_color` — this method only needs
+        to render the detection's own shape (e.g. pupil ellipse,
+        glint dots, limbus circle).
+        """
+        return
 
     @abstractmethod
     def serialize(self, result: dict) -> dict:

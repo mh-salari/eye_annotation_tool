@@ -794,6 +794,9 @@ class MainWindow(QMainWindow):
             entry = detectors_settings.get(target) or {}
             plugin_name = entry.get("plugin", "disabled")
             if plugin_name == "disabled":
+                # Drop any previously registered plugin so the viewer
+                # stops trying to draw / colour overlays for this target.
+                self.image_viewer.clear_active_plugin(target)
                 continue
             plugin = self.plugin_manager.get(plugin_name)
             if plugin is None:
@@ -806,6 +809,10 @@ class MainWindow(QMainWindow):
                     f"plugin {plugin_name!r} targets {plugin.target!r} but is configured for {target!r}",
                 )
             self._enabled_plugins[target] = plugin
+            # Tell the viewer which plugin owns this target so it can
+            # call ``plugin.draw_overlay`` and pick up the plugin's
+            # ``roi_color`` / ``mask_color`` palette when rendering.
+            self.image_viewer.set_active_plugin(target, plugin)
             panel = plugin.make_panel(self)
             initial_params = preserved_params.get(target, entry.get("params", {}))
             panel.set_params(initial_params)
