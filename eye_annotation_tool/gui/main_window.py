@@ -1035,6 +1035,13 @@ class MainWindow(QMainWindow):
                     panel.set_params(active_params)
                 if active_result is not None:
                     self.orchestrator.set_cached_result(plugin.target, active_result)
+            # Reset every enabled panel to the active eye's project
+            # defaults (falling back to plugin defaults). Plugins whose
+            # detection block was restored above keep their per-image
+            # params because the per-eye mirror is populated; plugins
+            # without per-image data snap back to project defaults
+            # instead of inheriting the previous image's panel state.
+            self._restore_panel_params_from_per_eye(active_slot)
             # Carry-over rectangles fill any (target, eye) slot the loaded
             # JSON didn't populate. Run after the JSON restore so saved
             # per-image ROIs always win.
