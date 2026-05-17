@@ -111,12 +111,18 @@ class ImageViewer(QWidget):
         self.moving_all_points = False
 
         # Per-target ROI drag state. Used by both mouse-event paths for
-        # any plugin whose panel exposes roi_edit_requested.
+        # any plugin whose panel exposes roi_edit_requested. The
+        # ``drawing_roi_committed`` flag flips True only once the user
+        # has dragged past :attr:`ROI_DRAG_THRESHOLD_PX` since press —
+        # below that the previous rectangle is preserved and the
+        # release path skips re-emitting, so a stray click doesn't
+        # clear a valid ROI.
         self.drawing_roi = False
         self.roi_start_pos = None
         self.moving_roi = False
         self.resizing_roi = False
         self.roi_resize_handle = None  # 'tl', 'tr', 'bl', 'br' for corners
+        self._drawing_roi_committed = False
 
         # Binocular mode: True when the image contains two eyes split by
         # a vertical divider. False = monocular (single eye fills the
@@ -411,6 +417,12 @@ class ImageViewer(QWidget):
         if self._active_roi_target is not None:
             self._target_rois[self._active_roi_target] = value
 
+    # Minimum cursor movement (image coords) before a press counts as a
+    # drag-to-draw rather than a click. Below this, the rectangle stays
+    # uncommitted so an accidental click on an active ROI target does
+    # not produce an invisible / one-pixel rectangle.
+    ROI_DRAG_THRESHOLD_PX = 5.0
+
     def _drag_active_roi(self, new_pos: QPointF) -> None:
         """Update the active drag ROI in place based on the current cursor position.
 
@@ -419,11 +431,16 @@ class ImageViewer(QWidget):
         and written back via :meth:`_set_active_drag_roi`.
         """
         if self.drawing_roi:
+            dx = new_pos.x() - self.roi_start_pos.x()
+            dy = new_pos.y() - self.roi_start_pos.y()
+            if max(abs(dx), abs(dy)) < self.ROI_DRAG_THRESHOLD_PX:
+                return
             x = min(self.roi_start_pos.x(), new_pos.x())
             y = min(self.roi_start_pos.y(), new_pos.y())
-            w = abs(new_pos.x() - self.roi_start_pos.x())
-            h = abs(new_pos.y() - self.roi_start_pos.y())
+            w = abs(dx)
+            h = abs(dy)
             self._set_active_drag_roi((x, y, w, h))
+            self._drawing_roi_committed = True
             return
         current = self._active_drag_roi()
         if current is None:
@@ -470,10 +487,12 @@ class ImageViewer(QWidget):
                 self.moving_roi = True
                 self.roi_start_pos = image_pos
                 return True
-        # Start a fresh draw, replacing whatever was there.
+        # Begin a fresh draw, but keep the previous rectangle in place
+        # until the user actually drags past the threshold — a stray
+        # click without movement leaves the existing ROI untouched.
         self.drawing_roi = True
+        self._drawing_roi_committed = False
         self.roi_start_pos = image_pos
-        self._set_active_drag_roi(None)
         return True
 
     # Half-width of the hot zone for grabbing the binocular divider, in
@@ -616,11 +635,19 @@ class ImageViewer(QWidget):
                 self.divider_x_norm_changed.emit(self._divider_x_norm)
                 return
             if self.drawing_roi or self.moving_roi or self.resizing_roi:
+                # A draw that never crossed the threshold is treated as
+                # a stray click — leave the previous ROI alone and skip
+                # the emit so the panel doesn't get re-notified with
+                # stale data.
+                was_drawing = self.drawing_roi
+                committed = self._drawing_roi_committed
                 self.drawing_roi = False
                 self.moving_roi = False
                 self.resizing_roi = False
                 self.roi_resize_handle = None
-                if self._active_roi_target is not None:
+                self._drawing_roi_committed = False
+                draw_changed_roi = (not was_drawing) or committed
+                if draw_changed_roi and self._active_roi_target is not None:
                     target = self._active_roi_target
                     self.target_roi_changed.emit(target, self._target_rois.get(target))
                 return
