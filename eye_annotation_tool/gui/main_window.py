@@ -1164,28 +1164,17 @@ class MainWindow(QMainWindow):
             self._run_plugin_for_active_eye(plugin, panel.current_params())
 
     def _refresh_live_plugins_all_eyes(self) -> None:
-        """Run live plugins for every eye slot (binocular: both halves).
+        """Run live plugins for the active eye only.
 
-        Called after an image loads so the user immediately sees auto
-        detections on both eyes without manually switching the radio.
-        The flow temporarily re-uses :meth:`_on_eye_changed` to swap
-        the active eye, run live plugins for that side, then swap
-        back. Repaints are paused for the full duration so the two
-        intermediate :meth:`ImageViewer.switch_eye` calls — each
-        otherwise a full canvas re-render — collapse into one.
+        The non-active eye is intentionally skipped — programmatically
+        running live plugins on a slot the user never visited would
+        populate that slot's detection cache with default-params output
+        and then autosave would persist those defaults to disk, looking
+        like the user tuned that eye when they hadn't. Switching the
+        active eye (via the radio) triggers the live run for the new
+        side, so both eyes are still covered with one user click each.
         """
-        if not self.binocular_mode:
-            self._refresh_live_plugin_results()
-            return
-        self.image_viewer.pause_updates()
-        try:
-            self._refresh_live_plugin_results()
-            original = self.image_viewer.current_eye
-            other = "right" if original == "left" else "left"
-            self._on_eye_changed(other)
-            self._on_eye_changed(original)
-        finally:
-            self.image_viewer.resume_updates()
+        self._refresh_live_plugin_results()
 
     # ----- Binocular crop + translate (active-eye-aware run path) -----
 
