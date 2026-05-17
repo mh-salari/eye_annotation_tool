@@ -185,9 +185,10 @@ class MainWindow(QMainWindow):
 
         left_layout.addStretch(1)
 
-        # Zoom controls pinned at the bottom of the left panel — fixed
-        # row so they stay reachable regardless of how long the loaded-
-        # images list grows.
+        # Zoom + display-brightness controls pinned at the bottom of the
+        # left panel — fixed rows so they stay reachable regardless of
+        # how long the loaded-images list grows. Brightness only changes
+        # the canvas; detector plugins keep seeing the unmodified source.
         zoom_row = QHBoxLayout()
         zoom_row.setContentsMargins(0, 0, 0, 0)
         self.zoom_in_button = MaterialButton("Zoom +")
@@ -197,12 +198,24 @@ class MainWindow(QMainWindow):
         zoom_row.addWidget(self.zoom_out_button)
         zoom_row.addWidget(self.zoom_reset_button)
         left_layout.addLayout(zoom_row)
+        brightness_row = QHBoxLayout()
+        brightness_row.setContentsMargins(0, 0, 0, 0)
+        self.brighter_button = MaterialButton("Brighter")
+        self.darker_button = MaterialButton("Darker")
+        self.brightness_reset_button = MaterialButton("Reset Brightness")
+        brightness_row.addWidget(self.brighter_button)
+        brightness_row.addWidget(self.darker_button)
+        brightness_row.addWidget(self.brightness_reset_button)
+        left_layout.addLayout(brightness_row)
         left_panel.setLayout(left_layout)
 
         self.image_viewer = ImageViewer()
         self.zoom_in_button.clicked.connect(self.image_viewer.zoom_in_centered)
         self.zoom_out_button.clicked.connect(self.image_viewer.zoom_out_centered)
         self.zoom_reset_button.clicked.connect(self.image_viewer.reset_zoom_to_fit)
+        self.brighter_button.clicked.connect(self.image_viewer.brighten_display)
+        self.darker_button.clicked.connect(self.image_viewer.darken_display)
+        self.brightness_reset_button.clicked.connect(self.image_viewer.reset_display_brightness)
 
         # Right panel: AnnotationControlPanel inside a QScrollArea so taller
         # Auto Detect plugin stacks scroll instead of pushing the window
