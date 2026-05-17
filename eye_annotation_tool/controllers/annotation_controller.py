@@ -54,7 +54,8 @@ class AnnotationController:
         save_annotations(
             annotation_path,
             eye_data,
-            single_eye_mode=self.main_window.single_eye_mode,
+            binocular_mode=self.main_window.binocular_mode,
+            divider_x_norm=self.main_window.divider_override_for_current_image(),
             detections=detections,
         )
         self.main_window.set_annotation_modified(False)
@@ -65,9 +66,13 @@ class AnnotationController:
             return
         image_path = self.main_window.image_paths[self.main_window.current_image_index]
         annotation_path = get_annotation_path(image_path)
-        eye_data, detections = load_annotations(annotation_path)
-        self.main_window.image_viewer.set_annotation_data(eye_data)
-        self.main_window.apply_loaded_detections(detections)
+        payload = load_annotations(annotation_path)
+        self.main_window.apply_loaded_image_meta(
+            binocular_mode=payload["binocular_mode"],
+            divider_x_norm=payload["divider_x_norm"],
+        )
+        self.main_window.image_viewer.set_annotation_data(payload["eye_data"])
+        self.main_window.apply_loaded_detections(payload["detections"])
         self.main_window.set_annotation_modified(False)
 
     def check_unsaved_changes(self) -> bool:

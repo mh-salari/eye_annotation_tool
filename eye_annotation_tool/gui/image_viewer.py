@@ -35,6 +35,10 @@ class ImageViewer(QWidget):
     # per-target Auto Detect ROI on the canvas. Payload is the target slug
     # ("pupil", ...) and the new ``(x, y, w, h)`` tuple or ``None``.
     target_roi_changed = pyqtSignal(str, object)
+    # Emitted when the user finishes dragging the binocular divider line.
+    # Payload is the new normalised x position in [0, 1]. MainWindow
+    # persists the value as the current image's per-image override.
+    divider_x_norm_changed = pyqtSignal(float)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         """Initialize the ImageViewer."""
@@ -114,10 +118,19 @@ class ImageViewer(QWidget):
         self.resizing_roi = False
         self.roi_resize_handle = None  # 'tl', 'tr', 'bl', 'br' for corners
 
-        # Single-eye mode: when True, the right-eye block is never drawn and
-        # current_eye is pinned to "left". Toggled by MainWindow based on the
-        # per-project setting or the --single-eye CLI flag.
-        self.single_eye_mode = False
+        # Binocular mode: True when the image contains two eyes split by
+        # a vertical divider. False = monocular (single eye fills the
+        # image, ``current_eye`` is pinned to "left", divider + right
+        # block are never drawn).
+        self.binocular_mode = True
+
+        # Vertical divider position as a fraction of image width in
+        # ``[0, 1]``. Only used when ``binocular_mode`` is True; defines
+        # which half of the image counts as the left eye vs the right
+        # eye for click gating, dim-overlay rendering, and auto-detector
+        # cropping. ``divider_drag_active`` flags the in-progress drag.
+        self._divider_x_norm = 0.5
+        self._divider_drag_active = False
 
         # Grayscale numpy view of the currently loaded image, kept alongside
         # the Qt pixmap so detector plugins can consume it without re-reading
@@ -187,6 +200,15 @@ class ImageViewer(QWidget):
         self._fallback_roi_color = QColor(255, 255, 255, 200)
         self._fallback_mask_color = QColor(255, 255, 255, 64)
 
+        # Binocular divider line + dim overlay for the inactive eye.
+        # Divider is bright white so it reads as a UI separator distinct
+        # from every data layer (pupil teal / limbus purple / glint red
+        # / mask cyan / mask magenta). The dim overlay is a low-alpha
+        # black wash that darkens the inactive half without hiding the
+        # eye entirely.
+        self.divider_color = QColor(255, 255, 255, 230)
+        self.inactive_eye_dim_color = QColor(0, 0, 0, 120)
+
     def setup_undo_system(self) -> None:
         """Initialize the undo/redo system."""
         self.undo_stack = deque(maxlen=10)
@@ -215,33 +237,58 @@ class ImageViewer(QWidget):
         if eye not in {"left", "right"}:
             return
 
-        # In single-eye mode the selector is hidden, but defend against
-        # programmatic callers requesting "right" — keep the active block
-        # pinned to "left" so it stays in sync with what we save.
-        if self.single_eye_mode and eye != "left":
+        # In monocular mode the right block is unused; defend against
+        # programmatic callers requesting "right" so saves stay in sync
+        # with the left-only convention.
+        if not self.binocular_mode and eye != "left":
             return
 
-        # Save current eye data before switching
         self.save_current_eye_data()
-
-        # Switch to new eye
         self.current_eye = eye
-
-        # Load new eye data
         self.load_current_eye_data()
-
-        # Update display
         self.update_image()
         self.annotation_changed.emit()
 
-    def set_single_eye_mode(self, enabled: bool) -> None:
-        """Toggle single-eye mode and re-render."""
-        self.single_eye_mode = enabled
-        if enabled and self.current_eye != "left":
+    def set_binocular_mode(self, enabled: bool) -> None:
+        """Toggle binocular mode and re-render.
+
+        When flipping to monocular the active eye is forced back to
+        "left" so the in-memory store + on-disk save stay aligned with
+        the flat monocular schema.
+        """
+        self.binocular_mode = enabled
+        if not enabled and self.current_eye != "left":
             self.save_current_eye_data()
             self.current_eye = "left"
             self.load_current_eye_data()
         self.update_image()
+
+    def set_divider_x_norm(self, value: float) -> None:
+        """Set the binocular divider position as a fraction of image width."""
+        clamped = max(0.0, min(1.0, float(value)))
+        if clamped == self._divider_x_norm:
+            return
+        self._divider_x_norm = clamped
+        self.update_image()
+
+    def get_divider_x_norm(self) -> float:
+        """Return the current normalised divider position."""
+        return self._divider_x_norm
+
+    def _divider_x_image(self) -> float:
+        """Return the divider position in image coordinates (pixels)."""
+        if self.original_pixmap is None or self.original_pixmap.isNull():
+            return 0.0
+        return self._divider_x_norm * self.original_pixmap.width()
+
+    def _point_on_active_side(self, point: QPointF) -> bool:
+        """Return True when ``point`` falls on the currently selected eye's side."""
+        if not self.binocular_mode:
+            return True
+        divider = self._divider_x_image()
+        if self.current_eye == "left":
+            return point.x() < divider
+        return point.x() >= divider
 
     def get_all_eye_data(self) -> dict:
         """Get annotation data for both eyes."""
@@ -418,6 +465,18 @@ class ImageViewer(QWidget):
         self._set_active_drag_roi(None)
         return True
 
+    # Half-width of the hot zone for grabbing the binocular divider, in
+    # image coordinates. 6px reads as "wide enough to grab" without
+    # intercepting clicks that are clearly on the eye.
+    DIVIDER_GRAB_HALF_WIDTH = 6.0
+
+    def _hit_divider(self, image_pos: QPointF) -> bool:
+        """Return True when ``image_pos`` falls inside the divider grab zone."""
+        if not self.binocular_mode:
+            return False
+        divider = self._divider_x_image()
+        return abs(image_pos.x() - divider) <= self.DIVIDER_GRAB_HALF_WIDTH
+
     def mousePressEvent(self, event: QEvent) -> None:  # noqa: N802
         """Handle mouse press events."""
         if event.button() == Qt.MiddleButton:
@@ -427,6 +486,14 @@ class ImageViewer(QWidget):
         elif event.button() == Qt.LeftButton:
             image_pos = self.get_image_position(event.pos())
             if image_pos:
+                # The binocular divider grabs the click before anything
+                # else so the user can always retarget the line even when
+                # it overlaps an ROI handle or an annotation point.
+                if self._hit_divider(image_pos):
+                    self._divider_drag_active = True
+                    self.setCursor(Qt.SizeHorCursor)
+                    return
+
                 # A per-target ROI in drag-edit mode consumes the click
                 # before any Manual-mode click-to-place flow runs.
                 if self._active_roi_target is not None:
@@ -447,6 +514,11 @@ class ImageViewer(QWidget):
                     # The current target is owned by an auto detector; manual
                     # click-to-place is disabled so the auto overlay stays the
                     # single source of truth for this target.
+                    return
+                elif not self._point_on_active_side(image_pos):
+                    # In binocular mode clicks on the inactive eye's half
+                    # are ignored — the user should switch eyes first
+                    # rather than accidentally annotate the wrong side.
                     return
                 elif self.current_annotation == "pupil":
                     self.pupil_points.append(image_pos)
@@ -469,6 +541,10 @@ class ImageViewer(QWidget):
             self.scroll_area.horizontalScrollBar().setValue(self.scroll_area.horizontalScrollBar().value() - delta.x())
             self.scroll_area.verticalScrollBar().setValue(self.scroll_area.verticalScrollBar().value() - delta.y())
             self.last_pan_pos = event.pos()
+        elif self._divider_drag_active:
+            new_pos = self.get_image_position(event.pos())
+            if new_pos is not None and self.original_pixmap is not None:
+                self.set_divider_x_norm(new_pos.x() / self.original_pixmap.width())
         elif self.drawing_roi or self.moving_roi or self.resizing_roi:
             new_pos = self.get_image_position(event.pos())
             if new_pos and self.roi_start_pos:
@@ -516,6 +592,11 @@ class ImageViewer(QWidget):
             self.panning = False
             self.setCursor(Qt.ArrowCursor)
         elif event.button() == Qt.LeftButton:
+            if self._divider_drag_active:
+                self._divider_drag_active = False
+                self.setCursor(Qt.ArrowCursor)
+                self.divider_x_norm_changed.emit(self._divider_x_norm)
+                return
             if self.drawing_roi or self.moving_roi or self.resizing_roi:
                 self.drawing_roi = False
                 self.moving_roi = False
@@ -790,11 +871,14 @@ class ImageViewer(QWidget):
         painter.drawPixmap(0, 0, scaled_pixmap)
 
         self.draw_eye_annotations(painter, "left")
-        if not self.single_eye_mode:
+        if self.binocular_mode:
             self.draw_eye_annotations(painter, "right")
 
         self._draw_detection_overlays(painter)
         self._draw_target_rois(painter)
+        if self.binocular_mode:
+            self._draw_inactive_half_dim(painter)
+            self._draw_divider(painter)
 
         painter.end()
         self.image_label.setPixmap(self.pixmap)
@@ -845,9 +929,9 @@ class ImageViewer(QWidget):
                     painter.setPen(QPen(color, 3, Qt.SolidLine))
                 painter.drawEllipse(scaled_point, 1.5, 1.5)
 
-                # In single-eye mode the L/R distinction is meaningless, so
+                # In monocular mode the L/R distinction is meaningless, so
                 # the per-point eye label is suppressed entirely.
-                if not self.single_eye_mode:
+                if self.binocular_mode:
                     font = painter.font()
                     font.setPointSize(8)
                     painter.setFont(font)
@@ -992,6 +1076,34 @@ class ImageViewer(QWidget):
                     handle_size,
                     handle_size,
                 )
+
+    def _draw_divider(self, painter: QPainter) -> None:
+        """Draw the vertical binocular divider as a dashed line."""
+        if self.pixmap is None or self.pixmap.isNull():
+            return
+        x = self._divider_x_image() * self.factor
+        height = self.pixmap.height()
+        painter.save()
+        painter.setPen(QPen(self.divider_color, 2, Qt.DashLine))
+        painter.drawLine(int(x), 0, int(x), height)
+        painter.restore()
+
+    def _draw_inactive_half_dim(self, painter: QPainter) -> None:
+        """Wash the half of the canvas not owned by the active eye with a low-alpha fill."""
+        if self.pixmap is None or self.pixmap.isNull():
+            return
+        canvas_width = self.pixmap.width()
+        canvas_height = self.pixmap.height()
+        divider_canvas_x = int(self._divider_x_image() * self.factor)
+        if self.current_eye == "left":
+            rect = (divider_canvas_x, 0, canvas_width - divider_canvas_x, canvas_height)
+        else:
+            rect = (0, 0, divider_canvas_x, canvas_height)
+        painter.save()
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(self.inactive_eye_dim_color)
+        painter.drawRect(*rect)
+        painter.restore()
 
     def fit_annotation(self) -> bool:
         """Fit an ellipse to the current annotation points."""

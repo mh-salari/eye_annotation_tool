@@ -9,7 +9,8 @@ images from that folder are opened.
 Current schema::
 
     {
-      "single_eye_mode": false,
+      "binocular_mode": true,
+      "divider_x_norm": 0.5,
       "autosave": false,
       "current_mode": "manual",
       "detectors": {
@@ -20,9 +21,15 @@ Current schema::
       }
     }
 
-Each per-target ``params`` block holds the defaults written by the
-plugin's "Set as project defaults" action. Per-image overrides live in
-the image annotation JSON, not here.
+``binocular_mode`` defaults to ``True``. ``divider_x_norm`` is the
+project-wide default split between the two eyes, expressed as a
+fraction of image width in ``[0, 1]``. Per-image annotation files can
+override the divider; the project value is the fallback when an image
+has no per-image override.
+
+Each per-target detector ``params`` block holds the defaults written
+by the plugin's "Set as project defaults" action. Per-image overrides
+live in the image annotation JSON, not here.
 """
 
 import json
@@ -50,10 +57,14 @@ def project_settings_path(project_dir: str | Path) -> Path:
     return Path(project_dir) / PROJECT_SETTINGS_FILENAME
 
 
+DEFAULT_DIVIDER_X_NORM = 0.5
+
+
 def _default_settings() -> dict:
     """Return a fresh deep dict of the project-settings defaults."""
     return {
-        "single_eye_mode": False,
+        "binocular_mode": True,
+        "divider_x_norm": DEFAULT_DIVIDER_X_NORM,
         "autosave": False,
         "current_mode": "manual",
         "detectors": {

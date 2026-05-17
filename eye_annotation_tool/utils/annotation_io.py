@@ -1,12 +1,13 @@
 """Per-image annotation persistence.
 
-On-disk schema::
+On-disk schema (binocular)::
 
     {
-      "single_eye_mode": false,
+      "binocular_mode": true,
+      "divider_x_norm": 0.5,            // optional; null => use project default
       "manual": {
         "left":  {pupil_points, limbus_points, eyelid_contour_points,
-                  glint_points, pupil_ellipse, limbus_ellipse, roi},
+                  glint_points, pupil_ellipse, limbus_ellipse},
         "right": {...}
       },
       "detections": {
@@ -14,19 +15,33 @@ On-disk schema::
       }
     }
 
-When ``single_eye_mode`` is true, the ``manual`` block contains only the
-``left`` key — single-eye annotations are written into the left block.
+On-disk schema (monocular)::
 
-The ``detections`` map holds one entry per detector plugin that has been
-exercised on this image. Each entry's ``result`` is whatever the plugin's
-``serialize`` produced; ``params`` is the parameter values used to run
-the detector. There is no schema constraint on the ``result`` shape — it
-is opaque to this module and only the plugin's ``deserialize`` knows how
-to interpret it.
+    {
+      "binocular_mode": false,
+      "manual": {pupil_points, limbus_points, eyelid_contour_points,
+                 glint_points, pupil_ellipse, limbus_ellipse},
+      "detections": {
+        "<plugin_name>": {"params": {...}, "result": {...}}
+      }
+    }
 
-This is a breaking schema. Older annotation files (with top-level
-``left`` / ``right`` keys and a ``tuning`` blob) are not migrated and
-will not load.
+In monocular mode the ``manual`` block is **flat** — there is no
+``left`` / ``right`` wrapper because the image carries a single eye
+and labelling it left or right would be misleading. The image-viewer
+in-memory store still keeps a `{"left": ..., "right": ...}` pair for
+uniform internal handling; this module normalises both schemas to that
+shape on load and back to flat on save.
+
+The ``detections`` map holds one entry per detector plugin that has
+been exercised on this image. Each entry's ``result`` is whatever the
+plugin's ``serialize`` produced; ``params`` is the parameter values
+used to run the detector. There is no schema constraint on the
+``result`` shape — it is opaque to this module and only the plugin's
+``deserialize`` knows how to interpret it.
+
+This schema is the current source of truth; previous incompatible
+shapes are not migrated.
 """
 
 import json
@@ -51,23 +66,33 @@ def _serialize_eye_block(block: dict) -> dict:
 def save_annotations(
     annotation_path: str,
     eye_data: dict,
-    single_eye_mode: bool,
+    *,
+    binocular_mode: bool,
+    divider_x_norm: float | None = None,
     detections: dict | None = None,
 ) -> None:
     """Write the per-image annotation JSON.
 
-    ``eye_data`` is the in-memory ``{"left": {...}, "right": {...}}`` shape
-    produced by the image viewer. ``detections`` is the dict the
-    AnnotationController assembles from each enabled plugin's serialised
-    result; pass ``None`` (or ``{}``) when no detection results need to
-    be persisted.
+    ``eye_data`` is the in-memory ``{"left": {...}, "right": {...}}``
+    shape produced by the image viewer. In monocular mode only the
+    ``left`` slot is meaningful and gets written as a flat ``manual``
+    block; the ``right`` slot is dropped.
+
+    ``divider_x_norm`` is the per-image divider override expressed as a
+    fraction of image width in ``[0, 1]``. Pass ``None`` to let the
+    image inherit the project default at load time. Only persisted
+    when ``binocular_mode`` is True.
     """
-    payload: dict = {
-        "single_eye_mode": bool(single_eye_mode),
-        "manual": {"left": _serialize_eye_block(eye_data["left"])},
-    }
-    if not single_eye_mode:
-        payload["manual"]["right"] = _serialize_eye_block(eye_data["right"])
+    payload: dict = {"binocular_mode": bool(binocular_mode)}
+    if binocular_mode:
+        if divider_x_norm is not None:
+            payload["divider_x_norm"] = float(divider_x_norm)
+        payload["manual"] = {
+            "left": _serialize_eye_block(eye_data["left"]),
+            "right": _serialize_eye_block(eye_data["right"]),
+        }
+    else:
+        payload["manual"] = _serialize_eye_block(eye_data["left"])
     payload["detections"] = dict(detections) if detections else {}
     with Path(annotation_path).open("w", encoding="utf-8") as f:
         json.dump(payload, f, indent=2)
@@ -96,17 +121,32 @@ def _deserialize_eye_block(block: dict) -> dict:
     }
 
 
-def load_annotations(annotation_path: str) -> tuple[dict, dict]:
-    """Read a per-image annotation JSON.
+def _empty_payload(*, binocular_mode: bool = True) -> dict:
+    """Return the standard 'no annotation file' return tuple payload."""
+    return {
+        "eye_data": {"left": _empty_eye_block(), "right": _empty_eye_block()},
+        "detections": {},
+        "binocular_mode": binocular_mode,
+        "divider_x_norm": None,
+    }
 
-    Returns ``(eye_data, detections)`` where ``eye_data`` is always
-    ``{"left": ..., "right": ...}`` (the right block is empty in
-    single-eye files) and ``detections`` is the raw on-disk
-    plugin-name → ``{"params": ..., "result": ...}`` map (each plugin
-    deserialises its own block — this module does not interpret them).
+
+def load_annotations(annotation_path: str) -> dict:
+    """Read a per-image annotation JSON and return a normalised payload.
+
+    Returns a dict with keys ``eye_data``, ``detections``,
+    ``binocular_mode`` and ``divider_x_norm``. ``eye_data`` is always
+    shaped as ``{"left": ..., "right": ...}`` regardless of the on-disk
+    schema — monocular files load their flat ``manual`` block into the
+    ``left`` slot and an empty block into the ``right`` slot so the
+    image viewer's internal store can stay uniform.
+
+    ``divider_x_norm`` is ``None`` when the file carries no per-image
+    override; callers fall back to the project-level default in that
+    case.
     """
     if not Path(annotation_path).exists():
-        return {"left": _empty_eye_block(), "right": _empty_eye_block()}, {}
+        return _empty_payload()
     try:
         with Path(annotation_path).open(encoding="utf-8") as f:
             ann = json.load(f)
@@ -114,18 +154,35 @@ def load_annotations(annotation_path: str) -> tuple[dict, dict]:
         # Corrupt or partially-written file (e.g. previous crash mid-save).
         # Don't crash the GUI; treat as no saved annotations.
         print(f"warning: skipping unreadable annotation file {annotation_path}: {exc}")
-        return {"left": _empty_eye_block(), "right": _empty_eye_block()}, {}
-    manual = ann.get("manual", {})
-    left_in = manual.get("left", {})
-    right_in = manual.get("right", {})
-    eye_data = {
-        "left": _deserialize_eye_block(left_in) if left_in else _empty_eye_block(),
-        "right": _deserialize_eye_block(right_in) if right_in else _empty_eye_block(),
-    }
+        return _empty_payload()
+
+    binocular = bool(ann.get("binocular_mode", True))
+    divider = ann.get("divider_x_norm")
+    divider_x_norm = float(divider) if isinstance(divider, (int, float)) else None
+
+    manual = ann.get("manual", {}) or {}
+    if binocular:
+        left_in = manual.get("left") or {}
+        right_in = manual.get("right") or {}
+        eye_data = {
+            "left": _deserialize_eye_block(left_in) if left_in else _empty_eye_block(),
+            "right": _deserialize_eye_block(right_in) if right_in else _empty_eye_block(),
+        }
+    else:
+        eye_data = {
+            "left": _deserialize_eye_block(manual) if manual else _empty_eye_block(),
+            "right": _empty_eye_block(),
+        }
+
     detections = ann.get("detections", {})
     if not isinstance(detections, dict):
         detections = {}
-    return eye_data, detections
+    return {
+        "eye_data": eye_data,
+        "detections": detections,
+        "binocular_mode": binocular,
+        "divider_x_norm": divider_x_norm,
+    }
 
 
 def get_annotation_path(image_path: str) -> str:

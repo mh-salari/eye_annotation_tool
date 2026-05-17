@@ -62,20 +62,29 @@ def _panel_roi_param_key(target: str) -> str:
 class MainWindow(QMainWindow):
     """Main application window containing all UI components and controllers."""
 
-    def __init__(self, cli_single_eye: bool = False) -> None:
+    def __init__(self, cli_monocular: bool = False) -> None:
         """Initialise the MainWindow.
 
         Args:
-            cli_single_eye: When True, force single-eye mode on at startup
-                regardless of any per-project setting.
+            cli_monocular: When True, force monocular mode on at startup
+                regardless of any per-project setting (i.e. the image is
+                treated as a single eye with no left/right split).
 
         """
         super().__init__()
         self.setWindowTitle("EyE Annotation Tool")
         self.plugin_manager = PluginManager()
         self.orchestrator = DetectorOrchestrator(self)
-        self._cli_single_eye = bool(cli_single_eye)
-        self.single_eye_mode = self._cli_single_eye
+        self._cli_monocular = bool(cli_monocular)
+        self.binocular_mode = not self._cli_monocular
+        # Project-wide default divider position (0..1). Per-image overrides
+        # live in each image's annotation JSON and shadow this value while
+        # the corresponding image is loaded.
+        self.project_divider_x_norm = 0.5
+        # Per-image divider overrides keyed by absolute image path. ``None``
+        # means "no override — use project default". Populated from the
+        # image's saved JSON on load and from drag events on the canvas.
+        self._image_divider_overrides: dict[str, float | None] = {}
         self.autosave_enabled = False
         # All folders loaded for the current session. Project-settings writes
         # propagate to every entry so any one of them can be reopened later
@@ -225,6 +234,8 @@ class MainWindow(QMainWindow):
 
         self.annotation_controls.annotation_changed.connect(self.image_viewer.set_current_annotation)
         self.annotation_controls.eye_changed.connect(self._on_eye_changed)
+        self.annotation_controls.binocular_toggled.connect(self._on_binocular_toggled)
+        self.image_viewer.divider_x_norm_changed.connect(self._on_divider_x_norm_changed)
         self.annotation_controls.fit_annotation_requested.connect(self.image_viewer.fit_annotation)
         self.annotation_controls.clear_selected_annotation_requested.connect(self.image_viewer.clear_selected_ellipse)
         self.annotation_controls.clear_pupil_requested.connect(self.image_viewer.clear_pupil_points)
@@ -338,8 +349,12 @@ class MainWindow(QMainWindow):
         self.project_dirs = list(project_dirs)
         self._save_to_all_projects(chosen)
         project_settings = chosen
-        effective_single_eye = self._cli_single_eye or bool(project_settings.get("single_eye_mode", False))
-        self._apply_single_eye_mode(effective_single_eye)
+        # CLI ``--monocular`` overrides the project setting. When neither
+        # specifies, default to binocular.
+        effective_binocular = False if self._cli_monocular else bool(project_settings.get("binocular_mode", True))
+        self._apply_binocular_mode(effective_binocular)
+        self.project_divider_x_norm = float(project_settings.get("divider_x_norm", 0.5))
+        self.image_viewer.set_divider_x_norm(self._effective_divider_x_norm())
         self._apply_enabled_plugins(project_settings.get("detectors", {}))
         self.menu_handler.update_auto_detectors_menu()
         # Restore the last used mode for this project; setChecked fires the
@@ -390,24 +405,58 @@ class MainWindow(QMainWindow):
             return None
         return groups[button_group.checkedId()][0]
 
-    def _apply_single_eye_mode(self, enabled: bool) -> None:
-        """Propagate the single-eye flag to the dependent widgets."""
-        self.single_eye_mode = enabled
-        self.image_viewer.set_single_eye_mode(enabled)
-        self.annotation_controls.set_single_eye_mode(enabled)
+    def _apply_binocular_mode(self, enabled: bool) -> None:
+        """Propagate the binocular flag to the dependent widgets."""
+        self.binocular_mode = enabled
+        self.image_viewer.set_binocular_mode(enabled)
+        self.annotation_controls.set_binocular(enabled)
 
-    def _on_eye_changed(self, eye: str) -> None:
-        """Translate the eye radio into single-eye mode and viewer state."""
-        if eye == "single":
-            self._apply_single_eye_mode(True)
-        else:
-            if self.single_eye_mode:
-                self._apply_single_eye_mode(False)
-            self.image_viewer.switch_eye(eye)
+    def _on_binocular_toggled(self, enabled: bool) -> None:
+        """Handle the Binocular checkbox flipping; persist to project settings."""
+        self._apply_binocular_mode(enabled)
         if self.project_dirs:
             settings = load_project_settings(self.project_dir)
-            settings["single_eye_mode"] = self.single_eye_mode
+            settings["binocular_mode"] = enabled
             self._save_to_all_projects(settings)
+
+    def _on_eye_changed(self, eye: str) -> None:
+        """Switch the active eye (only meaningful in binocular mode)."""
+        if not self.binocular_mode:
+            return
+        self.image_viewer.switch_eye(eye)
+
+    def divider_override_for_current_image(self) -> float | None:
+        """Return the per-image divider override for the current image (or ``None``)."""
+        if not (0 <= self.current_image_index < len(self.image_paths)):
+            return None
+        return self._image_divider_overrides.get(self.image_paths[self.current_image_index])
+
+    def _effective_divider_x_norm(self) -> float:
+        """Return divider position for the current image (override or project default)."""
+        override = self.divider_override_for_current_image()
+        return self.project_divider_x_norm if override is None else override
+
+    def apply_loaded_image_meta(self, *, binocular_mode: bool, divider_x_norm: float | None) -> None:
+        """Apply binocular + divider metadata for a freshly loaded image.
+
+        Called by AnnotationController right after the image's annotation
+        JSON has been parsed. The per-image divider override (or ``None``
+        to inherit the project default) is stashed for save round-trip,
+        and the image viewer's divider position + binocular flag are
+        updated so the canvas renders the correct geometry.
+        """
+        if 0 <= self.current_image_index < len(self.image_paths):
+            self._image_divider_overrides[self.image_paths[self.current_image_index]] = divider_x_norm
+        if binocular_mode != self.binocular_mode:
+            self._apply_binocular_mode(binocular_mode)
+        self.image_viewer.set_divider_x_norm(self._effective_divider_x_norm())
+
+    def _on_divider_x_norm_changed(self, value: float) -> None:
+        """Persist a user-driven divider drag as a per-image override."""
+        if not (0 <= self.current_image_index < len(self.image_paths)):
+            return
+        self._image_divider_overrides[self.image_paths[self.current_image_index]] = float(value)
+        self.set_annotation_modified(True)
 
     def _on_mode_changed(self, mode: str) -> None:
         """Persist the new mode and cancel any Auto-Detect ROI drag state.

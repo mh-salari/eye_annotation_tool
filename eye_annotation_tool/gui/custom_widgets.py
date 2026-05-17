@@ -1,7 +1,16 @@
 """Custom widget components for the application."""
 
 from PyQt5.QtCore import pyqtSignal
-from PyQt5.QtWidgets import QButtonGroup, QGroupBox, QHBoxLayout, QPushButton, QRadioButton, QVBoxLayout, QWidget
+from PyQt5.QtWidgets import (
+    QButtonGroup,
+    QCheckBox,
+    QGroupBox,
+    QHBoxLayout,
+    QPushButton,
+    QRadioButton,
+    QVBoxLayout,
+    QWidget,
+)
 
 
 class MaterialButton(QPushButton):
@@ -189,9 +198,23 @@ class AnnotationGroup(QGroupBox):
 
 
 class EyeSelector(QGroupBox):
-    """Widget for selecting between left and right eye annotations."""
+    """Selector for binocular vs monocular images and active eye in binocular mode.
+
+    A **Binocular** checkbox toggles whether the image contains two eyes.
+    When checked, a Left / Right radio pair is shown so the user can pick
+    which eye the canvas + manual + auto-detect workflow is currently
+    operating on. When unchecked, the image is treated as a single eye
+    with no left/right distinction — the radios are hidden.
+
+    Two independent signals carry the selector's state outward:
+
+    - :pyattr:`binocular_toggled` — emitted when the checkbox flips.
+    - :pyattr:`eye_changed` — emitted when the Left / Right radio
+      changes (only meaningful when binocular).
+    """
 
     eye_changed = pyqtSignal(str)
+    binocular_toggled = pyqtSignal(bool)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         """Initialize the EyeSelector."""
@@ -216,12 +239,12 @@ class EyeSelector(QGroupBox):
                 color: #00bcd4;
                 font-weight: bold;
             }
-            QRadioButton {
+            QCheckBox, QRadioButton {
                 color: #e0e0e0;
                 spacing: 5px;
                 padding: 5px;
             }
-            QRadioButton:disabled {
+            QCheckBox:disabled, QRadioButton:disabled {
                 color: #666;
             }
             QRadioButton::indicator {
@@ -242,44 +265,64 @@ class EyeSelector(QGroupBox):
                 border: 2px solid #3a3a3a;
                 background: #2b2b2b;
             }
-        """
+            """
         )
 
-        layout = QHBoxLayout()
-        layout.setSpacing(10)
+        layout = QVBoxLayout()
+        layout.setSpacing(4)
 
+        self.binocular_check = QCheckBox("Binocular image")
+        self.binocular_check.setChecked(True)
+        self.binocular_check.toggled.connect(self._on_binocular_toggled)
+        layout.addWidget(self.binocular_check)
+
+        self.eye_row = QWidget()
+        eye_layout = QHBoxLayout(self.eye_row)
+        eye_layout.setContentsMargins(0, 0, 0, 0)
+        eye_layout.setSpacing(10)
         self.left_eye_radio = QRadioButton("Left Eye")
         self.right_eye_radio = QRadioButton("Right Eye")
-        self.single_eye_radio = QRadioButton("Single Eye")
         self.left_eye_radio.setChecked(True)
-
-        self.button_group = QButtonGroup()
+        self.button_group = QButtonGroup(self)
         self.button_group.addButton(self.left_eye_radio)
         self.button_group.addButton(self.right_eye_radio)
-        self.button_group.addButton(self.single_eye_radio)
-
         self.left_eye_radio.clicked.connect(lambda: self.eye_changed.emit("left"))
         self.right_eye_radio.clicked.connect(lambda: self.eye_changed.emit("right"))
-        self.single_eye_radio.clicked.connect(lambda: self.eye_changed.emit("single"))
-
-        layout.addWidget(self.left_eye_radio)
-        layout.addWidget(self.right_eye_radio)
-        layout.addWidget(self.single_eye_radio)
-        layout.addStretch()
+        eye_layout.addWidget(self.left_eye_radio)
+        eye_layout.addWidget(self.right_eye_radio)
+        eye_layout.addStretch()
+        layout.addWidget(self.eye_row)
 
         self.setLayout(layout)
 
+    def _on_binocular_toggled(self, checked: bool) -> None:
+        """Show / hide the Left-Right radios and forward the toggle."""
+        self.eye_row.setVisible(checked)
+        self.binocular_toggled.emit(checked)
+
+    def is_binocular(self) -> bool:
+        """Return ``True`` when the user has marked the image as binocular."""
+        return self.binocular_check.isChecked()
+
+    def set_binocular(self, enabled: bool) -> None:
+        """Set the binocular checkbox without emitting ``binocular_toggled``."""
+        self.binocular_check.blockSignals(True)
+        self.binocular_check.setChecked(enabled)
+        self.binocular_check.blockSignals(False)
+        self.eye_row.setVisible(enabled)
+
     def get_current_eye(self) -> str:
-        """Return ``"left"``, ``"right"``, or ``"single"`` based on the active radio."""
-        if self.single_eye_radio.isChecked():
-            return "single"
+        """Return ``"left"`` or ``"right"`` based on the active radio.
+
+        The return value is only meaningful when :meth:`is_binocular` is
+        ``True``; in monocular mode the caller should use the image-wide
+        flat data store instead.
+        """
         return "left" if self.left_eye_radio.isChecked() else "right"
 
     def set_current_eye(self, eye: str) -> None:
-        """Set the currently selected eye (``"left"`` / ``"right"`` / ``"single"``)."""
-        if eye == "single":
-            self.single_eye_radio.setChecked(True)
-        elif eye == "right":
-            self.right_eye_radio.setChecked(True)
-        else:
-            self.left_eye_radio.setChecked(True)
+        """Set the currently selected eye (``"left"`` / ``"right"``) without emitting."""
+        radio = self.right_eye_radio if eye == "right" else self.left_eye_radio
+        radio.blockSignals(True)
+        radio.setChecked(True)
+        radio.blockSignals(False)

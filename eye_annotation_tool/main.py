@@ -14,13 +14,12 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     """Parse the GUI CLI flags. Kept minimal — most settings live in the GUI."""
     parser = argparse.ArgumentParser(prog="eye_annotation_tool")
     parser.add_argument(
-        "--single-eye",
+        "--monocular",
         action="store_true",
         help=(
-            "Force single-eye mode for this session: hide the Left/Right "
-            "eye selector and save annotations in a flat schema. Overrides "
-            "the per-project setting. Equivalent to enabling the same "
-            "checkbox in File > Preferences."
+            "Force monocular mode for this session: treat the image as a "
+            "single eye (no Left/Right split, no divider line, flat manual "
+            "annotation schema). Overrides the per-project binocular setting."
         ),
     )
     parser.add_argument(
@@ -47,7 +46,7 @@ def run_app() -> None:
     icon_path = str(Path(__file__).parent / "resources" / "app_icon.ico")
     app.setWindowIcon(QIcon(icon_path))
 
-    main_window = MainWindow(cli_single_eye=args.single_eye)
+    main_window = MainWindow(cli_monocular=args.monocular)
     main_window.show()
     if args.folders is not None:
         main_window.load_folder_paths([str(p) for p in args.folders])

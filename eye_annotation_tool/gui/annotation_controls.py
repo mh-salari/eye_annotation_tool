@@ -34,6 +34,9 @@ class AnnotationControlPanel(QWidget):
 
     annotation_changed = pyqtSignal(str)
     eye_changed = pyqtSignal(str)
+    # Emitted when the user flips the Binocular checkbox. Payload is the
+    # new checkbox state (True = binocular, False = monocular).
+    binocular_toggled = pyqtSignal(bool)
     fit_annotation_requested = pyqtSignal()
     clear_pupil_requested = pyqtSignal()
     clear_limbus_requested = pyqtSignal()
@@ -58,6 +61,7 @@ class AnnotationControlPanel(QWidget):
 
         self.eye_selector = EyeSelector()
         self.eye_selector.eye_changed.connect(self.eye_changed.emit)
+        self.eye_selector.binocular_toggled.connect(self.binocular_toggled.emit)
         layout.addWidget(self.eye_selector)
 
         # Mode switcher: two exclusive checkable buttons act as a segmented
@@ -241,16 +245,25 @@ class AnnotationControlPanel(QWidget):
         return "glint"
 
     def get_current_eye(self) -> str:
-        """Return the currently selected eye (``"left"`` / ``"right"`` / ``"single"``)."""
+        """Return the currently selected eye (``"left"`` / ``"right"``).
+
+        The value is only meaningful when the image is binocular; in
+        monocular mode the canvas holds a single flat annotation set
+        and the value should be ignored by callers.
+        """
         return self.eye_selector.get_current_eye()
 
     def set_current_eye(self, eye: str) -> None:
-        """Set the currently selected eye."""
+        """Set the currently selected eye (silent — does not emit ``eye_changed``)."""
         self.eye_selector.set_current_eye(eye)
 
-    def set_single_eye_mode(self, enabled: bool) -> None:
-        """Reflect single-eye mode in the eye selector radio."""
-        self.eye_selector.set_current_eye("single" if enabled else "left")
+    def is_binocular(self) -> bool:
+        """Return ``True`` when the user marked the image as binocular."""
+        return self.eye_selector.is_binocular()
+
+    def set_binocular(self, enabled: bool) -> None:
+        """Reflect binocular mode in the eye selector (silent)."""
+        self.eye_selector.set_binocular(enabled)
 
     def current_mode(self) -> str:
         """Return the current mode slug (one of MODE_MANUAL / MODE_AUTO_DETECT)."""
