@@ -751,50 +751,59 @@ class MainWindow(QMainWindow):
         plugins keep their deserialised result until the user clicks
         Detect.
         """
-        active_slot = self._active_eye_slot()
-        for plugin_name, blob in detections.items():
-            plugin = self.plugin_manager.get(plugin_name)
-            if plugin is None:
-                continue
-            if self._enabled_plugins.get(plugin.target) is not plugin:
-                continue
-            per_eye_params, per_eye_results = self._extract_loaded_plugin_blob(blob, plugin)
-            # Restore each eye's params + result into the per-eye mirrors
-            # and push each eye's overlay + ROI into the viewer under
-            # its own slot so both halves' last results paint at once.
-            for slot, params in per_eye_params.items():
-                if params is None:
+        # Every per-eye setter below calls into ``ImageViewer`` and would
+        # normally trigger a full canvas repaint. Pause repaints for the
+        # duration of the restore so the dozens of overlay / ROI writes
+        # collapse to a single paint at the end — the dominant fix for
+        # image-navigation lag.
+        self.image_viewer.pause_updates()
+        try:
+            active_slot = self._active_eye_slot()
+            for plugin_name, blob in detections.items():
+                plugin = self.plugin_manager.get(plugin_name)
+                if plugin is None:
                     continue
-                self._per_eye_panel_params[slot][plugin.target] = dict(params)
-                saved_roi = params.get(_panel_roi_param_key(plugin.target))
-                self.image_viewer.set_target_roi(
-                    plugin.target,
-                    tuple(saved_roi) if saved_roi is not None else None,
-                    eye_slot=slot,
-                )
-            for slot, result in per_eye_results.items():
-                self._per_eye_detection_cache[slot][plugin.target] = result
-                if result is not None:
-                    self.image_viewer.set_detection_overlay(plugin.target, result, eye_slot=slot)
-            active_params = per_eye_params.get(active_slot)
-            active_result = per_eye_results.get(active_slot)
-            panel = self.annotation_controls.auto_detect_panel(plugin.name)
-            if panel is not None and active_params is not None:
-                panel.set_params(active_params)
-            if active_result is not None:
-                self.orchestrator.set_cached_result(plugin.target, active_result)
-        # Carry-over rectangles fill any (target, eye) slot the loaded
-        # JSON didn't populate. Run after the JSON restore so saved
-        # per-image ROIs always win.
-        self._apply_carry_over_rois()
-        self._refresh_carry_checkboxes()
-        # Sync the manual-pupil mirror to the freshly loaded image's
-        # ellipse before live plugins re-run so glint / limbus pick up
-        # the right pupil source on first paint.
-        self._last_manual_pupil_signature = self._manual_pupil_signature()
-        self._refresh_manual_pupil_in_cache()
-        self._refresh_live_plugins_all_eyes()
-        self._refresh_panel_availability()
+                if self._enabled_plugins.get(plugin.target) is not plugin:
+                    continue
+                per_eye_params, per_eye_results = self._extract_loaded_plugin_blob(blob, plugin)
+                # Restore each eye's params + result into the per-eye mirrors
+                # and push each eye's overlay + ROI into the viewer under
+                # its own slot so both halves' last results paint at once.
+                for slot, params in per_eye_params.items():
+                    if params is None:
+                        continue
+                    self._per_eye_panel_params[slot][plugin.target] = dict(params)
+                    saved_roi = params.get(_panel_roi_param_key(plugin.target))
+                    self.image_viewer.set_target_roi(
+                        plugin.target,
+                        tuple(saved_roi) if saved_roi is not None else None,
+                        eye_slot=slot,
+                    )
+                for slot, result in per_eye_results.items():
+                    self._per_eye_detection_cache[slot][plugin.target] = result
+                    if result is not None:
+                        self.image_viewer.set_detection_overlay(plugin.target, result, eye_slot=slot)
+                active_params = per_eye_params.get(active_slot)
+                active_result = per_eye_results.get(active_slot)
+                panel = self.annotation_controls.auto_detect_panel(plugin.name)
+                if panel is not None and active_params is not None:
+                    panel.set_params(active_params)
+                if active_result is not None:
+                    self.orchestrator.set_cached_result(plugin.target, active_result)
+            # Carry-over rectangles fill any (target, eye) slot the loaded
+            # JSON didn't populate. Run after the JSON restore so saved
+            # per-image ROIs always win.
+            self._apply_carry_over_rois()
+            self._refresh_carry_checkboxes()
+            # Sync the manual-pupil mirror to the freshly loaded image's
+            # ellipse before live plugins re-run so glint / limbus pick up
+            # the right pupil source on first paint.
+            self._last_manual_pupil_signature = self._manual_pupil_signature()
+            self._refresh_manual_pupil_in_cache()
+            self._refresh_live_plugins_all_eyes()
+            self._refresh_panel_availability()
+        finally:
+            self.image_viewer.resume_updates()
 
     @staticmethod
     def _extract_loaded_plugin_blob(
@@ -909,17 +918,22 @@ class MainWindow(QMainWindow):
         detections on both eyes without manually switching the radio.
         The flow temporarily re-uses :meth:`_on_eye_changed` to swap
         the active eye, run live plugins for that side, then swap
-        back — Qt batches the intermediate paints so there's no
-        visible flicker.
+        back. Repaints are paused for the full duration so the two
+        intermediate :meth:`ImageViewer.switch_eye` calls — each
+        otherwise a full canvas re-render — collapse into one.
         """
         if not self.binocular_mode:
             self._refresh_live_plugin_results()
             return
-        self._refresh_live_plugin_results()
-        original = self.image_viewer.current_eye
-        other = "right" if original == "left" else "left"
-        self._on_eye_changed(other)
-        self._on_eye_changed(original)
+        self.image_viewer.pause_updates()
+        try:
+            self._refresh_live_plugin_results()
+            original = self.image_viewer.current_eye
+            other = "right" if original == "left" else "left"
+            self._on_eye_changed(other)
+            self._on_eye_changed(original)
+        finally:
+            self.image_viewer.resume_updates()
 
     # ----- Binocular crop + translate (active-eye-aware run path) -----
 

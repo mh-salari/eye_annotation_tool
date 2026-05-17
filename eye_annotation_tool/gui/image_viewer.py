@@ -105,6 +105,16 @@ class ImageViewer(QWidget):
         self.panning = False
         self.last_pan_pos = None
         self.pixmap = None
+
+        # Batch-update gate. Setters call ``update_image()`` to repaint after
+        # mutating state; on heavy load paths (apply_loaded_detections,
+        # live-plugin refresh for both eyes) those calls stack up into many
+        # full-canvas paints. ``_updates_paused`` collapses them: while True,
+        # ``update_image`` marks ``_update_pending`` and returns; the
+        # matching ``resume_updates`` issues a single repaint if any was
+        # requested. Depth-counted so nested pause/resume composes safely.
+        self._updates_paused = 0
+        self._update_pending = False
         # Variables for shift-click point movement
         self.shift_pressed = False
         self.last_mouse_pos = None
@@ -1020,8 +1030,29 @@ class ImageViewer(QWidget):
 
         self.update_image()
 
+    def pause_updates(self) -> None:
+        """Suppress ``update_image`` repaints until ``resume_updates`` matches.
+
+        Reference-counted, so callers can nest pause/resume blocks safely. Use
+        when a code path mutates many viewer-state setters in sequence to
+        avoid the per-setter full-canvas repaint.
+        """
+        self._updates_paused += 1
+
+    def resume_updates(self) -> None:
+        """End a ``pause_updates`` block; repaint once if anything requested it."""
+        if self._updates_paused == 0:
+            return
+        self._updates_paused -= 1
+        if self._updates_paused == 0 and self._update_pending:
+            self._update_pending = False
+            self.update_image()
+
     def update_image(self) -> None:
         """Update the displayed image with annotations."""
+        if self._updates_paused:
+            self._update_pending = True
+            return
         if self.original_pixmap is None or self.original_pixmap.isNull():
             return
         scaled_pixmap = self.original_pixmap.scaled(
