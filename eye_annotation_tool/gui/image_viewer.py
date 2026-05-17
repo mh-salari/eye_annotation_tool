@@ -186,7 +186,11 @@ class ImageViewer(QWidget):
         """Set up color definitions for annotations."""
         self.pupil_color = QColor(150, 213, 116, 255)
         self.pupil_select_color = QColor(249, 248, 113, 255)
-        self.pupil_ellipse_color = QColor(0, 127, 118, 255)
+        self.pupil_ellipse_color = QColor(25, 145, 50, 255)
+        # Brighter shade than the ellipse outline so the centre dot
+        # reads on top of both the outline and the soft-green mask
+        # fill the auto pupil plugin can paint underneath.
+        self.pupil_center_color = QColor(180, 240, 80, 255)
 
         self.limbus_color = QColor(194, 149, 188, 255)
         self.limbus_select_color = QColor(249, 178, 208, 255)
@@ -990,7 +994,7 @@ class ImageViewer(QWidget):
         if eye_data["pupil_ellipse"] and "pupil" not in self._auto_managed_annotations:
             painter.setPen(QPen(self.pupil_ellipse_color, 1, Qt.SolidLine))
             self.draw_single_ellipse(painter, eye_data["pupil_ellipse"])
-            self._draw_ellipse_center(painter, eye_data["pupil_ellipse"], self.pupil_ellipse_color)
+            self._draw_ellipse_center(painter, eye_data["pupil_ellipse"], self.pupil_center_color)
         if eye_data["limbus_ellipse"] and "limbus" not in self._auto_managed_annotations:
             painter.setPen(QPen(self.limbus_ellipse_color, 1, Qt.SolidLine))
             self.draw_single_ellipse(painter, eye_data["limbus_ellipse"])

@@ -34,10 +34,10 @@ from eye_annotation_tool.gui.custom_widgets import MaterialButton
 # Overlay palette for the Threshold Pupil plugin. Kept local to the
 # plugin so adding a new pupil detector with a different look does not
 # need core edits.
-ELLIPSE_COLOR = QColor(0, 127, 118, 255)
-CENTER_COLOR = QColor(40, 220, 60, 255)
+ELLIPSE_COLOR = QColor(25, 145, 50, 255)
+CENTER_COLOR = QColor(180, 240, 80, 255)
 ROI_COLOR = CENTER_COLOR
-MASK_COLOR = QColor(0, 200, 220, 64)
+MASK_COLOR = QColor(50, 180, 80, 70)
 
 # Display label / serialised key for each of the four centre-computation
 # methods exposed by pupil_glint_detector. Shared shape with the glint
