@@ -698,6 +698,19 @@ class ImageViewer(QWidget):
         self.image_loaded.emit()
         return True
 
+    def zoom_in_centered(self) -> None:
+        """Zoom in around the centre of the visible viewport."""
+        self.zoom(True, self.scroll_area.viewport().rect().center())
+
+    def zoom_out_centered(self) -> None:
+        """Zoom out around the centre of the visible viewport."""
+        self.zoom(False, self.scroll_area.viewport().rect().center())
+
+    def reset_zoom_to_fit(self) -> None:
+        """Restore the zoom factor to fit the whole image inside the viewport."""
+        self._fit_to_viewport()
+        self.update_image()
+
     def _fit_to_viewport(self) -> None:
         """Pick a zoom factor so the loaded image fits inside the scroll viewport.
 

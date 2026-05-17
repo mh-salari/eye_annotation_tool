@@ -172,9 +172,25 @@ class MainWindow(QMainWindow):
         left_layout.addWidget(self.image_list_widget)
 
         left_layout.addStretch(1)
+
+        # Zoom controls pinned at the bottom of the left panel — fixed
+        # row so they stay reachable regardless of how long the loaded-
+        # images list grows.
+        zoom_row = QHBoxLayout()
+        zoom_row.setContentsMargins(0, 0, 0, 0)
+        self.zoom_in_button = MaterialButton("Zoom +")
+        self.zoom_out_button = MaterialButton("Zoom -")
+        self.zoom_reset_button = MaterialButton("Reset Zoom")
+        zoom_row.addWidget(self.zoom_in_button)
+        zoom_row.addWidget(self.zoom_out_button)
+        zoom_row.addWidget(self.zoom_reset_button)
+        left_layout.addLayout(zoom_row)
         left_panel.setLayout(left_layout)
 
         self.image_viewer = ImageViewer()
+        self.zoom_in_button.clicked.connect(self.image_viewer.zoom_in_centered)
+        self.zoom_out_button.clicked.connect(self.image_viewer.zoom_out_centered)
+        self.zoom_reset_button.clicked.connect(self.image_viewer.reset_zoom_to_fit)
 
         # Right panel: AnnotationControlPanel inside a QScrollArea so taller
         # Auto Detect plugin stacks scroll instead of pushing the window
