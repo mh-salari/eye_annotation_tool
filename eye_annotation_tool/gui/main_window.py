@@ -31,7 +31,7 @@ from ..auto_detectors.orchestrator import DetectorOrchestrator
 from ..auto_detectors.plugin_interface import DetectorPlugin, Target
 from ..controllers.annotation_controller import AnnotationController
 from ..controllers.navigation_controller import NavigationController
-from ..utils.project_settings import DETECTOR_TARGETS, load_project_settings, save_project_settings
+from ..utils.project_settings import CARRY_ROI_SLOTS, DETECTOR_TARGETS, load_project_settings, save_project_settings
 from .annotation_controls import MODE_AUTO_DETECT, MODE_MANUAL, AnnotationControlPanel
 from .custom_widgets import MaterialButton
 from .image_viewer import ImageViewer
@@ -1353,9 +1353,27 @@ class MainWindow(QMainWindow):
             panel = self.annotation_controls.auto_detect_panel(plugin.name)
             if panel is None:
                 continue
-            detectors[target] = {"plugin": plugin.name, "params": panel.current_params()}
+            viewer_rois = {slot: self.image_viewer.get_target_roi(target, eye_slot=slot) for slot in CARRY_ROI_SLOTS}
+            carry_enabled = any(roi is not None for roi in viewer_rois.values())
+            self._carry_roi_enabled[target] = carry_enabled
+            for slot, roi in viewer_rois.items():
+                self._carry_roi_values[target][slot] = roi
+            params = dict(panel.current_params())
+            # The ROI is stored once, in carry_roi.values; strip the
+            # duplicate ``<target>_roi`` slot from params so the project
+            # file has a single source of truth.
+            params.pop(_panel_roi_param_key(target), None)
+            detectors[target] = {
+                "plugin": plugin.name,
+                "params": params,
+                "carry_roi": {
+                    "enabled": carry_enabled,
+                    "values": {slot: list(roi) if roi is not None else None for slot, roi in viewer_rois.items()},
+                },
+            }
         settings["detectors"] = detectors
         self._save_to_all_projects(settings)
+        self._refresh_carry_checkboxes()
         self.statusBar().showMessage("Project defaults saved.", 3000)
 
     # ----- Auto Detect mode: plugin resolution, run dispatch, signal forwarding -----
