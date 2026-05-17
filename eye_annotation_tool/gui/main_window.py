@@ -3,6 +3,7 @@
 import ast
 from pathlib import Path
 
+import numpy as np
 from PyQt5.QtCore import QEvent, QRect, Qt, QTimer
 from PyQt5.QtGui import QCloseEvent, QIcon, QPixmap, QScreen
 from PyQt5.QtWidgets import (
@@ -85,6 +86,16 @@ class MainWindow(QMainWindow):
         # means "no override — use project default". Populated from the
         # image's saved JSON on load and from drag events on the canvas.
         self._image_divider_overrides: dict[str, float | None] = {}
+        # Per-eye snapshot of every plugin's last result on the current
+        # image. The orchestrator only carries the active eye's results;
+        # this dict carries the OTHER eye's so switching the radio can
+        # restore that side without re-running. Only used in binocular
+        # mode; the "single" key is used for monocular images.
+        self._per_eye_detection_cache: dict[str, dict[Target, dict | None]] = {
+            "left": dict.fromkeys(DETECTOR_TARGETS),
+            "right": dict.fromkeys(DETECTOR_TARGETS),
+            "single": dict.fromkeys(DETECTOR_TARGETS),
+        }
         self.autosave_enabled = False
         # All folders loaded for the current session. Project-settings writes
         # propagate to every entry so any one of them can be reopened later
@@ -247,11 +258,12 @@ class MainWindow(QMainWindow):
 
         self.image_viewer.annotation_changed.connect(self.on_annotation_changed)
         self.image_viewer.annotation_type_changed.connect(self.annotation_controls.set_current_annotation)
-        # On image change: drop the orchestrator's per-image cache before
-        # the annotation_controller restores whatever the new image's saved
-        # annotation carries. The image viewer clears its own per-image
-        # overlay + target-ROI state inside ``load_image`` itself.
-        self.image_viewer.image_loaded.connect(self.orchestrator.clear_cache)
+        # On image change: drop both the orchestrator's per-image cache
+        # AND the per-eye snapshot before the annotation_controller
+        # restores whatever the new image's saved annotation carries.
+        # The image viewer clears its own per-image overlay + target-ROI
+        # state inside ``load_image`` itself.
+        self.image_viewer.image_loaded.connect(self._on_image_loaded)
 
         self.image_viewer.target_roi_changed.connect(self._on_target_roi_changed)
 
@@ -419,11 +431,74 @@ class MainWindow(QMainWindow):
             settings["binocular_mode"] = enabled
             self._save_to_all_projects(settings)
 
+    def _active_eye_slot(self) -> str:
+        """Return the per-eye cache slot for the currently active eye.
+
+        ``"left"`` / ``"right"`` in binocular mode, ``"single"`` in
+        monocular mode. Used as the dict key for the per-eye detection
+        cache and the per-eye JSON detection block.
+        """
+        if not self.binocular_mode:
+            return "single"
+        return self.image_viewer.current_eye
+
     def _on_eye_changed(self, eye: str) -> None:
-        """Switch the active eye (only meaningful in binocular mode)."""
+        """Switch the active eye and swap the orchestrator's detection cache.
+
+        The per-eye cache holds each eye's latest detection results;
+        switching the radio snapshots the active eye's orchestrator
+        slot, then restores the other eye's slot, then re-runs every
+        live plugin against the new eye so the canvas overlay tracks
+        the new selection without waiting for slider drags.
+        """
         if not self.binocular_mode:
             return
+        old_slot = self._active_eye_slot()
+        self._snapshot_orchestrator_to_per_eye(old_slot)
         self.image_viewer.switch_eye(eye)
+        new_slot = self._active_eye_slot()
+        self._restore_orchestrator_from_per_eye(new_slot)
+        self._push_cache_to_viewer()
+        self._refresh_manual_pupil_in_cache()
+        self._refresh_live_plugin_results()
+        self._refresh_panel_availability()
+
+    def _snapshot_orchestrator_to_per_eye(self, slot: str) -> None:
+        """Copy the orchestrator's per-target results into the per-eye cache slot."""
+        for target in DETECTOR_TARGETS:
+            self._per_eye_detection_cache[slot][target] = self.orchestrator.cached_result(target)
+
+    def _restore_orchestrator_from_per_eye(self, slot: str) -> None:
+        """Push the per-eye cache slot's results back into the orchestrator."""
+        for target in DETECTOR_TARGETS:
+            self.orchestrator.set_cached_result(target, self._per_eye_detection_cache[slot][target])
+
+    def _push_cache_to_viewer(self) -> None:
+        """Update viewer overlays + masks to match the orchestrator's current cache.
+
+        Called after restoring the per-eye cache so the canvas paints
+        whichever eye is now active. Plugins whose cache slot is None
+        get their overlay + mask cleared.
+        """
+        for target in DETECTOR_TARGETS:
+            result = self.orchestrator.cached_result(target)
+            if result is None:
+                self.image_viewer.clear_detection_overlay(target)
+                self.image_viewer.clear_target_mask(target)
+            else:
+                self.image_viewer.set_detection_overlay(target, result)
+                self.image_viewer.set_target_mask(target, result.get("mask"))
+
+    def _clear_per_eye_cache(self) -> None:
+        """Wipe every per-eye cache slot. Called on image change."""
+        for slot in self._per_eye_detection_cache:
+            for target in DETECTOR_TARGETS:
+                self._per_eye_detection_cache[slot][target] = None
+
+    def _on_image_loaded(self) -> None:
+        """Drop orchestrator cache + per-eye snapshots when a new image lands."""
+        self.orchestrator.clear_cache()
+        self._clear_per_eye_cache()
 
     def divider_override_for_current_image(self) -> float | None:
         """Return the per-image divider override for the current image (or ``None``)."""
@@ -473,6 +548,11 @@ class MainWindow(QMainWindow):
         """
         if mode == MODE_MANUAL:
             self._cancel_active_roi_edit()
+        # Manual click-to-place and click-to-edit on the canvas are
+        # only allowed in Manual mode. Auto Detect mode still paints
+        # manual annotations so the user can see them, but blocks edits
+        # until they switch back.
+        self.image_viewer.set_manual_edit_enabled(mode == MODE_MANUAL)
         if not self.project_dirs:
             return
         settings = load_project_settings(self.project_dir)
@@ -564,41 +644,59 @@ class MainWindow(QMainWindow):
     def collect_detections_for_save(self) -> dict:
         """Walk every enabled plugin and build the per-image ``detections`` dict.
 
-        For each plugin whose target has a cached result on the current
-        image, the dict gets one entry keyed by plugin name carrying both
-        the parameter values used and the serialised result.
+        Monocular images save flat: ``{plugin_name: {params, result}}``.
+        Binocular images save nested per eye: ``{plugin_name: {left: {...},
+        right: {...}}}`` so each eye's last detection persists
+        independently. The active eye's results are read directly from
+        the orchestrator (which is always in sync); the inactive eye's
+        come from the per-eye snapshot.
         """
+        # Snapshot the active eye's orchestrator state so the per-eye
+        # cache is fully fresh before we walk it.
+        self._snapshot_orchestrator_to_per_eye(self._active_eye_slot())
         out: dict = {}
         for target, plugin in self._enabled_plugins.items():
-            result = self.orchestrator.cached_result(target)
-            if result is None:
-                continue
             panel = self.annotation_controls.auto_detect_panel(plugin.name)
             params = panel.current_params() if panel is not None else plugin.default_params()
-            out[plugin.name] = {
-                "params": params,
-                "result": plugin.serialize(result),
-            }
+            if self.binocular_mode:
+                per_eye_block: dict = {}
+                for slot in ("left", "right"):
+                    result = self._per_eye_detection_cache[slot][target]
+                    if result is None:
+                        continue
+                    per_eye_block[slot] = {
+                        "params": params,
+                        "result": plugin.serialize(result),
+                    }
+                if per_eye_block:
+                    out[plugin.name] = per_eye_block
+            else:
+                result = self._per_eye_detection_cache["single"][target]
+                if result is None:
+                    continue
+                out[plugin.name] = {
+                    "params": params,
+                    "result": plugin.serialize(result),
+                }
         return out
 
     def apply_loaded_detections(self, detections: dict) -> None:
         """Restore per-image detection blocks from a loaded annotation file.
 
-        For every block whose plugin is currently enabled, the panel is
-        seeded with the saved params, the orchestrator's cache is primed
-        with the deserialised result, and the viewer's overlay store
-        receives the same result so the painter draws it. Blocks whose
-        plugin is disabled or unknown for the current project are
-        ignored — they will be re-saved as-is on the next save only if
-        the user enables that plugin (handled by step g's UI).
+        Two on-disk shapes are accepted: monocular files carry a flat
+        ``{params, result}`` per plugin; binocular files carry a nested
+        ``{left: {...}, right: {...}}`` per plugin. The per-eye cache
+        is populated for both eyes from the binocular shape; the
+        orchestrator's slot is then primed with the active eye's data
+        so the canvas paints the right side on first frame.
 
-        After the restore, every live cheap plugin is re-run once
-        synchronously on the current image. The cached result is
-        overwritten with the freshly computed one and the transient
-        mask is populated — masks are stripped on serialise, so a
-        freshly loaded image otherwise has no mask data even when its
-        Show-mask toggle is on. Non-live plugins are not re-run; their
-        own Detect button drives them.
+        Blocks whose plugin is disabled or unknown for the current
+        project are ignored. After the restore, every live cheap
+        plugin is re-run once so the cache + mask are fresh — masks
+        are stripped on serialise, so a loaded image otherwise has no
+        mask data even when its Show-mask toggle is on. Non-live
+        plugins keep their deserialised result until the user clicks
+        Detect.
         """
         for plugin_name, blob in detections.items():
             plugin = self.plugin_manager.get(plugin_name)
@@ -606,21 +704,25 @@ class MainWindow(QMainWindow):
                 continue
             if self._enabled_plugins.get(plugin.target) is not plugin:
                 continue
-            params = blob.get("params") or {}
-            result_blob = blob.get("result") or {}
-            result = plugin.deserialize(result_blob)
+            params, per_eye_results = self._extract_loaded_plugin_blob(blob, plugin)
             panel = self.annotation_controls.auto_detect_panel(plugin.name)
-            if panel is not None:
+            if panel is not None and params is not None:
                 panel.set_params(params)
-            self.orchestrator.set_cached_result(plugin.target, result)
-            self.image_viewer.set_detection_overlay(plugin.target, result)
+            for slot, result in per_eye_results.items():
+                self._per_eye_detection_cache[slot][plugin.target] = result
+            active_slot = self._active_eye_slot()
+            active_result = per_eye_results.get(active_slot)
+            if active_result is not None:
+                self.orchestrator.set_cached_result(plugin.target, active_result)
+                self.image_viewer.set_detection_overlay(plugin.target, active_result)
             # panel.set_params is silent by design; mirror the per-target
             # ROI value into the viewer's store so the rectangle renders.
-            saved_roi = params.get(_panel_roi_param_key(plugin.target))
-            self.image_viewer.set_target_roi(
-                plugin.target,
-                tuple(saved_roi) if saved_roi is not None else None,
-            )
+            if params is not None:
+                saved_roi = params.get(_panel_roi_param_key(plugin.target))
+                self.image_viewer.set_target_roi(
+                    plugin.target,
+                    tuple(saved_roi) if saved_roi is not None else None,
+                )
         # Sync the manual-pupil mirror to the freshly loaded image's
         # ellipse before live plugins re-run so glint / limbus pick up
         # the right pupil source on first paint.
@@ -628,6 +730,37 @@ class MainWindow(QMainWindow):
         self._refresh_manual_pupil_in_cache()
         self._refresh_live_plugin_results()
         self._refresh_panel_availability()
+
+    @staticmethod
+    def _extract_loaded_plugin_blob(
+        blob: dict,
+        plugin: DetectorPlugin,
+    ) -> tuple[dict | None, dict[str, dict | None]]:
+        """Normalise an on-disk plugin block to ``(params, {slot: result})``.
+
+        Returns the panel params dict and a mapping from per-eye cache
+        slot to deserialised result. For monocular files the single
+        slot is ``"single"``; for binocular the slots are ``"left"`` /
+        ``"right"`` (whichever are present in the blob).
+        """
+        # Monocular shape: flat {params, result}.
+        if "params" in blob or "result" in blob:
+            params = blob.get("params") or None
+            result_blob = blob.get("result")
+            result = plugin.deserialize(result_blob) if result_blob else None
+            return params, {"single": result}
+        # Binocular shape: {left: {params, result}, right: {...}}.
+        per_eye: dict[str, dict | None] = {}
+        params: dict | None = None
+        for slot in ("left", "right"):
+            entry = blob.get(slot)
+            if not isinstance(entry, dict):
+                continue
+            if params is None:
+                params = entry.get("params") or None
+            result_blob = entry.get("result")
+            per_eye[slot] = plugin.deserialize(result_blob) if result_blob else None
+        return params, per_eye
 
     def _manual_pupil_signature(self) -> tuple | None:
         """Return a hashable identity of the current eye's manual pupil ellipse."""
@@ -683,7 +816,7 @@ class MainWindow(QMainWindow):
             panel.setEnabled(deps_met)
 
     def _refresh_live_plugin_results(self) -> None:
-        """Re-run every enabled live plugin on the current image, in dep order.
+        """Re-run every enabled live plugin on the active eye, in dep order.
 
         Walking ``DETECTOR_TARGETS`` in order respects the natural
         dependency chain (pupil → glint → limbus → eyelid) so a
@@ -701,7 +834,89 @@ class MainWindow(QMainWindow):
             panel = self.annotation_controls.auto_detect_panel(plugin.name)
             if panel is None:
                 continue
-            self.orchestrator.run_one(target, image, panel.current_params())
+            self._run_plugin_for_active_eye(plugin, panel.current_params())
+
+    # ----- Binocular crop + translate (active-eye-aware run path) -----
+
+    def _active_eye_crop_bounds(self) -> tuple[int, int, int, int] | None:
+        """Return ``(dx, dy, dw, dh)`` for the active eye's half, or ``None`` (no crop)."""
+        if not self.binocular_mode:
+            return None
+        image = self.image_viewer.get_current_image_grayscale()
+        if image is None:
+            return None
+        full_h, full_w = image.shape[:2]
+        divider_x = round(self._effective_divider_x_norm() * full_w)
+        divider_x = max(1, min(full_w - 1, divider_x))
+        if self.image_viewer.current_eye == "left":
+            return (0, 0, divider_x, full_h)
+        return (divider_x, 0, full_w - divider_x, full_h)
+
+    @staticmethod
+    def _intersect_roi_with_crop(
+        roi: tuple | None,
+        crop: tuple[int, int, int, int],
+    ) -> tuple[int, int, int, int] | None:
+        """Translate a full-image ROI into crop coords, or return None if no overlap."""
+        if roi is None:
+            return None
+        rx, ry, rw, rh = roi
+        cx, cy, cw, ch = crop
+        ix = max(rx, cx)
+        iy = max(ry, cy)
+        ex = min(rx + rw, cx + cw)
+        ey = min(ry + rh, cy + ch)
+        iw = ex - ix
+        ih = ey - iy
+        if iw <= 0 or ih <= 0:
+            return None
+        return (int(ix - cx), int(iy - cy), int(iw), int(ih))
+
+    @staticmethod
+    def _embed_mask(mask: np.ndarray, dx: int, dy: int, full_shape: tuple) -> np.ndarray:
+        """Paste a crop-sized mask into a full-image-sized zeros array at ``(dx, dy)``."""
+        full_h, full_w = full_shape[:2]
+        embedded = np.zeros((full_h, full_w), dtype=mask.dtype)
+        mh, mw = mask.shape[:2]
+        embedded[dy : dy + mh, dx : dx + mw] = mask
+        return embedded
+
+    def _run_plugin_for_active_eye(self, plugin: DetectorPlugin, params: dict) -> None:
+        """Dispatch a plugin run, cropping to the active eye half when relevant.
+
+        Pupil plugins running in binocular mode get a cropped grayscale
+        and a translated ``pupil_roi`` param; the result is translated
+        back to full-image coordinates via ``plugin.translate_for_crop``
+        and any returned mask is embedded into a full-image-sized array
+        before it reaches the viewer. All non-pupil plugins (or any
+        plugin in monocular mode) run on the full image as before —
+        glint + limbus consume the already-full-coord pupil result via
+        ``shared_results`` and their search regions naturally stay
+        within the active eye half because pupil_center does.
+        """
+        image = self.image_viewer.get_current_image_grayscale()
+        if image is None:
+            return
+        bounds = self._active_eye_crop_bounds() if plugin.target == "pupil" else None
+        if bounds is None:
+            self.orchestrator.run_one(plugin.target, image, params)
+            return
+        dx, dy, dw, dh = bounds
+        cropped = image[dy : dy + dh, dx : dx + dw]
+        translated_params = dict(params)
+        roi_key = _panel_roi_param_key(plugin.target)
+        if roi_key in translated_params:
+            translated_params[roi_key] = self._intersect_roi_with_crop(translated_params.get(roi_key), bounds)
+        full_shape = image.shape
+
+        def post_process(result: dict) -> dict:
+            translated = plugin.translate_for_crop(result, dx, dy)
+            mask = translated.get("mask")
+            if mask is not None:
+                translated["mask"] = self._embed_mask(mask, dx, dy, full_shape)
+            return translated
+
+        self.orchestrator.run_one(plugin.target, cropped, translated_params, post_process=post_process)
 
     # ----- Auto Detectors menu: per-target plugin choice + project defaults -----
 
@@ -972,7 +1187,7 @@ class MainWindow(QMainWindow):
         self.image_viewer.clear_target_mask(target)
 
     def _on_auto_detect_debounce_fired(self) -> None:
-        """Dispatch the buffered run_one to the orchestrator.
+        """Dispatch the buffered run to the active-eye-aware run helper.
 
         Skipped silently when no image grayscale is available (no image
         loaded yet) or the plugin was disabled between buffering and firing.
@@ -982,22 +1197,25 @@ class MainWindow(QMainWindow):
         if pending is None:
             return
         plugin_name, params = pending
-        image = self.image_viewer.get_current_image_grayscale()
-        if image is None:
-            return
         plugin = self.plugin_manager.get(plugin_name)
         if plugin is None or self._enabled_plugins.get(plugin.target) is not plugin:
             return
-        self.orchestrator.run_one(plugin.target, image, params)
+        self._run_plugin_for_active_eye(plugin, params)
 
     def _on_plugin_ready(self, target: str, result: dict) -> None:
-        """Render the new detection result + its optional mask, mark modified."""
+        """Render the new detection result + its optional mask, mark modified.
+
+        Also mirrors the result into the active eye's slot of the
+        per-eye cache so eye-switching can later restore it without a
+        re-run.
+        """
         # The mask (if any) lives under the standard ``"mask"`` key per
         # the plugin contract — split it off from the geometry overlay so
         # the viewer's mask renderer and its detection renderer stay on
         # their own paths.
         self.image_viewer.set_target_mask(target, result.get("mask"))
         self.image_viewer.set_detection_overlay(target, result)
+        self._per_eye_detection_cache[self._active_eye_slot()][target] = result
         self.set_annotation_modified(True)
         self._refresh_panel_availability()
 
@@ -1005,6 +1223,7 @@ class MainWindow(QMainWindow):
         """Clear the per-target overlay + mask and surface the failure in the status bar."""
         self.image_viewer.clear_detection_overlay(target)
         self.image_viewer.clear_target_mask(target)
+        self._per_eye_detection_cache[self._active_eye_slot()][target] = None
         self.statusBar().showMessage(f"Auto Detect: {target} failed at current parameters.", 5000)
         self._refresh_panel_availability()
 
@@ -1020,7 +1239,7 @@ class MainWindow(QMainWindow):
         self._clear_all_auto_detect()
 
     def _clear_all_auto_detect(self) -> None:
-        """Reset every Auto Detect plugin panel, the orchestrator cache, and the viewer state."""
+        """Reset every Auto Detect plugin panel + orchestrator + per-eye cache + viewer state."""
         # Cancel any debounced run_one that might fire mid-reset.
         self._auto_detect_debounce.stop()
         self._pending_run_one = None
@@ -1037,18 +1256,20 @@ class MainWindow(QMainWindow):
             self.image_viewer.clear_detection_overlay(target)
             self.image_viewer.clear_target_mask(target)
             self.image_viewer.set_target_roi(target, None)
+        self._clear_per_eye_cache()
         # Active drag-edit target was likely tied to one of the panels we
         # just reset; drop it so the canvas isn't waiting on a phantom drag.
         self.image_viewer.set_active_roi_target(None)
         self.set_annotation_modified(True)
 
     def _on_panel_detect_requested(self, plugin_name: str, target: Target) -> None:
-        """Run a non-live plugin once on the current image.
+        """Run a non-live plugin once on the active eye.
 
-        Wired to the plugin panel's Detect button. The orchestrator
-        invokes ``detect`` synchronously and emits ``plugin_ready`` (or
-        ``plugin_failed``) which lands the new overlay via the usual
-        ``_on_plugin_ready`` path.
+        Wired to the plugin panel's Detect button. The plugin runs via
+        the active-eye-aware helper so binocular images detect on the
+        currently selected half. The orchestrator emits
+        ``plugin_ready`` (or ``plugin_failed``) which lands the new
+        overlay via the usual ``_on_plugin_ready`` path.
         """
         plugin = self._enabled_plugins.get(target)
         if plugin is None or plugin.name != plugin_name:
@@ -1056,10 +1277,7 @@ class MainWindow(QMainWindow):
         panel = self.annotation_controls.auto_detect_panel(plugin_name)
         if panel is None:
             return
-        image = self.image_viewer.get_current_image_grayscale()
-        if image is None:
-            return
-        self.orchestrator.run_one(target, image, panel.current_params())
+        self._run_plugin_for_active_eye(plugin, panel.current_params())
 
     def _on_panel_show_mask_toggled(self, target: str, on: bool) -> None:
         """Forward the panel's "Show mask" toggle to the viewer.

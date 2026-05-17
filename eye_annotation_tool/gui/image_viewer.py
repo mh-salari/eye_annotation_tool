@@ -158,6 +158,13 @@ class ImageViewer(QWidget):
         self._auto_managed_targets: set[str] = set()
         self._auto_managed_annotations: set[str] = set()
 
+        # Gate for manual click-to-place and click-to-edit on the
+        # canvas. True only in Manual mode — Auto Detect mode keeps
+        # manual annotations visible but blocks adding / dragging them
+        # so the user has to switch back to Manual before touching them.
+        # MainWindow flips this on mode change.
+        self._manual_edit_enabled = True
+
         # Per-target Auto Detect ROI rectangles (target → ``(x, y, w, h)``
         # tuple or None). ``_active_roi_target`` is the target whose
         # rectangle is currently in drag-edit mode — handles are drawn on
@@ -500,6 +507,13 @@ class ImageViewer(QWidget):
                     self._try_begin_roi_drag(image_pos, self._target_rois.get(self._active_roi_target))
                     return
 
+                # In Auto Detect mode manual edits are off — clicks on
+                # the canvas that don't hit the divider or an active
+                # ROI handle do nothing. The user must switch back to
+                # Manual mode to add or move manual annotations.
+                if not self._manual_edit_enabled:
+                    return
+
                 self.selected_point, selected_annotation = self.find_closest_point_and_type(image_pos)
 
                 if self.selected_point:
@@ -648,15 +662,47 @@ class ImageViewer(QWidget):
         self._target_rois.clear()
         self._target_masks.clear()
         self.reset_undo_stack()
+        self._fit_to_viewport()
         self.update_image()
         self.image_loaded.emit()
         return True
+
+    def _fit_to_viewport(self) -> None:
+        """Pick a zoom factor so the loaded image fits inside the scroll viewport.
+
+        Reset on every image load so a wide binocular image is fully
+        visible without manual zoom-out, while smaller images don't get
+        scaled up past 1x (we never enlarge — only shrink to fit).
+        """
+        if self.original_pixmap is None or self.original_pixmap.isNull():
+            return
+        viewport = self.scroll_area.viewport().size()
+        if viewport.width() <= 0 or viewport.height() <= 0:
+            self.factor = 1.0
+            return
+        img_w = self.original_pixmap.width()
+        img_h = self.original_pixmap.height()
+        if img_w == 0 or img_h == 0:
+            self.factor = 1.0
+            return
+        fit_w = viewport.width() / img_w
+        fit_h = viewport.height() / img_h
+        self.factor = max(0.1, min(1.0, fit_w, fit_h))
 
     def get_current_image_grayscale(self) -> np.ndarray | None:
         """Return the grayscale numpy view of the current image (or None)."""
         return self.image_grayscale
 
     # ----- Auto Detect overlays -----
+
+    def set_manual_edit_enabled(self, enabled: bool) -> None:
+        """Allow / block manual click-to-place and click-to-edit on the canvas.
+
+        Called by MainWindow when the user flips the mode switcher.
+        Existing manual annotations stay visible regardless; only
+        adding new ones and dragging existing ones is gated.
+        """
+        self._manual_edit_enabled = bool(enabled)
 
     def set_auto_managed_targets(self, plugin_targets: set[str]) -> None:
         """Declare which plugin targets are now owned by an auto detector.

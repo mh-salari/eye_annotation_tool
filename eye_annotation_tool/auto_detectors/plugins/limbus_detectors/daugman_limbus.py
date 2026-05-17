@@ -297,6 +297,13 @@ class DaugmanLimbus(DetectorPlugin):
             "radius": float(blob["radius"]),
         }
 
+    def translate_for_crop(self, result: dict, dx: float, dy: float) -> dict:
+        """Shift the limbus centre from crop coords to full image."""
+        return {
+            "center": [result["center"][0] + dx, result["center"][1] + dy],
+            "radius": float(result["radius"]),
+        }
+
     def draw_overlay(self, painter: QPainter, result: dict, scale: float) -> None:
         """Render the detected limbus as a single circle outline."""
         center = result.get("center")

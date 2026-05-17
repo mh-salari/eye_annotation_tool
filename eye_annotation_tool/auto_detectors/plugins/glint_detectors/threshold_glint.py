@@ -523,6 +523,15 @@ class ThresholdGlint(DetectorPlugin):
         """Reconstruct an in-memory result dict from a stored JSON blob."""
         return {"glints": [{"center": list(g["center"])} for g in blob.get("glints", [])]}
 
+    def translate_for_crop(self, result: dict, dx: float, dy: float) -> dict:
+        """Shift every detected glint centre from crop coords to full image."""
+        translated = {
+            "glints": [{"center": [g["center"][0] + dx, g["center"][1] + dy]} for g in result.get("glints", [])],
+        }
+        if "mask" in result:
+            translated["mask"] = result["mask"]
+        return translated
+
     def draw_overlay(self, painter: QPainter, result: dict, scale: float) -> None:
         """Render each detected glint as a small filled red dot."""
         glints = result.get("glints") or []

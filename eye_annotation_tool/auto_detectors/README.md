@@ -74,10 +74,10 @@ class _Panel(QGroupBox):
 class MyPupil(DetectorPlugin):
     """Toy pupil detector — picks a fixed circle at the image centre."""
 
-    name = "my_pupil"               # unique slug; appears in the Auto Detectors menu
-    target = "pupil"                # one of the four anatomical targets
-    requires = ()                   # other targets whose results we need
-    live = True                     # True = re-run on slider drag; False = manual Detect button only
+    name = "my_pupil"  # unique slug; appears in the Auto Detectors menu
+    target = "pupil"  # one of the four anatomical targets
+    requires = ()  # other targets whose results we need
+    live = True  # True = re-run on slider drag; False = manual Detect button only
 
     @classmethod
     def default_params(cls) -> dict:

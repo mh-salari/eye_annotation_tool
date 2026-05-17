@@ -284,6 +284,32 @@ class ThresholdPupil(DetectorPlugin):
             },
         }
 
+    def translate_for_crop(self, result: dict, dx: float, dy: float) -> dict:
+        """Translate centre + ellipse + contour points from crop coords to full image."""
+        translated: dict = {
+            "center": [result["center"][0] + dx, result["center"][1] + dy],
+            "ellipse": {
+                "center": [
+                    result["ellipse"]["center"][0] + dx,
+                    result["ellipse"]["center"][1] + dy,
+                ],
+                "size": list(result["ellipse"]["size"]),
+                "angle": float(result["ellipse"]["angle"]),
+            },
+        }
+        contour = result.get("contour")
+        if contour is not None:
+            # Contour is an Nx1x2 or Nx2 ndarray of (x, y) points.
+            shifted = contour.copy()
+            shifted[..., 0] += round(dx)
+            shifted[..., 1] += round(dy)
+            translated["contour"] = shifted
+        # Mask stays in crop coordinates; MainWindow embeds it into a
+        # full-image-sized array before passing it to the viewer.
+        if "mask" in result:
+            translated["mask"] = result["mask"]
+        return translated
+
     def draw_overlay(self, painter: QPainter, result: dict, scale: float) -> None:
         """Render the fitted pupil ellipse and its centre dot."""
         ellipse = result.get("ellipse")

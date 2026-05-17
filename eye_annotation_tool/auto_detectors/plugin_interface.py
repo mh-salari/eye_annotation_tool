@@ -143,6 +143,33 @@ class DetectorPlugin(ABC):
         """
         return
 
+    def translate_for_crop(  # noqa: PLR6301 - subclasses override with stateful work
+        self,
+        result: dict,
+        dx: float,  # noqa: ARG002 - default impl returns the result unchanged
+        dy: float,  # noqa: ARG002
+    ) -> dict:
+        """Translate a crop-coord result back into full-image coords.
+
+        Called by MainWindow when this plugin was run on a cropped
+        image (e.g. the active half of a binocular image). ``dx`` /
+        ``dy`` are the offsets of the crop's top-left corner inside
+        the full image. Implementations return a new result dict with
+        every coordinate field shifted by ``(dx, dy)`` so downstream
+        consumers + the viewer see full-image coordinates uniformly.
+
+        The default implementation returns ``result`` unchanged — fine
+        for plugins whose result carries no spatial fields, but
+        plugins that report centres, ellipses, contours or glint
+        points MUST override.
+
+        ``"mask"`` arrays are NOT translated here. MainWindow embeds
+        the crop-sized mask into a full-image-sized array before
+        passing it to the viewer because the plugin doesn't know the
+        full image shape.
+        """
+        return result
+
     @abstractmethod
     def serialize(self, result: dict) -> dict:
         """Reduce a result dict to JSON-friendly types for per-image storage.

@@ -15,6 +15,15 @@ the plugins themselves:
   - Live plugins re-run on debounced slider changes via :meth:`run_one`,
     which reuses whichever dependency results are currently cached.
 
+The orchestrator is unaware of binocular cropping. When MainWindow needs
+to run a plugin on a cropped image (e.g. the active half of a binocular
+image) it passes the already-cropped numpy array to :meth:`run_one` plus
+a ``post_process`` callable that translates the plugin's crop-coord
+result back into full-image coordinates. The post-processed result is
+what gets stored in :pyattr:`_results` and emitted via ``plugin_ready``,
+so downstream plugins (which read the cache) always see full-image
+coords regardless of whether the upstream plugin was cropped.
+
 Two signals carry outcomes outward:
 
   - ``plugin_ready(target, result)`` after a successful ``detect`` call.
@@ -26,6 +35,7 @@ Two signals carry outcomes outward:
     to ``None`` before the signal fires.
 """
 
+from collections.abc import Callable
 from typing import cast
 
 import numpy as np
@@ -121,22 +131,44 @@ class DetectorOrchestrator(QObject):
                 self._results[target] = None
                 self.plugin_failed.emit(cast("str", target))
 
-    def run_one(self, target: Target, image: np.ndarray, params: dict) -> None:
+    def run_one(
+        self,
+        target: Target,
+        image: np.ndarray,
+        params: dict,
+        *,
+        post_process: Callable[[dict], dict] | None = None,
+    ) -> None:
         """Re-run the plugin enabled for ``target`` with ``params``.
 
-        Reuses whichever dependency results are currently cached. No-op if
-        no plugin is enabled for ``target``. If any required target's
-        cache is empty (dep disabled or its run failed), ``plugin_failed``
-        is emitted and the cache for ``target`` is cleared.
+        Reuses whichever dependency results are currently cached. No-op
+        if no plugin is enabled for ``target``. If any required
+        target's cache is empty (dep disabled or its run failed),
+        ``plugin_failed`` is emitted and the cache for ``target`` is
+        cleared.
+
+        ``post_process`` is an optional callable invoked on the raw
+        result before it lands in the cache + signal. Used by
+        MainWindow to translate a binocular-crop result back into full-
+        image coordinates (and embed the crop-sized mask into a full-
+        image-sized array). When omitted the result flows through
+        unchanged.
         """
         plugin = self._enabled.get(target)
         if plugin is None:
             return
-        self._run_plugin(plugin, image, params)
+        self._run_plugin(plugin, image, params, post_process=post_process)
 
     # ----- internals -----
 
-    def _run_plugin(self, plugin: DetectorPlugin, image: np.ndarray, params: dict) -> None:
+    def _run_plugin(
+        self,
+        plugin: DetectorPlugin,
+        image: np.ndarray,
+        params: dict,
+        *,
+        post_process: Callable[[dict], dict] | None = None,
+    ) -> None:
         """Invoke a plugin's ``detect`` with its cached deps, update cache, emit signal."""
         shared: dict[str, dict] = {}
         for dep in plugin.requires:
@@ -151,6 +183,8 @@ class DetectorOrchestrator(QObject):
             self._results[plugin.target] = None
             self.plugin_failed.emit(cast("str", plugin.target))
             return
+        if post_process is not None:
+            result = post_process(result)
         self._results[plugin.target] = result
         self.plugin_ready.emit(cast("str", plugin.target), result)
 
