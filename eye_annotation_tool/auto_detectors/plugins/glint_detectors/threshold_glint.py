@@ -120,6 +120,15 @@ class _ThresholdGlintPanel(QGroupBox):
     # Emitted when the user clicks Clear next to the ROI button — the
     # canvas drops the rectangle and the plugin re-runs without it.
     clear_roi_requested = pyqtSignal()
+    # Emitted when the user flips the "Carry to other images" checkbox
+    # next to the ROI row. MainWindow tracks the carry-over state in
+    # project settings and applies the value to subsequent image loads
+    # that don't already have their own saved ROI.
+    carry_roi_toggled = pyqtSignal(bool)
+    # Emitted when the user clicks Override — replaces the current
+    # image's ROI with whatever the project-wide carry-over holds for
+    # the active eye, regardless of any saved ROI this image had.
+    override_roi_requested = pyqtSignal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
         """Build the panel widgets and seed them with :data:`DEFAULTS`."""
@@ -177,14 +186,39 @@ class _ThresholdGlintPanel(QGroupBox):
 
     def _build_roi_row(self) -> QHBoxLayout:
         row = QHBoxLayout()
-        self.roi_button = MaterialButton("Glint ROI")
+        self.roi_button = MaterialButton("Glint ROI", compact=True)
         self.roi_button.setCheckable(True)
         self.roi_button.toggled.connect(self.roi_edit_requested.emit)
-        self.clear_roi_button = MaterialButton("Clear")
+        self.clear_roi_button = MaterialButton("Clear", compact=True)
         self.clear_roi_button.clicked.connect(self.clear_roi_requested.emit)
+        self.carry_roi_check = QCheckBox("Carry")
+        self.carry_roi_check.setToolTip(
+            "When on, this image's ROI is the carry-over source. Loading "
+            "another image without its own saved ROI for this eye + target "
+            "applies the stored carry-over."
+        )
+        self.carry_roi_check.toggled.connect(self.carry_roi_toggled.emit)
+        self.override_button = MaterialButton("Override", compact=True)
+        self.override_button.setToolTip(
+            "Replace this image's ROI with the carry-over value, even if "
+            "the image already had its own saved ROI for the active eye."
+        )
+        self.override_button.clicked.connect(self.override_roi_requested.emit)
         row.addWidget(self.roi_button)
         row.addWidget(self.clear_roi_button)
+        row.addWidget(self.carry_roi_check)
+        row.addWidget(self.override_button)
         return row
+
+    def set_carry_roi_enabled(self, enabled: bool) -> None:
+        """Silently set the Carry checkbox state (no ``carry_roi_toggled``)."""
+        self.carry_roi_check.blockSignals(True)
+        self.carry_roi_check.setChecked(bool(enabled))
+        self.carry_roi_check.blockSignals(False)
+
+    def set_override_button_enabled(self, enabled: bool) -> None:
+        """Grey / enable the Override button based on whether a carry value is stored."""
+        self.override_button.setEnabled(bool(enabled))
 
     def _build_threshold_row(self) -> QHBoxLayout:
         row = QHBoxLayout()

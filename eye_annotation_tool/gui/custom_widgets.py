@@ -17,37 +17,47 @@ from PyQt5.QtWidgets import (
 
 
 class MaterialButton(QPushButton):
-    """Custom styled button with material design appearance."""
+    """Custom styled button with material design appearance.
 
-    def __init__(self, text: str, parent: QWidget | None = None) -> None:
+    ``compact=True`` shrinks the font size and padding so several
+    buttons fit in a single panel row without truncating their labels.
+    """
+
+    def __init__(self, text: str, parent: QWidget | None = None, *, compact: bool = False) -> None:
         """Initialize the MaterialButton."""
         super().__init__(text, parent)
+        font_size = "11px" if compact else "14px"
+        padding = "5px 10px" if compact else "10px 20px"
         self.setStyleSheet(
-            """
-            QPushButton {
+            f"""
+            QPushButton {{
                 background-color: #3a3a3a;
                 border: 1px solid #555;
                 color: #e0e0e0;
-                padding: 10px 20px;
+                padding: {padding};
                 text-align: center;
                 text-decoration: none;
-                font-size: 14px;
+                font-size: {font_size};
                 margin: 4px 2px;
                 border-radius: 4px;
-            }
-            QPushButton:hover {
+            }}
+            QPushButton:hover {{
                 background-color: #d9534f;
                 border: 1px solid #c9302c;
-            }
-            QPushButton:pressed {
+            }}
+            QPushButton:pressed {{
                 background-color: #ac2925;
-            }
-            QPushButton:checked {
+            }}
+            QPushButton:checked {{
                 background-color: #4caf50;
                 border: 1px solid #388e3c;
                 color: white;
-            }
-        """
+            }}
+            QPushButton:disabled {{
+                color: #777;
+                border: 1px solid #444;
+            }}
+            """
         )
 
 

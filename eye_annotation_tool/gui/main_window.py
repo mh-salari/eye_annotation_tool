@@ -107,6 +107,18 @@ class MainWindow(QMainWindow):
             "right": dict.fromkeys(DETECTOR_TARGETS),
             "single": dict.fromkeys(DETECTOR_TARGETS),
         }
+        # Carry-over ROI store. ``_carry_roi_enabled[target]`` is the
+        # per-target checkbox state from the project settings file;
+        # ``_carry_roi_values[target][slot]`` is the rectangle to apply
+        # to images that don't carry their own saved ROI for that
+        # (target, eye) pair. Both are populated from the project file
+        # in :meth:`_apply_enabled_plugins` and written back whenever
+        # the checkbox flips or a canvas ROI edit lands while the
+        # checkbox is on.
+        self._carry_roi_enabled: dict[Target, bool] = dict.fromkeys(DETECTOR_TARGETS, False)
+        self._carry_roi_values: dict[Target, dict[str, tuple | None]] = {
+            target: {"left": None, "right": None, "single": None} for target in DETECTOR_TARGETS
+        }
         self.autosave_enabled = False
         # All folders loaded for the current session. Project-settings writes
         # propagate to every entry so any one of them can be reopened later
@@ -489,6 +501,7 @@ class MainWindow(QMainWindow):
         new_slot = self._active_eye_slot()
         self._restore_panel_params_from_per_eye(new_slot)
         self._restore_orchestrator_from_per_eye(new_slot)
+        self._refresh_carry_checkboxes()
         self._refresh_manual_pupil_in_cache()
         self._refresh_live_plugin_results()
         self._refresh_panel_availability()
@@ -770,6 +783,11 @@ class MainWindow(QMainWindow):
                 panel.set_params(active_params)
             if active_result is not None:
                 self.orchestrator.set_cached_result(plugin.target, active_result)
+        # Carry-over rectangles fill any (target, eye) slot the loaded
+        # JSON didn't populate. Run after the JSON restore so saved
+        # per-image ROIs always win.
+        self._apply_carry_over_rois()
+        self._refresh_carry_checkboxes()
         # Sync the manual-pupil mirror to the freshly loaded image's
         # ellipse before live plugins re-run so glint / limbus pick up
         # the right pupil source on first paint.
@@ -1160,6 +1178,29 @@ class MainWindow(QMainWindow):
                 panel.detect_requested.connect(
                     lambda name=plugin.name, target_=plugin.target: self._on_panel_detect_requested(name, target_),
                 )
+            # Restore the carry-over checkbox + values from project
+            # settings. The checkbox state lives on the panel; the
+            # rectangle values live on MainWindow and only apply to
+            # subsequent image loads.
+            carry_block = entry.get("carry_roi") or {}
+            carry_enabled = bool(carry_block.get("enabled", False))
+            self._carry_roi_enabled[target] = carry_enabled
+            carry_values = carry_block.get("values") or {}
+            for slot in ("left", "right", "single"):
+                value = carry_values.get(slot)
+                self._carry_roi_values[target][slot] = (
+                    tuple(int(c) for c in value) if isinstance(value, (list, tuple)) and len(value) == 4 else None
+                )
+            if hasattr(panel, "set_carry_roi_enabled"):
+                panel.set_carry_roi_enabled(carry_enabled)
+            if hasattr(panel, "carry_roi_toggled"):
+                panel.carry_roi_toggled.connect(
+                    lambda checked, target_=plugin.target: self._on_carry_roi_toggled(target_, checked),
+                )
+            if hasattr(panel, "override_roi_requested"):
+                panel.override_roi_requested.connect(
+                    lambda target_=plugin.target: self._on_override_roi_requested(target_),
+                )
             # Seed the viewer's ROI store from the project-saved params so
             # the rectangle is rendered immediately when Auto Detect mode
             # is entered.
@@ -1359,11 +1400,17 @@ class MainWindow(QMainWindow):
             setter(None)
 
     def _on_target_roi_changed(self, target: str, roi: tuple | None) -> None:
-        """Push a canvas-edited ROI back into the panel's params dict.
+        """Push a canvas-edited ROI back into the panel; disable Carry on edit.
 
         The panel's setter (e.g. ``set_pupil_roi``) writes the new value
         into the params dict and emits ``params_changed``; the regular
         debounce path then re-runs detection with the updated ROI.
+
+        A canvas edit means the user is tuning THIS image's ROI
+        specifically, so Carry auto-disables when a non-empty rectangle
+        lands. The stored carry value isn't touched — re-checking
+        Carry captures the current rectangle as the new carry-over
+        value.
         """
         plugin = self._enabled_plugins.get(target)
         if plugin is None:
@@ -1372,6 +1419,136 @@ class MainWindow(QMainWindow):
         setter = getattr(panel, _panel_roi_setter_name(target), None) if panel is not None else None
         if setter is not None:
             setter(roi)
+        if roi is not None and self._carry_roi_enabled.get(target):
+            self._carry_roi_enabled[target] = False
+            if panel is not None and hasattr(panel, "set_carry_roi_enabled"):
+                panel.set_carry_roi_enabled(False)
+            self._persist_carry_roi(target)
+
+    def _on_carry_roi_toggled(self, target: Target, enabled: bool) -> None:
+        """Persist the per-target carry-over enable flag.
+
+        Flipping the flag on captures the *current* canvas ROI for the
+        active eye as the initial carry-over value so the next image
+        load already has something to apply. Turning it off leaves the
+        stored rectangle in place — re-enabling later resumes from the
+        same value.
+        """
+        self._carry_roi_enabled[target] = bool(enabled)
+        if enabled:
+            current_roi = self.image_viewer.get_target_roi(target)
+            if current_roi is not None:
+                self._carry_roi_values[target][self._active_eye_slot()] = tuple(int(c) for c in current_roi)
+        self._persist_carry_roi(target)
+        self._refresh_carry_checkboxes()
+
+    def _on_override_roi_requested(self, target: Target) -> None:
+        """Push the stored carry-over rectangle into the active eye's panel + viewer.
+
+        Replaces whatever ROI this image had for that target — saved or
+        not — with the carry-over value. The panel's setter emits
+        ``params_changed`` so a live plugin re-runs immediately. No-op
+        when no carry value is stored for the active eye.
+        """
+        active_slot = self._active_eye_slot()
+        carry_value = self._carry_roi_values.get(target, {}).get(active_slot)
+        if carry_value is None:
+            return
+        plugin = self._enabled_plugins.get(target)
+        if plugin is None:
+            return
+        panel = self.annotation_controls.auto_detect_panel(plugin.name)
+        setter = getattr(panel, _panel_roi_setter_name(target), None) if panel is not None else None
+        if setter is not None:
+            setter(tuple(carry_value))
+        self.image_viewer.set_target_roi(target, tuple(carry_value), eye_slot=active_slot)
+        self._refresh_carry_checkboxes()
+
+    def _persist_carry_roi(self, target: Target) -> None:
+        """Write the carry-over enable flag + values for ``target`` to the project file."""
+        if not self.project_dirs:
+            return
+        settings = load_project_settings(self.project_dir)
+        detectors = settings.setdefault("detectors", {})
+        entry = detectors.setdefault(target, {"plugin": "disabled", "params": {}})
+        entry["carry_roi"] = {
+            "enabled": bool(self._carry_roi_enabled.get(target, False)),
+            "values": {slot: list(value) if value is not None else None for slot, value in self._carry_roi_values[target].items()},
+        }
+        self._save_to_all_projects(settings)
+
+    def _refresh_carry_checkboxes(self) -> None:
+        """Sync each panel's Carry checkbox + Override button to the active eye's state.
+
+        A panel's checkbox shows as **checked** only when the carry-over
+        is enabled for that target AND the active eye's current viewer
+        ROI matches the stored carry value bit-for-bit. So loading an
+        image whose saved ROI differs from the carry-over leaves the
+        checkbox unchecked — a visual cue that "this image isn't the
+        one we're propagating".
+
+        The Override button is enabled only when a carry value is
+        stored for the active (target, eye) — clicking it pushes that
+        value into the canvas regardless of any saved ROI on the
+        current image.
+        """
+        active_slot = self._active_eye_slot()
+        for target, plugin in self._enabled_plugins.items():
+            panel = self.annotation_controls.auto_detect_panel(plugin.name)
+            if panel is None:
+                continue
+            if hasattr(panel, "set_carry_roi_enabled"):
+                panel.set_carry_roi_enabled(self._carry_checkbox_state(target, active_slot))
+            if hasattr(panel, "set_override_button_enabled"):
+                has_value = self._carry_roi_values.get(target, {}).get(active_slot) is not None
+                panel.set_override_button_enabled(has_value)
+
+    def _carry_checkbox_state(self, target: Target, slot: str) -> bool:
+        """Return whether the Carry checkbox should display as checked for ``(target, slot)``."""
+        if not self._carry_roi_enabled.get(target):
+            return False
+        carry_value = self._carry_roi_values.get(target, {}).get(slot)
+        if carry_value is None:
+            return False
+        viewer_roi = self.image_viewer.get_target_roi(target, eye_slot=slot)
+        if viewer_roi is None:
+            return False
+        return tuple(int(c) for c in viewer_roi) == tuple(int(c) for c in carry_value)
+
+    def _apply_carry_over_rois(self) -> None:
+        """Inject the carry-over rectangle into every (target, eye) without a saved ROI.
+
+        Called at the tail of :meth:`apply_loaded_detections` so saved
+        per-image ROIs take precedence — the carry-over only fills the
+        slots that the JSON didn't populate. The viewer's per-eye ROI
+        store and the active eye's live panel are both updated.
+        """
+        active_slot = self._active_eye_slot()
+        slots = ("left", "right") if self.binocular_mode else ("single",)
+        for target, plugin in self._enabled_plugins.items():
+            if not self._carry_roi_enabled.get(target):
+                continue
+            roi_key = _panel_roi_param_key(target)
+            for slot in slots:
+                if self._per_eye_panel_params[slot].get(target) is not None:
+                    params = self._per_eye_panel_params[slot][target]
+                    if params.get(roi_key) is not None:
+                        continue
+                else:
+                    params = None
+                carry_value = self._carry_roi_values[target].get(slot)
+                if carry_value is None:
+                    continue
+                if params is None:
+                    self._per_eye_panel_params[slot][target] = {roi_key: list(carry_value)}
+                else:
+                    params[roi_key] = list(carry_value)
+                self.image_viewer.set_target_roi(target, tuple(carry_value), eye_slot=slot)
+                if slot == active_slot:
+                    panel = self.annotation_controls.auto_detect_panel(plugin.name)
+                    panel_setter = getattr(panel, _panel_roi_setter_name(target), None) if panel is not None else None
+                    if panel_setter is not None:
+                        panel_setter(tuple(carry_value))
 
     def get_current_screen(self) -> QScreen | None:
         """Get the screen that currently contains the window."""
