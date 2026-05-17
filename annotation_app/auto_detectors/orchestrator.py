@@ -57,14 +57,19 @@ class DetectorOrchestrator(QObject):
     # ----- configuration -----
 
     def set_enabled_plugins(self, per_target: dict[Target, DetectorPlugin | None]) -> None:
-        """Replace the active plugin set and clear the cache.
+        """Replace the active plugin set.
 
-        Cache is cleared so a stale result from a previously-enabled plugin
-        cannot leak into a newly-enabled one's downstream invocation.
+        Only the cache entries whose plugin instance actually changed are
+        wiped. Targets whose enabled plugin is unchanged keep their
+        cached result so toggling one detector via the menu does not
+        silently drop another detector's already-computed output (in
+        particular the lazy plugins, which won't auto-run to refill it).
         """
         for target in TARGETS:
-            self._enabled[target] = per_target.get(target)
-        self.clear_cache()
+            new_plugin = per_target.get(target)
+            if self._enabled[target] is not new_plugin:
+                self._enabled[target] = new_plugin
+                self._results[target] = None
 
     def enabled_plugin(self, target: Target) -> DetectorPlugin | None:
         """Return the plugin currently enabled for ``target`` (or ``None``)."""

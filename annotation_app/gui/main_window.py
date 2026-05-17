@@ -326,6 +326,7 @@ class MainWindow(QMainWindow):
         effective_single_eye = self._cli_single_eye or bool(project_settings.get("single_eye_mode", False))
         self._apply_single_eye_mode(effective_single_eye)
         self._apply_enabled_plugins(project_settings.get("detectors", {}))
+        self.menu_handler.update_auto_detectors_menu()
         # Restore the last used mode for this project; setChecked fires the
         # button's toggled signal which drives _on_mode_changed.
         saved_mode = project_settings.get("current_mode", MODE_MANUAL)
@@ -542,9 +543,116 @@ class MainWindow(QMainWindow):
                 continue
             self.orchestrator.run_one(target, image, panel.current_params())
 
+    # ----- Auto Detectors menu: per-target plugin choice + project defaults -----
+
+    def current_plugin_for_target(self, target: Target) -> str:
+        """Return the slug of the plugin currently chosen for ``target`` (or ``"disabled"``)."""
+        if not self.project_dirs:
+            return "disabled"
+        settings = load_project_settings(self.project_dir)
+        return settings.get("detectors", {}).get(target, {}).get("plugin", "disabled")
+
+    def select_plugin_for_target(self, target: Target, plugin_name: str) -> None:
+        """Set ``target``'s plugin to ``plugin_name`` and rebuild the Auto Detect panels.
+
+        ``plugin_name`` is either an existing plugin slug or the literal
+        ``"disabled"``. Switching plugins resets the project-saved
+        params for that target to the new plugin's
+        :meth:`~DetectorPlugin.default_params` so old slider values for
+        a different plugin do not leak across. Switching to the same
+        plugin is a no-op.
+        """
+        if not self.project_dirs:
+            self.statusBar().showMessage(
+                "Load images first — detector choices live in the project settings file.",
+                5000,
+            )
+            return
+        settings = load_project_settings(self.project_dir)
+        detectors = settings.setdefault("detectors", {})
+        current = detectors.get(target, {}).get("plugin", "disabled")
+        if current == plugin_name:
+            return
+        if plugin_name == "disabled":
+            detectors[target] = {"plugin": "disabled", "params": {}}
+        else:
+            plugin = self.plugin_manager.get(plugin_name)
+            if plugin is None or plugin.target != target:
+                return
+            detectors[target] = {"plugin": plugin_name, "params": plugin.default_params()}
+        settings["detectors"] = detectors
+        self._save_to_all_projects(settings)
+        # Wipe per-image overlay / ROI / mask state for the target the
+        # user is actually changing — the old plugin's result must not
+        # leak into the new plugin's slot.
+        self.image_viewer.clear_detection_overlay(target)
+        self.image_viewer.set_target_roi(target, None)
+        self.image_viewer.clear_target_mask(target)
+        # Capture in-memory slider state of every other panel so the
+        # rebuild does not silently revert their live tuning to the
+        # project-saved values.
+        preserved: dict[Target, dict] = {}
+        for t, plugin in self._enabled_plugins.items():
+            if t == target:
+                continue
+            panel = self.annotation_controls.auto_detect_panel(plugin.name)
+            if panel is not None:
+                preserved[t] = panel.current_params()
+        self._apply_enabled_plugins(detectors, preserved_params=preserved)
+        self.menu_handler.update_auto_detectors_menu()
+        # Repopulate live plugin overlays + masks on the current image
+        # so the user sees the new plugin's output without nudging a
+        # slider.
+        self._refresh_live_plugin_results()
+
+    def save_current_settings_as_project_defaults(self) -> None:
+        """Snapshot every enabled plugin's current panel params into project defaults.
+
+        A confirmation dialog guards the action — the project file is
+        about to be overwritten with the slider state from the Auto
+        Detect panels.
+        """
+        if not self.project_dirs:
+            QMessageBox.information(
+                self,
+                "No Project Loaded",
+                "Load images first; project defaults are saved into the loaded folder's settings file.",
+            )
+            return
+        if not self._enabled_plugins:
+            QMessageBox.information(
+                self,
+                "No Detectors Enabled",
+                "Enable at least one detector via the Auto Detectors menu before saving project defaults.",
+            )
+            return
+        reply = QMessageBox.question(
+            self,
+            "Save Project Defaults?",
+            "Replace this project's saved detector defaults with the current Auto Detect panel values?",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if reply != QMessageBox.Yes:
+            return
+        settings = load_project_settings(self.project_dir)
+        detectors = settings.setdefault("detectors", {})
+        for target, plugin in self._enabled_plugins.items():
+            panel = self.annotation_controls.auto_detect_panel(plugin.name)
+            if panel is None:
+                continue
+            detectors[target] = {"plugin": plugin.name, "params": panel.current_params()}
+        settings["detectors"] = detectors
+        self._save_to_all_projects(settings)
+        self.statusBar().showMessage("Project defaults saved.", 3000)
+
     # ----- Auto Detect mode: plugin resolution, run dispatch, signal forwarding -----
 
-    def _apply_enabled_plugins(self, detectors_settings: dict) -> None:
+    def _apply_enabled_plugins(
+        self,
+        detectors_settings: dict,
+        preserved_params: dict | None = None,
+    ) -> None:
         """Resolve enabled plugins from project settings and (re)build the Auto Detect stack.
 
         ``detectors_settings`` is the ``"detectors"`` block from the project
@@ -553,10 +661,17 @@ class MainWindow(QMainWindow):
         plugin name raises ``RuntimeError`` — silent skipping would hide
         typos in the project file.
 
+        ``preserved_params`` lets a caller override the project-file
+        params for specific targets. Used by ``select_plugin_for_target``
+        to keep the in-memory slider state of unchanged targets when the
+        user toggles one detector via the menu — without this, every
+        unchanged panel would silently snap back to whatever's on disk.
+
         The previous Auto Detect panel stack is replaced, its widgets are
         scheduled for deletion (their signal connections drop with them),
         and the orchestrator is refreshed via ``set_enabled_plugins``.
         """
+        preserved_params = preserved_params or {}
         self._enabled_plugins = {}
         panels: list[tuple[str, QWidget]] = []
         for target in DETECTOR_TARGETS:
@@ -576,7 +691,8 @@ class MainWindow(QMainWindow):
                 )
             self._enabled_plugins[target] = plugin
             panel = plugin.make_panel(self)
-            panel.set_params(entry.get("params", {}))
+            initial_params = preserved_params.get(target, entry.get("params", {}))
+            panel.set_params(initial_params)
             panel.params_changed.connect(
                 # ``name`` and ``target`` are captured at connect time so the
                 # closure stays valid even after the panel widget is replaced.
@@ -612,7 +728,7 @@ class MainWindow(QMainWindow):
             # Seed the viewer's ROI store from the project-saved params so
             # the rectangle is rendered immediately when Auto Detect mode
             # is entered.
-            saved_roi = entry.get("params", {}).get(_panel_roi_param_key(plugin.target))
+            saved_roi = initial_params.get(_panel_roi_param_key(plugin.target))
             if saved_roi is not None:
                 self.image_viewer.set_target_roi(plugin.target, tuple(saved_roi))
             panels.append((plugin.name, panel))
