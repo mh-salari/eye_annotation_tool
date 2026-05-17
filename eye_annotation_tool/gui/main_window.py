@@ -96,6 +96,17 @@ class MainWindow(QMainWindow):
             "right": dict.fromkeys(DETECTOR_TARGETS),
             "single": dict.fromkeys(DETECTOR_TARGETS),
         }
+        # Per-eye snapshot of every plugin's panel params (threshold,
+        # ROI, gate values, ...). Switching the eye radio snapshots
+        # the active eye's live panel state here, then restores the
+        # other eye's state into the panel so each side carries its
+        # own tuning. ``None`` means "no saved state yet — leave the
+        # live panel as-is on restore".
+        self._per_eye_panel_params: dict[str, dict[Target, dict | None]] = {
+            "left": dict.fromkeys(DETECTOR_TARGETS),
+            "right": dict.fromkeys(DETECTOR_TARGETS),
+            "single": dict.fromkeys(DETECTOR_TARGETS),
+        }
         self.autosave_enabled = False
         # All folders loaded for the current session. Project-settings writes
         # propagate to every entry so any one of them can be reopened later
@@ -455,8 +466,10 @@ class MainWindow(QMainWindow):
             return
         old_slot = self._active_eye_slot()
         self._snapshot_orchestrator_to_per_eye(old_slot)
+        self._snapshot_panel_params_to_per_eye(old_slot)
         self.image_viewer.switch_eye(eye)
         new_slot = self._active_eye_slot()
+        self._restore_panel_params_from_per_eye(new_slot)
         self._restore_orchestrator_from_per_eye(new_slot)
         self._push_cache_to_viewer()
         self._refresh_manual_pupil_in_cache()
@@ -472,6 +485,37 @@ class MainWindow(QMainWindow):
         """Push the per-eye cache slot's results back into the orchestrator."""
         for target in DETECTOR_TARGETS:
             self.orchestrator.set_cached_result(target, self._per_eye_detection_cache[slot][target])
+
+    def _snapshot_panel_params_to_per_eye(self, slot: str) -> None:
+        """Copy each live plugin panel's current params into the per-eye mirror."""
+        for target, plugin in self._enabled_plugins.items():
+            panel = self.annotation_controls.auto_detect_panel(plugin.name)
+            if panel is None:
+                continue
+            self._per_eye_panel_params[slot][target] = panel.current_params()
+
+    def _restore_panel_params_from_per_eye(self, slot: str) -> None:
+        """Push the per-eye mirror's saved params back into each plugin panel.
+
+        Targets whose slot has no saved params yet are left as-is — the
+        live panel state carries forward so the user can start tuning
+        the new eye from the previous eye's last values rather than
+        from cold defaults. Any per-target ROI rectangle in the
+        restored params is mirrored into the viewer's store so the
+        canvas re-renders the correct rectangle for the active eye.
+        """
+        for target, plugin in self._enabled_plugins.items():
+            params = self._per_eye_panel_params[slot].get(target)
+            if params is None:
+                continue
+            panel = self.annotation_controls.auto_detect_panel(plugin.name)
+            if panel is not None:
+                panel.set_params(params)
+            saved_roi = params.get(_panel_roi_param_key(target))
+            self.image_viewer.set_target_roi(
+                target,
+                tuple(saved_roi) if saved_roi is not None else None,
+            )
 
     def _push_cache_to_viewer(self) -> None:
         """Update viewer overlays + masks to match the orchestrator's current cache.
@@ -490,10 +534,11 @@ class MainWindow(QMainWindow):
                 self.image_viewer.set_target_mask(target, result.get("mask"))
 
     def _clear_per_eye_cache(self) -> None:
-        """Wipe every per-eye cache slot. Called on image change."""
+        """Wipe every per-eye cache slot (detection + panel params). Called on image change."""
         for slot in self._per_eye_detection_cache:
             for target in DETECTOR_TARGETS:
                 self._per_eye_detection_cache[slot][target] = None
+                self._per_eye_panel_params[slot][target] = None
 
     def _on_image_loaded(self) -> None:
         """Drop orchestrator cache + per-eye snapshots when a new image lands."""
@@ -645,25 +690,25 @@ class MainWindow(QMainWindow):
         """Walk every enabled plugin and build the per-image ``detections`` dict.
 
         Monocular images save flat: ``{plugin_name: {params, result}}``.
-        Binocular images save nested per eye: ``{plugin_name: {left: {...},
-        right: {...}}}`` so each eye's last detection persists
-        independently. The active eye's results are read directly from
-        the orchestrator (which is always in sync); the inactive eye's
-        come from the per-eye snapshot.
+        Binocular images save nested per eye: ``{plugin_name: {left:
+        {params, result}, right: {params, result}}}`` — each eye keeps
+        its own params alongside its result so threshold / ROI / gate
+        values restore independently on reload. The active eye's state
+        is snapshotted into the mirror first so both eyes are read
+        from a uniform source.
         """
-        # Snapshot the active eye's orchestrator state so the per-eye
-        # cache is fully fresh before we walk it.
-        self._snapshot_orchestrator_to_per_eye(self._active_eye_slot())
+        active_slot = self._active_eye_slot()
+        self._snapshot_orchestrator_to_per_eye(active_slot)
+        self._snapshot_panel_params_to_per_eye(active_slot)
         out: dict = {}
         for target, plugin in self._enabled_plugins.items():
-            panel = self.annotation_controls.auto_detect_panel(plugin.name)
-            params = panel.current_params() if panel is not None else plugin.default_params()
             if self.binocular_mode:
                 per_eye_block: dict = {}
                 for slot in ("left", "right"):
                     result = self._per_eye_detection_cache[slot][target]
                     if result is None:
                         continue
+                    params = self._per_eye_panel_params[slot].get(target) or plugin.default_params()
                     per_eye_block[slot] = {
                         "params": params,
                         "result": plugin.serialize(result),
@@ -674,6 +719,7 @@ class MainWindow(QMainWindow):
                 result = self._per_eye_detection_cache["single"][target]
                 if result is None:
                     continue
+                params = self._per_eye_panel_params["single"].get(target) or plugin.default_params()
                 out[plugin.name] = {
                     "params": params,
                     "result": plugin.serialize(result),
@@ -698,27 +744,31 @@ class MainWindow(QMainWindow):
         plugins keep their deserialised result until the user clicks
         Detect.
         """
+        active_slot = self._active_eye_slot()
         for plugin_name, blob in detections.items():
             plugin = self.plugin_manager.get(plugin_name)
             if plugin is None:
                 continue
             if self._enabled_plugins.get(plugin.target) is not plugin:
                 continue
-            params, per_eye_results = self._extract_loaded_plugin_blob(blob, plugin)
-            panel = self.annotation_controls.auto_detect_panel(plugin.name)
-            if panel is not None and params is not None:
-                panel.set_params(params)
+            per_eye_params, per_eye_results = self._extract_loaded_plugin_blob(blob, plugin)
+            for slot, params in per_eye_params.items():
+                if params is not None:
+                    self._per_eye_panel_params[slot][plugin.target] = dict(params)
             for slot, result in per_eye_results.items():
                 self._per_eye_detection_cache[slot][plugin.target] = result
-            active_slot = self._active_eye_slot()
+            active_params = per_eye_params.get(active_slot)
             active_result = per_eye_results.get(active_slot)
+            panel = self.annotation_controls.auto_detect_panel(plugin.name)
+            if panel is not None and active_params is not None:
+                panel.set_params(active_params)
             if active_result is not None:
                 self.orchestrator.set_cached_result(plugin.target, active_result)
                 self.image_viewer.set_detection_overlay(plugin.target, active_result)
             # panel.set_params is silent by design; mirror the per-target
             # ROI value into the viewer's store so the rectangle renders.
-            if params is not None:
-                saved_roi = params.get(_panel_roi_param_key(plugin.target))
+            if active_params is not None:
+                saved_roi = active_params.get(_panel_roi_param_key(plugin.target))
                 self.image_viewer.set_target_roi(
                     plugin.target,
                     tuple(saved_roi) if saved_roi is not None else None,
@@ -735,32 +785,33 @@ class MainWindow(QMainWindow):
     def _extract_loaded_plugin_blob(
         blob: dict,
         plugin: DetectorPlugin,
-    ) -> tuple[dict | None, dict[str, dict | None]]:
-        """Normalise an on-disk plugin block to ``(params, {slot: result})``.
+    ) -> tuple[dict[str, dict | None], dict[str, dict | None]]:
+        """Normalise an on-disk plugin block to per-eye ``(params, results)`` maps.
 
-        Returns the panel params dict and a mapping from per-eye cache
-        slot to deserialised result. For monocular files the single
-        slot is ``"single"``; for binocular the slots are ``"left"`` /
-        ``"right"`` (whichever are present in the blob).
+        Returns ``(per_eye_params, per_eye_results)`` keyed by per-eye
+        cache slot. For monocular files the single slot is
+        ``"single"``; for binocular the slots are ``"left"`` /
+        ``"right"`` (whichever are present in the blob). Each per-eye
+        params dict may be ``None`` when the saved block carried no
+        params for that eye.
         """
         # Monocular shape: flat {params, result}.
         if "params" in blob or "result" in blob:
             params = blob.get("params") or None
             result_blob = blob.get("result")
             result = plugin.deserialize(result_blob) if result_blob else None
-            return params, {"single": result}
+            return {"single": params}, {"single": result}
         # Binocular shape: {left: {params, result}, right: {...}}.
-        per_eye: dict[str, dict | None] = {}
-        params: dict | None = None
+        per_eye_params: dict[str, dict | None] = {}
+        per_eye_results: dict[str, dict | None] = {}
         for slot in ("left", "right"):
             entry = blob.get(slot)
             if not isinstance(entry, dict):
                 continue
-            if params is None:
-                params = entry.get("params") or None
+            per_eye_params[slot] = entry.get("params") or None
             result_blob = entry.get("result")
-            per_eye[slot] = plugin.deserialize(result_blob) if result_blob else None
-        return params, per_eye
+            per_eye_results[slot] = plugin.deserialize(result_blob) if result_blob else None
+        return per_eye_params, per_eye_results
 
     def _manual_pupil_signature(self) -> tuple | None:
         """Return a hashable identity of the current eye's manual pupil ellipse."""
