@@ -29,7 +29,7 @@ from PyQt5.QtWidgets import (
 )
 
 from eye_annotation_tool.auto_detectors.plugin_interface import DetectorPlugin
-from eye_annotation_tool.gui.custom_widgets import MaterialButton
+from eye_annotation_tool.gui.custom_widgets import GateRow, MaterialButton
 
 # Overlay palette for the Threshold Pupil plugin. Kept local to the
 # plugin so adding a new pupil detector with a different look does not
@@ -107,28 +107,24 @@ class _ThresholdPupilPanel(QGroupBox):
 
         layout.addLayout(self._build_threshold_row())
         layout.addLayout(self._build_method_row())
-        layout.addLayout(
-            self._build_gate_row(
-                label_text="Min ellipse fit",
-                enabled_key="min_ellipse_fit_enabled",
-                pct_key="min_ellipse_fit_pct",
-                check_attr="fit_check",
-                slider_attr="fit_slider",
-                spin_attr="fit_spin",
-                tooltip=ELLIPSE_FIT_TOOLTIP,
-            ),
+        self.fit_row = GateRow(
+            "Min ellipse fit",
+            initial_enabled=bool(self._params["min_ellipse_fit_enabled"]),
+            initial_pct=int(self._params["min_ellipse_fit_pct"]),
+            tooltip=ELLIPSE_FIT_TOOLTIP,
         )
-        layout.addLayout(
-            self._build_gate_row(
-                label_text="Min roundness",
-                enabled_key="min_roundness_enabled",
-                pct_key="min_roundness_pct",
-                check_attr="roundness_check",
-                slider_attr="roundness_slider",
-                spin_attr="roundness_spin",
-                tooltip=ROUNDNESS_TOOLTIP,
-            ),
+        self.fit_row.toggled.connect(lambda on: self._on_gate_toggled("min_ellipse_fit_enabled", on))
+        self.fit_row.pct_changed.connect(lambda v: self._on_gate_pct_changed("min_ellipse_fit_pct", v))
+        layout.addWidget(self.fit_row)
+        self.roundness_row = GateRow(
+            "Min roundness",
+            initial_enabled=bool(self._params["min_roundness_enabled"]),
+            initial_pct=int(self._params["min_roundness_pct"]),
+            tooltip=ROUNDNESS_TOOLTIP,
         )
+        self.roundness_row.toggled.connect(lambda on: self._on_gate_toggled("min_roundness_enabled", on))
+        self.roundness_row.pct_changed.connect(lambda v: self._on_gate_pct_changed("min_roundness_pct", v))
+        layout.addWidget(self.roundness_row)
         layout.addLayout(self._build_roi_row())
 
         self.show_mask_check = QCheckBox("Show mask")
@@ -191,48 +187,6 @@ class _ThresholdPupilPanel(QGroupBox):
         row.addWidget(self.clear_roi_button)
         return row
 
-    def _build_gate_row(
-        self,
-        *,
-        label_text: str,
-        enabled_key: str,
-        pct_key: str,
-        check_attr: str,
-        slider_attr: str,
-        spin_attr: str,
-        tooltip: str,
-    ) -> QHBoxLayout:
-        row = QHBoxLayout()
-        check = QCheckBox(label_text)
-        check.setChecked(bool(self._params[enabled_key]))
-        check.setToolTip(tooltip)
-        check.toggled.connect(lambda checked, k=enabled_key: self._on_gate_toggled(k, checked))
-        check.setMinimumWidth(140)
-        row.addWidget(check)
-        slider = QSlider(Qt.Horizontal)
-        slider.setRange(50, 100)
-        slider.setValue(int(self._params[pct_key]))
-        slider.setEnabled(bool(self._params[enabled_key]))
-        slider.setToolTip(tooltip)
-        spin = QSpinBox()
-        spin.setRange(50, 100)
-        spin.setValue(int(self._params[pct_key]))
-        spin.setSuffix(" %")
-        spin.setEnabled(bool(self._params[enabled_key]))
-        spin.setButtonSymbols(QAbstractSpinBox.NoButtons)
-        spin.setMinimumWidth(60)
-        spin.setMaximumWidth(80)
-        spin.setToolTip(tooltip)
-        slider.valueChanged.connect(spin.setValue)
-        spin.valueChanged.connect(slider.setValue)
-        slider.valueChanged.connect(lambda v, k=pct_key: self._on_gate_pct_changed(k, v))
-        setattr(self, check_attr, check)
-        setattr(self, slider_attr, slider)
-        setattr(self, spin_attr, spin)
-        row.addWidget(slider)
-        row.addWidget(spin)
-        return row
-
     # ----- widget event handlers -----
 
     def _on_threshold_changed(self, value: int) -> None:
@@ -245,16 +199,7 @@ class _ThresholdPupilPanel(QGroupBox):
         self.params_changed.emit(dict(self._params))
 
     def _on_gate_toggled(self, enabled_key: str, checked: bool) -> None:
-        """Flip a gate's enabled flag and grey the linked slider + spinbox accordingly."""
         self._params[enabled_key] = bool(checked)
-        pair = {
-            "min_ellipse_fit_enabled": (self.fit_slider, self.fit_spin),
-            "min_roundness_enabled": (self.roundness_slider, self.roundness_spin),
-        }.get(enabled_key)
-        if pair is not None:
-            slider, spin = pair
-            slider.setEnabled(checked)
-            spin.setEnabled(checked)
         self.params_changed.emit(dict(self._params))
 
     def _on_gate_pct_changed(self, pct_key: str, value: int) -> None:
@@ -272,19 +217,10 @@ class _ThresholdPupilPanel(QGroupBox):
 
         Signal-blocking covers both the per-widget value-change signals and
         the secondary ``slider <-> spinbox`` mirror, so a single round-trip
-        restore stays silent on the wire.
+        restore stays silent on the wire. The :class:`GateRow` widgets
+        have their own :meth:`~GateRow.set_state` for the same purpose.
         """
-        widgets = (
-            self.threshold_slider,
-            self.threshold_spin,
-            self.method_combo,
-            self.fit_check,
-            self.fit_slider,
-            self.fit_spin,
-            self.roundness_check,
-            self.roundness_slider,
-            self.roundness_spin,
-        )
+        widgets = (self.threshold_slider, self.threshold_spin, self.method_combo)
         for w in widgets:
             w.blockSignals(True)
         try:
@@ -301,25 +237,15 @@ class _ThresholdPupilPanel(QGroupBox):
                     self._params["pupil_center_method"] = method
             if "pupil_roi" in params:
                 self._params["pupil_roi"] = params["pupil_roi"]
-            for enabled_key, check, slider, spin in (
-                ("min_ellipse_fit_enabled", self.fit_check, self.fit_slider, self.fit_spin),
-                ("min_roundness_enabled", self.roundness_check, self.roundness_slider, self.roundness_spin),
+            for row, enabled_key, pct_key in (
+                (self.fit_row, "min_ellipse_fit_enabled", "min_ellipse_fit_pct"),
+                (self.roundness_row, "min_roundness_enabled", "min_roundness_pct"),
             ):
                 if enabled_key in params:
-                    enabled = bool(params[enabled_key])
-                    check.setChecked(enabled)
-                    slider.setEnabled(enabled)
-                    spin.setEnabled(enabled)
-                    self._params[enabled_key] = enabled
-            for pct_key, slider, spin in (
-                ("min_ellipse_fit_pct", self.fit_slider, self.fit_spin),
-                ("min_roundness_pct", self.roundness_slider, self.roundness_spin),
-            ):
+                    self._params[enabled_key] = bool(params[enabled_key])
                 if pct_key in params:
-                    value = int(params[pct_key])
-                    slider.setValue(value)
-                    spin.setValue(value)
-                    self._params[pct_key] = value
+                    self._params[pct_key] = int(params[pct_key])
+                row.set_state(enabled=self._params[enabled_key], pct=self._params[pct_key])
         finally:
             for w in widgets:
                 w.blockSignals(False)

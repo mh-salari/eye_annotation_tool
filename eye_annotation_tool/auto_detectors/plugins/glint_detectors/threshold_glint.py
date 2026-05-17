@@ -13,7 +13,6 @@ The panel exposes:
   - optional max-area cap in pixels (skin / eyelid bleed-through guard),
   - four half-plane filter toggles (drop above / below / left / right
     of the pupil centre),
-  - "coalesce into one" toggle (only meaningful when target == 1),
   - "split widest blob" toggle (4-LED rig: two LEDs merged into one
     bright spot).
 
@@ -40,7 +39,7 @@ from PyQt5.QtWidgets import (
 )
 
 from eye_annotation_tool.auto_detectors.plugin_interface import DetectorPlugin
-from eye_annotation_tool.gui.custom_widgets import MaterialButton
+from eye_annotation_tool.gui.custom_widgets import GateRow, MaterialButton
 
 # Overlay palette for the Threshold Glint plugin. Saturated red reads
 # on bright glint highlights and on the surrounding iris; the mask fill
@@ -78,13 +77,32 @@ DEFAULTS: dict = {
     "keep_left": True,
     "keep_right": True,
     "filter_margin_px": 5,
-    "coalesce_into_one": True,
     "split_widest_for_target": False,
     # An ``(x, y, w, h)`` tuple set by the canvas drag handler, or None
     # when no ROI is active. Intersects with the pupil-centred search
     # disk in pgd.detect_glints.
     "glint_roi": None,
+    # Shape-quality gates forwarded to pgd.detect_glints. Match the
+    # pupil panel's defaults — fill on at 80 % catches obvious junk
+    # (eyelash slivers, partial reflections) while roundness stays off
+    # by default since tiny glints discretise unevenly and would
+    # otherwise reject valid candidates.
+    "min_ellipse_fit_enabled": True,
+    "min_ellipse_fit_pct": 80,
+    "min_roundness_enabled": False,
+    "min_roundness_pct": 70,
 }
+
+ELLIPSE_FIT_TOOLTIP = (
+    "How well each glint contour fits its own ellipse. 100% = the "
+    "contour exactly traces an ellipse. Lower values reject fragmented "
+    "or jagged shapes."
+)
+ROUNDNESS_TOOLTIP = (
+    "How circular each glint contour is. 100% = perfect circle, lower "
+    "= elongated or jagged. Useful when corneal reflections are sharp; "
+    "keep disabled for tiny / noisy glints."
+)
 
 
 class _ThresholdGlintPanel(QGroupBox):
@@ -122,6 +140,24 @@ class _ThresholdGlintPanel(QGroupBox):
         layout.addLayout(self._build_keep_row())
         layout.addLayout(self._build_filter_margin_row())
         layout.addLayout(self._build_flags_row())
+        self.fit_row = GateRow(
+            "Min ellipse fit",
+            initial_enabled=bool(self._params["min_ellipse_fit_enabled"]),
+            initial_pct=int(self._params["min_ellipse_fit_pct"]),
+            tooltip=ELLIPSE_FIT_TOOLTIP,
+        )
+        self.fit_row.toggled.connect(lambda on: self._on_gate_toggled("min_ellipse_fit_enabled", on))
+        self.fit_row.pct_changed.connect(lambda v: self._on_gate_pct_changed("min_ellipse_fit_pct", v))
+        layout.addWidget(self.fit_row)
+        self.roundness_row = GateRow(
+            "Min roundness",
+            initial_enabled=bool(self._params["min_roundness_enabled"]),
+            initial_pct=int(self._params["min_roundness_pct"]),
+            tooltip=ROUNDNESS_TOOLTIP,
+        )
+        self.roundness_row.toggled.connect(lambda on: self._on_gate_toggled("min_roundness_enabled", on))
+        self.roundness_row.pct_changed.connect(lambda v: self._on_gate_pct_changed("min_roundness_pct", v))
+        layout.addWidget(self.roundness_row)
         layout.addLayout(self._build_roi_row())
 
         self.show_mask_check = QCheckBox("Show mask")
@@ -130,6 +166,14 @@ class _ThresholdGlintPanel(QGroupBox):
         layout.addWidget(self.show_mask_check)
 
         self.setLayout(layout)
+
+    def _on_gate_toggled(self, enabled_key: str, checked: bool) -> None:
+        self._params[enabled_key] = bool(checked)
+        self.params_changed.emit(dict(self._params))
+
+    def _on_gate_pct_changed(self, pct_key: str, value: int) -> None:
+        self._params[pct_key] = int(value)
+        self.params_changed.emit(dict(self._params))
 
     def _build_roi_row(self) -> QHBoxLayout:
         row = QHBoxLayout()
@@ -293,13 +337,7 @@ class _ThresholdGlintPanel(QGroupBox):
         return row
 
     def _build_flags_row(self) -> QVBoxLayout:
-        # Two boolean refiners stacked vertically — each gets its own
-        # row so the label has space to read.
         wrap = QVBoxLayout()
-        self.coalesce_check = QCheckBox("Coalesce into one (target == 1)")
-        self.coalesce_check.setChecked(self._params["coalesce_into_one"])
-        self.coalesce_check.toggled.connect(self._on_coalesce_changed)
-        wrap.addWidget(self.coalesce_check)
         self.split_widest_check = QCheckBox("Split widest blob when one is missing")
         self.split_widest_check.setChecked(self._params["split_widest_for_target"])
         self.split_widest_check.toggled.connect(self._on_split_widest_changed)
@@ -350,10 +388,6 @@ class _ThresholdGlintPanel(QGroupBox):
         self._params["filter_margin_px"] = int(value)
         self.params_changed.emit(dict(self._params))
 
-    def _on_coalesce_changed(self, checked: bool) -> None:
-        self._params["coalesce_into_one"] = bool(checked)
-        self.params_changed.emit(dict(self._params))
-
     def _on_split_widest_changed(self, checked: bool) -> None:
         self._params["split_widest_for_target"] = bool(checked)
         self.params_changed.emit(dict(self._params))
@@ -384,7 +418,6 @@ class _ThresholdGlintPanel(QGroupBox):
             self.keep_left_box,
             self.keep_right_box,
             self.filter_margin_spin,
-            self.coalesce_check,
             self.split_widest_check,
         )
         for w in widgets:
@@ -425,14 +458,20 @@ class _ThresholdGlintPanel(QGroupBox):
             if "filter_margin_px" in params:
                 self.filter_margin_spin.setValue(int(params["filter_margin_px"]))
                 self._params["filter_margin_px"] = int(params["filter_margin_px"])
-            if "coalesce_into_one" in params:
-                self.coalesce_check.setChecked(bool(params["coalesce_into_one"]))
-                self._params["coalesce_into_one"] = bool(params["coalesce_into_one"])
             if "split_widest_for_target" in params:
                 self.split_widest_check.setChecked(bool(params["split_widest_for_target"]))
                 self._params["split_widest_for_target"] = bool(params["split_widest_for_target"])
             if "glint_roi" in params:
                 self._params["glint_roi"] = params["glint_roi"]
+            for row, enabled_key, pct_key in (
+                (self.fit_row, "min_ellipse_fit_enabled", "min_ellipse_fit_pct"),
+                (self.roundness_row, "min_roundness_enabled", "min_roundness_pct"),
+            ):
+                if enabled_key in params:
+                    self._params[enabled_key] = bool(params[enabled_key])
+                if pct_key in params:
+                    self._params[pct_key] = int(params[pct_key])
+                row.set_state(enabled=self._params[enabled_key], pct=self._params[pct_key])
         finally:
             for w in widgets:
                 w.blockSignals(False)
@@ -503,11 +542,16 @@ class ThresholdGlint(DetectorPlugin):
             keep_right=bool(params["keep_right"]),
             filter_margin_px=int(params["filter_margin_px"]),
             glints_target=int(params["glints_target"]),
-            coalesce_into_one=bool(params["coalesce_into_one"]),
             split_widest_for_target=bool(params["split_widest_for_target"]),
+            min_ellipse_fit_ratio=(
+                int(params["min_ellipse_fit_pct"]) / 100.0 if bool(params.get("min_ellipse_fit_enabled")) else None
+            ),
+            min_roundness_ratio=(
+                int(params["min_roundness_pct"]) / 100.0 if bool(params.get("min_roundness_enabled")) else None
+            ),
         )
         return {
-            "glints": [{"center": [float(g["center"][0]), float(g["center"][1])]} for g in result["glints"]],
+            "glints": [_glint_to_dict(g) for g in result["glints"]],
             # Transient pixel mask of the bright-and-in-search-disk
             # candidates. Surfaced under the standard ``"mask"`` key the
             # plugin contract uses for the optional "Show mask" overlay;
@@ -517,26 +561,94 @@ class ThresholdGlint(DetectorPlugin):
 
     def serialize(self, result: dict) -> dict:
         """Reduce a result dict to JSON-friendly types for per-image storage."""
-        return {"glints": [{"center": list(g["center"])} for g in result.get("glints", [])]}
+        return {"glints": [_serialize_glint(g) for g in result.get("glints", [])]}
 
     def deserialize(self, blob: dict) -> dict:
         """Reconstruct an in-memory result dict from a stored JSON blob."""
-        return {"glints": [{"center": list(g["center"])} for g in blob.get("glints", [])]}
+        return {"glints": [_deserialize_glint(g) for g in blob.get("glints", [])]}
 
     def translate_for_crop(self, result: dict, dx: float, dy: float) -> dict:
-        """Shift every detected glint centre from crop coords to full image."""
-        translated = {
-            "glints": [{"center": [g["center"][0] + dx, g["center"][1] + dy]} for g in result.get("glints", [])],
-        }
+        """Shift every detected glint centre + ellipse centre from crop to full image."""
+        translated = {"glints": [_translate_glint(g, dx, dy) for g in result.get("glints", [])]}
         if "mask" in result:
             translated["mask"] = result["mask"]
         return translated
 
     def draw_overlay(self, painter: QPainter, result: dict, scale: float) -> None:
-        """Render each detected glint as a small filled red dot."""
+        """Render each detected glint as its fitted ellipse outline + a centre dot.
+
+        Glints whose contour was too small for ``cv2.fitEllipse`` (<5
+        points) get only the centre dot — there's no shape to draw.
+        """
         glints = result.get("glints") or []
-        painter.setBrush(GLINT_COLOR)
-        painter.setPen(QPen(GLINT_COLOR, 3, Qt.SolidLine))
         for g in glints:
+            ellipse = g.get("ellipse")
+            if ellipse is not None:
+                ecx, ecy = ellipse["center"]
+                ew, eh = ellipse["size"]
+                angle = float(ellipse["angle"])
+                painter.save()
+                painter.setPen(QPen(GLINT_COLOR, 1, Qt.SolidLine))
+                painter.setBrush(Qt.NoBrush)
+                painter.translate(QPointF(ecx * scale, ecy * scale))
+                painter.rotate(angle)
+                painter.drawEllipse(QPointF(0, 0), (ew / 2) * scale, (eh / 2) * scale)
+                painter.restore()
             gx, gy = g["center"]
+            painter.setBrush(GLINT_COLOR)
+            painter.setPen(QPen(GLINT_COLOR, 3, Qt.SolidLine))
             painter.drawEllipse(QPointF(gx * scale, gy * scale), 1.5, 1.5)
+
+
+def _glint_to_dict(g: dict) -> dict:
+    """Convert one glint from :func:`detect_glints` into the plugin's in-memory shape."""
+    cx, cy = g["center"]
+    out: dict = {"center": [float(cx), float(cy)]}
+    ellipse = g.get("ellipse")
+    if ellipse is not None:
+        (ecx, ecy), (w, h), angle = ellipse
+        out["ellipse"] = {
+            "center": [float(ecx), float(ecy)],
+            "size": [float(w), float(h)],
+            "angle": float(angle),
+        }
+    return out
+
+
+def _serialize_glint(g: dict) -> dict:
+    """Reduce a single in-memory glint dict to its JSON form."""
+    out: dict = {"center": list(g["center"])}
+    ellipse = g.get("ellipse")
+    if ellipse is not None:
+        out["ellipse"] = {
+            "center": list(ellipse["center"]),
+            "size": list(ellipse["size"]),
+            "angle": float(ellipse["angle"]),
+        }
+    return out
+
+
+def _deserialize_glint(g: dict) -> dict:
+    """Reconstruct an in-memory glint dict from a stored JSON blob."""
+    out: dict = {"center": list(g["center"])}
+    ellipse = g.get("ellipse")
+    if ellipse is not None:
+        out["ellipse"] = {
+            "center": list(ellipse["center"]),
+            "size": list(ellipse["size"]),
+            "angle": float(ellipse["angle"]),
+        }
+    return out
+
+
+def _translate_glint(g: dict, dx: float, dy: float) -> dict:
+    """Shift a single glint's centre + ellipse centre by ``(dx, dy)``."""
+    out: dict = {"center": [g["center"][0] + dx, g["center"][1] + dy]}
+    ellipse = g.get("ellipse")
+    if ellipse is not None:
+        out["ellipse"] = {
+            "center": [ellipse["center"][0] + dx, ellipse["center"][1] + dy],
+            "size": list(ellipse["size"]),
+            "angle": float(ellipse["angle"]),
+        }
+    return out

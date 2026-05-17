@@ -1,13 +1,16 @@
 """Custom widget components for the application."""
 
-from PyQt5.QtCore import pyqtSignal
+from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtWidgets import (
+    QAbstractSpinBox,
     QButtonGroup,
     QCheckBox,
     QGroupBox,
     QHBoxLayout,
     QPushButton,
     QRadioButton,
+    QSlider,
+    QSpinBox,
     QVBoxLayout,
     QWidget,
 )
@@ -326,3 +329,95 @@ class EyeSelector(QGroupBox):
         radio.blockSignals(True)
         radio.setChecked(True)
         radio.blockSignals(False)
+
+
+class GateRow(QWidget):
+    """One-line panel control for a 50-100 % shape-quality gate.
+
+    Wraps a labelled :class:`QCheckBox` (enable/disable the gate),
+    a horizontal :class:`QSlider` and a linked :class:`QSpinBox`.
+    The slider and spinbox track each other; the spinbox always
+    displays the value with a ``%`` suffix. Two signals carry user
+    interaction outward:
+
+    - :pyattr:`toggled(bool)` — checkbox flipped; the slider / spinbox
+      are greyed / enabled to match before this fires.
+    - :pyattr:`pct_changed(int)` — slider (or linked spinbox) value
+      changed.
+
+    Used for the Min ellipse fit + Min roundness rows in the Threshold
+    Pupil and Threshold Glint plugin panels.
+    """
+
+    toggled = pyqtSignal(bool)
+    pct_changed = pyqtSignal(int)
+
+    def __init__(
+        self,
+        label: str,
+        *,
+        initial_enabled: bool,
+        initial_pct: int,
+        tooltip: str = "",
+        parent: QWidget | None = None,
+    ) -> None:
+        """Build the row pre-populated with ``(initial_enabled, initial_pct)``."""
+        super().__init__(parent)
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        self.check = QCheckBox(label)
+        self.check.setChecked(initial_enabled)
+        self.check.setToolTip(tooltip)
+        self.check.setMinimumWidth(140)
+        self.check.toggled.connect(self._on_toggled)
+        layout.addWidget(self.check)
+        self.slider = QSlider(Qt.Horizontal)
+        self.slider.setRange(50, 100)
+        self.slider.setValue(initial_pct)
+        self.slider.setEnabled(initial_enabled)
+        self.slider.setToolTip(tooltip)
+        self.spin = QSpinBox()
+        self.spin.setRange(50, 100)
+        self.spin.setValue(initial_pct)
+        self.spin.setSuffix(" %")
+        self.spin.setEnabled(initial_enabled)
+        self.spin.setButtonSymbols(QAbstractSpinBox.NoButtons)
+        self.spin.setMinimumWidth(60)
+        self.spin.setMaximumWidth(80)
+        self.spin.setToolTip(tooltip)
+        # Slider drives the spinbox and vice versa; only the slider's
+        # valueChanged is forwarded to ``pct_changed`` so listeners see
+        # a single emission per user action.
+        self.slider.valueChanged.connect(self.spin.setValue)
+        self.spin.valueChanged.connect(self.slider.setValue)
+        self.slider.valueChanged.connect(self.pct_changed.emit)
+        layout.addWidget(self.slider)
+        layout.addWidget(self.spin)
+
+    def _on_toggled(self, checked: bool) -> None:
+        self.slider.setEnabled(checked)
+        self.spin.setEnabled(checked)
+        self.toggled.emit(checked)
+
+    def is_checked(self) -> bool:
+        """Return the gate's enable flag."""
+        return self.check.isChecked()
+
+    def pct(self) -> int:
+        """Return the gate's current percentage value."""
+        return self.spin.value()
+
+    def set_state(self, *, enabled: bool, pct: int) -> None:
+        """Silently restore the row to ``(enabled, pct)`` for ``set_params`` round-trips."""
+        widgets = (self.check, self.slider, self.spin)
+        for w in widgets:
+            w.blockSignals(True)
+        try:
+            self.check.setChecked(enabled)
+            self.slider.setEnabled(enabled)
+            self.spin.setEnabled(enabled)
+            self.slider.setValue(pct)
+            self.spin.setValue(pct)
+        finally:
+            for w in widgets:
+                w.blockSignals(False)
