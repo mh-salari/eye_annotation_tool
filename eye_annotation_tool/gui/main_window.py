@@ -470,13 +470,15 @@ class MainWindow(QMainWindow):
         return self.image_viewer.current_eye
 
     def _on_eye_changed(self, eye: str) -> None:
-        """Switch the active eye and swap the orchestrator's detection cache.
+        """Switch the active eye and swap the per-eye panel + orchestrator state.
 
-        The per-eye cache holds each eye's latest detection results;
-        switching the radio snapshots the active eye's orchestrator
-        slot, then restores the other eye's slot, then re-runs every
-        live plugin against the new eye so the canvas overlay tracks
-        the new selection without waiting for slider drags.
+        The viewer keeps each eye's detection overlay / mask / ROI in
+        its own slot so both halves' work stays visible across the
+        switch — only the panel state and the orchestrator's dep cache
+        (which only ever holds the active eye) get swapped here. Live
+        plugins re-run against the new eye so the active half's
+        overlay tracks the new panel values without waiting for slider
+        drags.
         """
         if not self.binocular_mode:
             return
@@ -487,7 +489,6 @@ class MainWindow(QMainWindow):
         new_slot = self._active_eye_slot()
         self._restore_panel_params_from_per_eye(new_slot)
         self._restore_orchestrator_from_per_eye(new_slot)
-        self._push_cache_to_viewer()
         self._refresh_manual_pupil_in_cache()
         self._refresh_live_plugin_results()
         self._refresh_panel_availability()
@@ -516,9 +517,7 @@ class MainWindow(QMainWindow):
         Targets whose slot has no saved params yet are left as-is — the
         live panel state carries forward so the user can start tuning
         the new eye from the previous eye's last values rather than
-        from cold defaults. Any per-target ROI rectangle in the
-        restored params is mirrored into the viewer's store so the
-        canvas re-renders the correct rectangle for the active eye.
+        from cold defaults.
         """
         for target, plugin in self._enabled_plugins.items():
             params = self._per_eye_panel_params[slot].get(target)
@@ -527,27 +526,6 @@ class MainWindow(QMainWindow):
             panel = self.annotation_controls.auto_detect_panel(plugin.name)
             if panel is not None:
                 panel.set_params(params)
-            saved_roi = params.get(_panel_roi_param_key(target))
-            self.image_viewer.set_target_roi(
-                target,
-                tuple(saved_roi) if saved_roi is not None else None,
-            )
-
-    def _push_cache_to_viewer(self) -> None:
-        """Update viewer overlays + masks to match the orchestrator's current cache.
-
-        Called after restoring the per-eye cache so the canvas paints
-        whichever eye is now active. Plugins whose cache slot is None
-        get their overlay + mask cleared.
-        """
-        for target in DETECTOR_TARGETS:
-            result = self.orchestrator.cached_result(target)
-            if result is None:
-                self.image_viewer.clear_detection_overlay(target)
-                self.image_viewer.clear_target_mask(target)
-            else:
-                self.image_viewer.set_detection_overlay(target, result)
-                self.image_viewer.set_target_mask(target, result.get("mask"))
 
     def _clear_per_eye_cache(self) -> None:
         """Wipe every per-eye cache slot (detection + panel params). Called on image change."""
@@ -768,11 +746,23 @@ class MainWindow(QMainWindow):
             if self._enabled_plugins.get(plugin.target) is not plugin:
                 continue
             per_eye_params, per_eye_results = self._extract_loaded_plugin_blob(blob, plugin)
+            # Restore each eye's params + result into the per-eye mirrors
+            # and push each eye's overlay + ROI into the viewer under
+            # its own slot so both halves' last results paint at once.
             for slot, params in per_eye_params.items():
-                if params is not None:
-                    self._per_eye_panel_params[slot][plugin.target] = dict(params)
+                if params is None:
+                    continue
+                self._per_eye_panel_params[slot][plugin.target] = dict(params)
+                saved_roi = params.get(_panel_roi_param_key(plugin.target))
+                self.image_viewer.set_target_roi(
+                    plugin.target,
+                    tuple(saved_roi) if saved_roi is not None else None,
+                    eye_slot=slot,
+                )
             for slot, result in per_eye_results.items():
                 self._per_eye_detection_cache[slot][plugin.target] = result
+                if result is not None:
+                    self.image_viewer.set_detection_overlay(plugin.target, result, eye_slot=slot)
             active_params = per_eye_params.get(active_slot)
             active_result = per_eye_results.get(active_slot)
             panel = self.annotation_controls.auto_detect_panel(plugin.name)
@@ -780,15 +770,6 @@ class MainWindow(QMainWindow):
                 panel.set_params(active_params)
             if active_result is not None:
                 self.orchestrator.set_cached_result(plugin.target, active_result)
-                self.image_viewer.set_detection_overlay(plugin.target, active_result)
-            # panel.set_params is silent by design; mirror the per-target
-            # ROI value into the viewer's store so the rectangle renders.
-            if active_params is not None:
-                saved_roi = active_params.get(_panel_roi_param_key(plugin.target))
-                self.image_viewer.set_target_roi(
-                    plugin.target,
-                    tuple(saved_roi) if saved_roi is not None else None,
-                )
         # Sync the manual-pupil mirror to the freshly loaded image's
         # ellipse before live plugins re-run so glint / limbus pick up
         # the right pupil source on first paint.
@@ -1024,11 +1005,11 @@ class MainWindow(QMainWindow):
             detectors[target] = {"plugin": plugin_name, "params": plugin.default_params()}
         settings["detectors"] = detectors
         self._save_to_all_projects(settings)
-        # Wipe per-image overlay / ROI / mask state for the target the
-        # user is actually changing — the old plugin's result must not
-        # leak into the new plugin's slot.
+        # Wipe per-image overlay / ROI / mask state across both eyes
+        # for the target the user is actually changing — the old
+        # plugin's result must not leak into the new plugin's slot.
         self.image_viewer.clear_detection_overlay(target)
-        self.image_viewer.set_target_roi(target, None)
+        self.image_viewer.clear_target_roi(target)
         self.image_viewer.clear_target_mask(target)
         # Enabling a detector takes the target away from the manual side;
         # wipe any previously placed manual annotations for it so each
@@ -1249,9 +1230,11 @@ class MainWindow(QMainWindow):
             self._pending_run_one = (plugin_name, dict(params))
             self._auto_detect_debounce.start()
             return
+        active_slot = self._active_eye_slot()
         self.orchestrator.set_cached_result(target, None)
-        self.image_viewer.clear_detection_overlay(target)
-        self.image_viewer.clear_target_mask(target)
+        self._per_eye_detection_cache[active_slot][target] = None
+        self.image_viewer.clear_detection_overlay(target, eye_slot=active_slot)
+        self.image_viewer.clear_target_mask(target, eye_slot=active_slot)
 
     def _on_auto_detect_debounce_fired(self) -> None:
         """Dispatch the buffered run to the active-eye-aware run helper.
@@ -1270,27 +1253,29 @@ class MainWindow(QMainWindow):
         self._run_plugin_for_active_eye(plugin, params)
 
     def _on_plugin_ready(self, target: str, result: dict) -> None:
-        """Render the new detection result + its optional mask, mark modified.
+        """Render the new detection result for the active eye + mark modified.
 
-        Also mirrors the result into the active eye's slot of the
-        per-eye cache so eye-switching can later restore it without a
-        re-run.
+        The mask, overlay and per-eye cache slot are scoped to the
+        active eye — the inactive eye keeps its previously stored
+        result so its half of the canvas keeps painting.
         """
+        active_slot = self._active_eye_slot()
         # The mask (if any) lives under the standard ``"mask"`` key per
         # the plugin contract — split it off from the geometry overlay so
         # the viewer's mask renderer and its detection renderer stay on
         # their own paths.
-        self.image_viewer.set_target_mask(target, result.get("mask"))
-        self.image_viewer.set_detection_overlay(target, result)
-        self._per_eye_detection_cache[self._active_eye_slot()][target] = result
+        self.image_viewer.set_target_mask(target, result.get("mask"), eye_slot=active_slot)
+        self.image_viewer.set_detection_overlay(target, result, eye_slot=active_slot)
+        self._per_eye_detection_cache[active_slot][target] = result
         self.set_annotation_modified(True)
         self._refresh_panel_availability()
 
     def _on_plugin_failed(self, target: str) -> None:
-        """Clear the per-target overlay + mask and surface the failure in the status bar."""
-        self.image_viewer.clear_detection_overlay(target)
-        self.image_viewer.clear_target_mask(target)
-        self._per_eye_detection_cache[self._active_eye_slot()][target] = None
+        """Clear the active eye's overlay + mask for ``target`` and report in the status bar."""
+        active_slot = self._active_eye_slot()
+        self.image_viewer.clear_detection_overlay(target, eye_slot=active_slot)
+        self.image_viewer.clear_target_mask(target, eye_slot=active_slot)
+        self._per_eye_detection_cache[active_slot][target] = None
         self.statusBar().showMessage(f"Auto Detect: {target} failed at current parameters.", 5000)
         self._refresh_panel_availability()
 
@@ -1322,7 +1307,7 @@ class MainWindow(QMainWindow):
             self.orchestrator.set_cached_result(target, None)
             self.image_viewer.clear_detection_overlay(target)
             self.image_viewer.clear_target_mask(target)
-            self.image_viewer.set_target_roi(target, None)
+            self.image_viewer.clear_target_roi(target)
         self._clear_per_eye_cache()
         # Active drag-edit target was likely tied to one of the panels we
         # just reset; drop it so the canvas isn't waiting on a phantom drag.

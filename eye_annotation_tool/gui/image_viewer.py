@@ -143,10 +143,15 @@ class ImageViewer(QWidget):
         # from disk.
         self.image_grayscale: np.ndarray | None = None
 
-        # Per-target Auto Detect overlay results, keyed by anatomical target
-        # ("pupil" / "glint" / "limbus" / "eyelid"). The shape of each entry
-        # matches the corresponding plugin's serialise/deserialise contract.
-        self._detection_overlays: dict[str, dict] = {}
+        # Per-eye, per-target Auto Detect overlay results. Outer key is
+        # the anatomical target ("pupil" / "glint" / "limbus" / "eyelid"),
+        # inner key the eye slot ("left" / "right" / "single"). Both
+        # eyes' overlays paint at the same time so the user can see at
+        # a glance which halves they've already processed; the dim wash
+        # over the inactive half indicates which side they're currently
+        # working on. The inner dict's value shape matches the
+        # corresponding plugin's serialise/deserialise contract.
+        self._detection_overlays: dict[str, dict[str, dict]] = {}
 
         # Plugin instance currently owning each target. Populated by
         # MainWindow when panels are mounted (and cleared when a target's
@@ -171,20 +176,23 @@ class ImageViewer(QWidget):
         # MainWindow flips this on mode change.
         self._manual_edit_enabled = True
 
-        # Per-target Auto Detect ROI rectangles (target → ``(x, y, w, h)``
-        # tuple or None). ``_active_roi_target`` is the target whose
-        # rectangle is currently in drag-edit mode — handles are drawn on
-        # that one only, and canvas clicks edit that ROI exclusively.
-        self._target_rois: dict[str, tuple | None] = {}
+        # Per-eye, per-target Auto Detect ROI rectangles. Outer key the
+        # anatomical target, inner key the eye slot. ``_active_roi_target``
+        # is the target whose rectangle is currently in drag-edit mode —
+        # drag handles + canvas clicks only operate on the active eye's
+        # rectangle for that target; the inactive eye's rectangle paints
+        # without handles for context.
+        self._target_rois: dict[str, dict[str, tuple]] = {}
         self._active_roi_target: str | None = None
 
-        # Per-target threshold-mask overlays. ``_target_masks`` holds the
-        # ``uint8`` ndarray a plugin's ``detect`` returned under its
-        # ``"mask"`` key (or ``None`` when the plugin didn't produce one),
-        # and ``_show_target_masks`` gates whether each one paints. Both
-        # are populated from outside via the public setters; the viewer
-        # never inspects plugin result shapes itself.
-        self._target_masks: dict[str, np.ndarray | None] = {}
+        # Per-eye, per-target threshold-mask overlays. ``_target_masks``
+        # holds the ``uint8`` ndarray a plugin's ``detect`` returned under
+        # its ``"mask"`` key (or absent when the plugin didn't produce
+        # one). ``_show_target_masks`` is per-target (not per-eye) — the
+        # Show mask checkbox toggles every stored mask for that target.
+        # All stores are populated from outside via the public setters;
+        # the viewer never inspects plugin result shapes itself.
+        self._target_masks: dict[str, dict[str, np.ndarray]] = {}
         self._show_target_masks: dict[str, bool] = {}
 
     def setup_colors(self) -> None:
@@ -407,15 +415,20 @@ class ImageViewer(QWidget):
                 self.update_image()
 
     def _active_drag_roi(self) -> tuple | None:
-        """Return the per-target rectangle currently being drag-edited (or None)."""
+        """Return the rectangle currently being drag-edited on the active eye (or None)."""
         if self._active_roi_target is None:
             return None
-        return self._target_rois.get(self._active_roi_target)
+        return self._target_rois.get(self._active_roi_target, {}).get(self.active_eye_slot())
 
     def _set_active_drag_roi(self, value: tuple | None) -> None:
-        """Write the in-progress drag rectangle to its target store."""
-        if self._active_roi_target is not None:
-            self._target_rois[self._active_roi_target] = value
+        """Write the in-progress drag rectangle to the active eye's slot for the active target."""
+        if self._active_roi_target is None:
+            return
+        slot = self.active_eye_slot()
+        if value is None:
+            self._drop_slot(self._target_rois, self._active_roi_target, slot)
+        else:
+            self._target_rois.setdefault(self._active_roi_target, {})[slot] = value
 
     # Minimum cursor movement (image coords) before a press counts as a
     # drag-to-draw rather than a click. Below this, the rectangle stays
@@ -525,9 +538,11 @@ class ImageViewer(QWidget):
                     return
 
                 # A per-target ROI in drag-edit mode consumes the click
-                # before any Manual-mode click-to-place flow runs.
+                # before any Manual-mode click-to-place flow runs. Drag
+                # operates on the active eye's slot for that target —
+                # the inactive eye's rectangle paints but isn't grabbable.
                 if self._active_roi_target is not None:
-                    self._try_begin_roi_drag(image_pos, self._target_rois.get(self._active_roi_target))
+                    self._try_begin_roi_drag(image_pos, self._active_drag_roi())
                     return
 
                 # In Auto Detect mode manual edits are off — clicks on
@@ -649,7 +664,10 @@ class ImageViewer(QWidget):
                 draw_changed_roi = (not was_drawing) or committed
                 if draw_changed_roi and self._active_roi_target is not None:
                     target = self._active_roi_target
-                    self.target_roi_changed.emit(target, self._target_rois.get(target))
+                    self.target_roi_changed.emit(
+                        target,
+                        self._target_rois.get(target, {}).get(self.active_eye_slot()),
+                    )
                 return
 
             self.moving_point = False
@@ -811,15 +829,45 @@ class ImageViewer(QWidget):
         """Drop the plugin reference for ``target`` (panel unmounted / disabled)."""
         self._active_plugins.pop(target, None)
 
-    def set_detection_overlay(self, target: str, result: dict) -> None:
-        """Store an Auto Detect result for ``target`` and re-paint."""
-        self._detection_overlays[target] = result
+    def active_eye_slot(self) -> str:
+        """Return the per-eye storage key for the currently active eye."""
+        return self.current_eye if self.binocular_mode else "single"
+
+    def _resolve_slot(self, eye_slot: str | None) -> str:
+        """Map ``None`` to the currently active eye slot."""
+        return eye_slot if eye_slot is not None else self.active_eye_slot()
+
+    @staticmethod
+    def _drop_slot(store: dict, target: str, slot: str) -> bool:
+        """Remove ``slot`` from ``store[target]``; prune empty target dicts. Returns whether anything was removed."""
+        by_slot = store.get(target)
+        if not by_slot or slot not in by_slot:
+            return False
+        del by_slot[slot]
+        if not by_slot:
+            del store[target]
+        return True
+
+    # ----- Per-eye, per-target Auto Detect overlays -----
+
+    def set_detection_overlay(self, target: str, result: dict, *, eye_slot: str | None = None) -> None:
+        """Store an Auto Detect result for ``target`` at ``eye_slot`` and re-paint.
+
+        ``eye_slot`` defaults to the active eye; pass ``"left"`` /
+        ``"right"`` / ``"single"`` explicitly when populating from a
+        loaded annotation file that carries results for both eyes.
+        """
+        slot = self._resolve_slot(eye_slot)
+        self._detection_overlays.setdefault(target, {})[slot] = result
         self.update_image()
 
-    def clear_detection_overlay(self, target: str) -> None:
-        """Drop the stored result for ``target`` and re-paint."""
-        if target in self._detection_overlays:
-            del self._detection_overlays[target]
+    def clear_detection_overlay(self, target: str, *, eye_slot: str | None = None) -> None:
+        """Drop the stored result for ``target`` at ``eye_slot`` (or every slot when ``eye_slot`` is None)."""
+        if eye_slot is None:
+            if self._detection_overlays.pop(target, None) is not None:
+                self.update_image()
+            return
+        if self._drop_slot(self._detection_overlays, target, eye_slot):
             self.update_image()
 
     def clear_all_detection_overlays(self) -> None:
@@ -828,11 +876,12 @@ class ImageViewer(QWidget):
             self._detection_overlays.clear()
             self.update_image()
 
-    def get_detection_overlay(self, target: str) -> dict | None:
-        """Return the currently stored result for ``target`` (or None)."""
-        return self._detection_overlays.get(target)
+    def get_detection_overlay(self, target: str, *, eye_slot: str | None = None) -> dict | None:
+        """Return the result stored for ``(target, eye_slot)``, or None."""
+        slot = self._resolve_slot(eye_slot)
+        return self._detection_overlays.get(target, {}).get(slot)
 
-    # ----- Per-target Auto Detect ROIs -----
+    # ----- Per-eye, per-target Auto Detect ROIs -----
 
     def set_active_roi_target(self, target: str | None) -> None:
         """Enter drag-edit mode for ``target``'s ROI, or leave it (``None``).
@@ -849,63 +898,88 @@ class ImageViewer(QWidget):
         self.moving_roi = False
         self.resizing_roi = False
         self.roi_resize_handle = None
+        self._drawing_roi_committed = False
         self.update_image()
 
-    def set_target_roi(self, target: str, roi: tuple | None) -> None:
-        """Replace ``target``'s stored ROI without emitting ``target_roi_changed``."""
-        self._target_rois[target] = tuple(roi) if roi is not None else None
+    def set_target_roi(self, target: str, roi: tuple | None, *, eye_slot: str | None = None) -> None:
+        """Replace ``(target, eye_slot)``'s stored ROI without emitting ``target_roi_changed``.
+
+        Passing ``roi=None`` drops the rectangle for that slot.
+        ``eye_slot`` defaults to the active eye.
+        """
+        slot = self._resolve_slot(eye_slot)
+        if roi is None:
+            self._drop_slot(self._target_rois, target, slot)
+        else:
+            self._target_rois.setdefault(target, {})[slot] = tuple(roi)
         self.update_image()
 
-    def clear_target_roi(self, target: str) -> None:
-        """Drop ``target``'s stored ROI and emit ``target_roi_changed`` with ``None``."""
-        if self._target_rois.get(target) is None:
+    def clear_target_roi(self, target: str, *, eye_slot: str | None = None) -> None:
+        """Drop the ROI(s) stored for ``target`` and emit ``target_roi_changed``.
+
+        ``eye_slot=None`` drops every slot for ``target`` (used on
+        plugin swap / Clear All); pass an explicit slot to clear only
+        one eye's rectangle.
+        """
+        if eye_slot is None:
+            if self._target_rois.pop(target, None) is None:
+                return
+        elif not self._drop_slot(self._target_rois, target, eye_slot):
             return
-        self._target_rois[target] = None
         self.target_roi_changed.emit(target, None)
         self.update_image()
 
-    def get_target_roi(self, target: str) -> tuple | None:
-        """Return ``target``'s stored ROI (or None)."""
-        return self._target_rois.get(target)
+    def get_target_roi(self, target: str, *, eye_slot: str | None = None) -> tuple | None:
+        """Return the ROI stored for ``(target, eye_slot)`` (or None)."""
+        slot = self._resolve_slot(eye_slot)
+        return self._target_rois.get(target, {}).get(slot)
 
     def clear_all_target_rois(self) -> None:
-        """Drop every stored per-target ROI without emitting signals."""
+        """Drop every stored ROI across all targets and eyes (no signals)."""
         if not self._target_rois:
             return
         self._target_rois.clear()
         self.update_image()
 
-    # ----- Per-target threshold-mask overlays -----
+    # ----- Per-eye, per-target threshold-mask overlays -----
 
-    def set_target_mask(self, target: str, mask: "np.ndarray | None") -> None:
-        """Store ``target``'s threshold mask. Repaints when the mask is visible."""
-        self._target_masks[target] = mask
+    def set_target_mask(self, target: str, mask: "np.ndarray | None", *, eye_slot: str | None = None) -> None:
+        """Store ``(target, eye_slot)``'s threshold mask. Repaints when masks are visible."""
+        slot = self._resolve_slot(eye_slot)
+        if mask is None:
+            removed = self._drop_slot(self._target_masks, target, slot)
+            if removed and self._show_target_masks.get(target):
+                self.update_image()
+            return
+        self._target_masks.setdefault(target, {})[slot] = mask
         if self._show_target_masks.get(target):
             self.update_image()
 
     def set_show_target_mask(self, target: str, on: bool) -> None:
-        """Toggle visibility of ``target``'s threshold mask overlay."""
+        """Toggle visibility of every stored mask for ``target`` (across all eyes)."""
         self._show_target_masks[target] = bool(on)
         self.update_image()
 
-    def clear_target_mask(self, target: str) -> None:
-        """Drop the stored mask for ``target`` and repaint if it was visible."""
-        was_visible = self._show_target_masks.get(target) and self._target_masks.get(target) is not None
-        self._target_masks.pop(target, None)
-        if was_visible:
+    def clear_target_mask(self, target: str, *, eye_slot: str | None = None) -> None:
+        """Drop the mask for ``(target, eye_slot)`` (or every slot when ``eye_slot`` is None)."""
+        was_visible = bool(self._show_target_masks.get(target)) and bool(self._target_masks.get(target))
+        if eye_slot is None:
+            if self._target_masks.pop(target, None) is not None and was_visible:
+                self.update_image()
+            return
+        if self._drop_slot(self._target_masks, target, eye_slot) and was_visible:
             self.update_image()
 
-    def get_target_mask(self, target: str) -> "np.ndarray | None":
-        """Return the currently stored mask for ``target`` (or ``None``)."""
-        return self._target_masks.get(target)
+    def get_target_mask(self, target: str, *, eye_slot: str | None = None) -> "np.ndarray | None":
+        """Return the mask stored for ``(target, eye_slot)`` (or None)."""
+        slot = self._resolve_slot(eye_slot)
+        return self._target_masks.get(target, {}).get(slot)
 
     def clear_all_target_masks(self) -> None:
-        """Drop every stored per-target mask. Repaints when at least one was visible."""
+        """Drop every stored mask across all targets and eyes. Repaints if anything was visible."""
         if not self._target_masks:
             return
-        had_visible = any(
-            self._show_target_masks.get(t) and self._target_masks.get(t) is not None for t in self._target_masks
-        )
+        had_visible = any(self._show_target_masks.get(t) for t in self._target_masks)
         self._target_masks.clear()
         if had_visible:
             self.update_image()
@@ -1053,44 +1127,50 @@ class ImageViewer(QWidget):
         painter.restore()
 
     def _draw_detection_overlays(self, painter: QPainter) -> None:
-        """Render every per-target Auto Detect overlay via the plugins themselves.
+        """Render every per-eye, per-target Auto Detect overlay via the plugins.
 
         Each plugin owns its ``draw_overlay(painter, result, scale)`` and
         declares an integer ``overlay_z_order`` — overlays are drawn in
         ascending z-order so a plugin can sit visually behind or on top
         of others (e.g. limbus iris ring goes under the pupil + glint
-        markers).
+        markers). Both eyes' stored results paint in the same pass so
+        the user sees their work on every half they've processed.
         """
         # Threshold-mask fills go under the markers so the centres and
         # ellipses remain legible on top of the mask. Each plugin's mask
         # paints only when its "Show mask" toggle is on.
         self._draw_target_masks(painter)
-        pairs: list[tuple[int, str, object, dict]] = []
-        for target, result in self._detection_overlays.items():
-            if result is None:
-                continue
+        pairs: list[tuple[int, object, dict]] = []
+        for target, by_slot in self._detection_overlays.items():
             plugin = self._active_plugins.get(target)
             if plugin is None:
                 continue
             z = int(getattr(plugin, "overlay_z_order", 0))
-            pairs.append((z, target, plugin, result))
+            for result in by_slot.values():
+                if result is None:
+                    continue
+                pairs.append((z, plugin, result))
         pairs.sort(key=itemgetter(0))
-        for _z, _target, plugin, result in pairs:
+        for _z, plugin, result in pairs:
             plugin.draw_overlay(painter, result, self.factor)
 
     def _draw_target_masks(self, painter: QPainter) -> None:
-        """Render each visible per-target threshold mask as a semi-transparent fill.
+        """Render every visible per-eye threshold mask as a semi-transparent fill.
 
         Colour is read from the active plugin's :attr:`mask_color`; a
         plugin that didn't declare one falls back to neutral white so
-        the mask is still visible.
+        the mask is still visible. The Show mask toggle is per-target,
+        so flipping it reveals both eyes' masks at once.
         """
-        for target, mask in self._target_masks.items():
-            if mask is None or not self._show_target_masks.get(target):
+        for target, by_slot in self._target_masks.items():
+            if not self._show_target_masks.get(target):
                 continue
             plugin = self._active_plugins.get(target)
             color = getattr(plugin, "mask_color", None) or self._fallback_mask_color
-            self._draw_mask(painter, mask, color)
+            for mask in by_slot.values():
+                if mask is None:
+                    continue
+                self._draw_mask(painter, mask, color)
 
     def _draw_mask(self, painter: QPainter, mask: "np.ndarray", color: QColor) -> None:
         """Blit a uint8 0/255 mask onto the canvas as a single coloured RGBA fill."""
@@ -1114,24 +1194,25 @@ class ImageViewer(QWidget):
         painter.drawPixmap(0, 0, scaled)
 
     def _draw_target_rois(self, painter: QPainter) -> None:
-        """Render every stored per-target ROI rectangle.
+        """Render every stored per-eye ROI rectangle.
 
         Colour is read from the active plugin's :attr:`roi_color`; a
-        plugin that didn't declare one falls back to neutral white. The
-        currently active drag-edit target additionally gets corner
-        handles so the user can see which one accepts mouse drags.
+        plugin that didn't declare one falls back to neutral white.
+        Only the active eye's rectangle for the active drag-edit target
+        gets corner handles — the inactive eye's rectangle paints
+        plain so the user sees their saved ROI without it tempting
+        edit attempts (clicks on the inactive half are ignored
+        anyway).
         """
-        for target, roi in self._target_rois.items():
-            if roi is None:
-                continue
+        active_slot = self.active_eye_slot()
+        for target, by_slot in self._target_rois.items():
             plugin = self._active_plugins.get(target)
             color = getattr(plugin, "roi_color", None) or self._fallback_roi_color
-            self._draw_target_roi_box(
-                painter,
-                roi,
-                color,
-                active=(target == self._active_roi_target),
-            )
+            for slot, roi in by_slot.items():
+                if roi is None:
+                    continue
+                is_active = target == self._active_roi_target and slot == active_slot
+                self._draw_target_roi_box(painter, roi, color, active=is_active)
 
     def _draw_target_roi_box(
         self,
