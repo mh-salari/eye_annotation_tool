@@ -34,7 +34,30 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "Per-project settings are taken from the first folder."
         ),
     )
-    return parser.parse_args(argv)
+    parser.add_argument(
+        "--auto-detectors",
+        type=str,
+        default=None,
+        help=(
+            "Comma-separated subset of {pupil, glint, limbus, eyelid} to "
+            "enable for this session; targets not listed are forced to "
+            "'disabled'. Overrides the per-project detector choices. "
+            "Example: --auto-detectors pupil keeps only the pupil auto "
+            "detector active."
+        ),
+    )
+    args = parser.parse_args(argv)
+    if args.auto_detectors is not None:
+        valid = {"pupil", "glint", "limbus", "eyelid"}
+        chosen = {t.strip().lower() for t in args.auto_detectors.split(",") if t.strip()}
+        invalid = chosen - valid
+        if invalid:
+            parser.error(
+                f"unknown --auto-detectors target(s): {sorted(invalid)} "
+                f"(choices: {sorted(valid)})",
+            )
+        args.auto_detectors = chosen
+    return args
 
 
 def run_app() -> None:
@@ -46,7 +69,7 @@ def run_app() -> None:
     icon_path = str(Path(__file__).parent / "resources" / "app_icon.ico")
     app.setWindowIcon(QIcon(icon_path))
 
-    main_window = MainWindow(cli_monocular=args.monocular)
+    main_window = MainWindow(cli_monocular=args.monocular, cli_auto_detectors=args.auto_detectors)
     main_window.show()
     if args.folders is not None:
         main_window.load_folder_paths([str(p) for p in args.folders])
