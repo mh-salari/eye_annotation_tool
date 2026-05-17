@@ -727,12 +727,12 @@ class ImageViewer(QWidget):
         if self.original_pixmap.isNull():
             return False
         self.image_grayscale = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
-        # Reset display brightness on every image load so a brightening
-        # left over from the previous image doesn't carry forward; with
-        # the factor back at 1.0 the unmodified source pixmap is what
-        # gets scaled and drawn.
-        self._display_brightness = 1.0
-        self._brightness_pixmap = self.original_pixmap
+        # Display brightness carries forward across image navigation —
+        # once the user has tuned the canvas to see darker / brighter
+        # pixels in one frame, the next frame keeps the same factor so
+        # they don't have to re-tune per image. Rebuild the cached
+        # brightness pixmap against the freshly loaded grayscale.
+        self._rebuild_brightness_pixmap()
         self.pupil_points = []
         self.limbus_points = []
         self.pupil_ellipse = None
