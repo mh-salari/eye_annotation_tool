@@ -62,13 +62,23 @@ python -m eye_annotation_tool
 
 ## Adding Custom Plugins
 
-EyE Annotation Tool supports custom plugins for pupil, iris and eyelid detection. To add a new plugin:
+Every auto-detector is a self-contained plugin that owns its algorithm,
+its Qt panel, its serialization, its overlay drawing and its colour
+palette — adding one requires **no edits to the core application**.
+Three discovery channels are scanned at startup:
 
-1. Create a new Python file in the appropriate plugin directory.
-2. Define your detector class in this file.
-3. Ensure your detector follows the required interface.
+- **Built-in** — `eye_annotation_tool/auto_detectors/plugins/` (for
+  plugins contributed upstream).
+- **Env-var directories** — `EYE_ANNOTATION_PLUGIN_PATH`
+  (`os.pathsep`-separated) for drop-in `.py` files. Easiest path for a
+  one-off plugin: write a single file, point the env var at its
+  directory, restart the app.
+- **Python entry-points** — `[project.entry-points."eye_annotation_tool.plugins"]`
+  in any installed distribution. For pip-installable plugin packages.
 
-For a detailed guide on creating plugins, see the [Plugin Development Guide](annotation_app/auto_detectors/README.md).
+The full plugin authoring guide — minimal example, the `DetectorPlugin`
+contract, optional panel signals, mask + ROI rendering — lives in the
+[Plugin Development Guide](annotation_app/auto_detectors/README.md).
 
 ## Citing
 
