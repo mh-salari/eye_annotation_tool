@@ -793,7 +793,7 @@ class MainWindow(QMainWindow):
         # the right pupil source on first paint.
         self._last_manual_pupil_signature = self._manual_pupil_signature()
         self._refresh_manual_pupil_in_cache()
-        self._refresh_live_plugin_results()
+        self._refresh_live_plugins_all_eyes()
         self._refresh_panel_availability()
 
     @staticmethod
@@ -901,6 +901,25 @@ class MainWindow(QMainWindow):
             if panel is None:
                 continue
             self._run_plugin_for_active_eye(plugin, panel.current_params())
+
+    def _refresh_live_plugins_all_eyes(self) -> None:
+        """Run live plugins for every eye slot (binocular: both halves).
+
+        Called after an image loads so the user immediately sees auto
+        detections on both eyes without manually switching the radio.
+        The flow temporarily re-uses :meth:`_on_eye_changed` to swap
+        the active eye, run live plugins for that side, then swap
+        back — Qt batches the intermediate paints so there's no
+        visible flicker.
+        """
+        if not self.binocular_mode:
+            self._refresh_live_plugin_results()
+            return
+        self._refresh_live_plugin_results()
+        original = self.image_viewer.current_eye
+        other = "right" if original == "left" else "left"
+        self._on_eye_changed(other)
+        self._on_eye_changed(original)
 
     # ----- Binocular crop + translate (active-eye-aware run path) -----
 
@@ -1048,8 +1067,8 @@ class MainWindow(QMainWindow):
         self.menu_handler.update_auto_detectors_menu()
         # Repopulate live plugin overlays + masks on the current image
         # so the user sees the new plugin's output without nudging a
-        # slider.
-        self._refresh_live_plugin_results()
+        # slider. Both eyes run in binocular mode.
+        self._refresh_live_plugins_all_eyes()
 
     def save_current_settings_as_project_defaults(self) -> None:
         """Snapshot every enabled plugin's current panel params into project defaults.
