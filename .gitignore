@@ -1,7 +1,7 @@
 .vscode
 annotation_app/auto_detectors/settings.json
 .DS_Store
-annotation_app/_version.py
+eye_annotation_tool/_version.py
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

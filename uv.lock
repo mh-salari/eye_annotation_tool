@@ -829,7 +829,7 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
-    { name = "daugman-derived-boundary-detectors" },
+    { name = "daugman-derived-boundary-detectors", editable = "../daugman-derived-boundary-detectors" },
     { name = "matplotlib" },
     { name = "numpy" },
     { name = "opencv-python" },

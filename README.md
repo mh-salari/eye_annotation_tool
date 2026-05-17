@@ -8,7 +8,7 @@
 EyE Annotation Tool is a tool for annotating pupil, iris and eyelid in eye images. It provides a user-friendly interface for manual annotation and supports auto-detector plugins.
 
 <p align="center">
-<img src="https://raw.githubusercontent.com/mh-salari/eye_annotation_tool/main/annotation_app/resources/main_page.png" alt="EyE Annotation Tool Main Page" width="800">
+<img src="https://raw.githubusercontent.com/mh-salari/eye_annotation_tool/main/eye_annotation_tool/resources/main_page.png" alt="EyE Annotation Tool Main Page" width="800">
 </p>
 
 ## Features
@@ -78,7 +78,7 @@ Three discovery channels are scanned at startup:
 
 The full plugin authoring guide — minimal example, the `DetectorPlugin`
 contract, optional panel signals, mask + ROI rendering — lives in the
-[Plugin Development Guide](annotation_app/auto_detectors/README.md).
+[Plugin Development Guide](eye_annotation_tool/auto_detectors/README.md).
 
 ## Citing
 
@@ -110,5 +110,5 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 This project has received funding from the European Union's Horizon Europe research and innovation funding program under grant agreement No 101072410, Eyes4ICU project.
 
 <p align="center">
-<img src="https://raw.githubusercontent.com/mh-salari/eye_annotation_tool/main/annotation_app/resources/Funded_by_EU_Eyes4ICU.png" alt="Funded by EU Eyes4ICU" width="500">
+<img src="https://raw.githubusercontent.com/mh-salari/eye_annotation_tool/main/eye_annotation_tool/resources/Funded_by_EU_Eyes4ICU.png" alt="Funded by EU Eyes4ICU" width="500">
 </p>

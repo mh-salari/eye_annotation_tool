@@ -28,8 +28,8 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
-from annotation_app.auto_detectors.plugin_interface import DetectorPlugin
-from annotation_app.gui.custom_widgets import MaterialButton
+from eye_annotation_tool.auto_detectors.plugin_interface import DetectorPlugin
+from eye_annotation_tool.gui.custom_widgets import MaterialButton
 
 # Overlay palette for the Threshold Pupil plugin. Kept local to the
 # plugin so adding a new pupil detector with a different look does not

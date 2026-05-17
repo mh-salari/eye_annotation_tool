@@ -33,7 +33,7 @@ Repository = "https://github.com/mh-salari/eye_annotation_tool"
 Issues = "https://github.com/mh-salari/eye_annotation_tool/issues"
 
 [project.scripts]
-eye_annotation_tool = "annotation_app.main:run_app"
+eye_annotation_tool = "eye_annotation_tool.main:run_app"
 
 # Local editable installs during development. When these packages get
 # published to PyPI (before we publish eye-annotation-tool), the source
@@ -56,10 +56,10 @@ dev = [
 source = "vcs"
 
 [tool.hatch.build.hooks.vcs]
-version-file = "annotation_app/_version.py"
+version-file = "eye_annotation_tool/_version.py"
 
 [tool.hatch.build.targets.wheel]
-packages = ["annotation_app"]
+packages = ["eye_annotation_tool"]
 
 [tool.ruff]
 line-length = 119
@@ -167,9 +167,9 @@ lint.ignore = [
 
 [tool.ruff.lint.per-file-ignores]
 # GUI domain objects with many UI handlers — many public methods are intentional.
-"annotation_app/gui/image_viewer.py" = ["PLR0904"]
-"annotation_app/gui/main_window.py" = ["PLR0904"]
+"eye_annotation_tool/gui/image_viewer.py" = ["PLR0904"]
+"eye_annotation_tool/gui/main_window.py" = ["PLR0904"]
 # Plugin override methods (detect, serialize, deserialize, make_panel) often
 # don't reference ``self`` but must remain instance methods to satisfy the
 # DetectorPlugin contract and to allow subclasses to override.
-"annotation_app/auto_detectors/plugins/**/*.py" = ["PLR6301"]
+"eye_annotation_tool/auto_detectors/plugins/**/*.py" = ["PLR6301"]

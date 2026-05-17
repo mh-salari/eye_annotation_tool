@@ -39,8 +39,8 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
-from annotation_app.auto_detectors.plugin_interface import DetectorPlugin
-from annotation_app.gui.custom_widgets import MaterialButton
+from eye_annotation_tool.auto_detectors.plugin_interface import DetectorPlugin
+from eye_annotation_tool.gui.custom_widgets import MaterialButton
 
 # Overlay palette for the Threshold Glint plugin. Saturated red reads
 # on bright glint highlights and on the surrounding iris; the mask fill
