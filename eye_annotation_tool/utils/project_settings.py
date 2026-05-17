@@ -16,17 +16,21 @@ Current schema::
       "detectors": {
         "pupil":  {
           "plugin": "threshold_pupil" | "disabled",
-          "params": {...},
+          "params": {
+            "left":   {...} | null,
+            "right":  {...} | null,
+            "single": {...} | null
+          },
           "carry_roi": {
-            "enabled": false,
-            "values": {"left": [x, y, w, h] | null,
-                       "right": [x, y, w, h] | null,
-                       "single": [x, y, w, h] | null}
+            "enabled": {"left": false, "right": false, "single": false},
+            "values":  {"left": [x, y, w, h] | null,
+                        "right": [x, y, w, h] | null,
+                        "single": [x, y, w, h] | null}
           }
         },
-        "glint":  {"plugin": "disabled", "params": {}, "carry_roi": {...}},
-        "limbus": {"plugin": "disabled", "params": {}, "carry_roi": {...}},
-        "eyelid": {"plugin": "disabled", "params": {}, "carry_roi": {...}}
+        "glint":  {"plugin": "disabled", "params": {...}, "carry_roi": {...}},
+        "limbus": {"plugin": "disabled", "params": {...}, "carry_roi": {...}},
+        "eyelid": {"plugin": "disabled", "params": {...}, "carry_roi": {...}}
       }
     }
 
@@ -36,15 +40,18 @@ fraction of image width in ``[0, 1]``. Per-image annotation files can
 override the divider; the project value is the fallback when an image
 has no per-image override.
 
-Each per-target detector ``params`` block holds the defaults written
-by the plugin's "Set as project defaults" action. Per-image overrides
-live in the image annotation JSON, not here.
+``params`` is per-eye: each slot (``left``, ``right``, ``single``) holds
+the panel-slider defaults for that eye, written by the plugin's "Set
+as project defaults" action. A slot value of ``null`` means "no
+project default for this eye"; the panel falls back to the plugin's
+:meth:`default_params` until the user tunes and saves. The ROI lives
+in :attr:`carry_roi.values`, not in ``params``.
 
-The ``carry_roi`` block stores the "Carry to other images" checkbox
-state plus the per-eye ROI rectangle that should be applied to every
-loaded image that doesn't already carry its own saved ROI for that
-target. Edits to an ROI on the canvas update the matching ``values``
-entry when ``enabled`` is True.
+``carry_roi.enabled`` is per-eye too — the "Carry to other images"
+checkbox tracks the active eye's flag, so the user can enable carry
+for one eye without forcing it on for the other. ``carry_roi.values``
+holds the per-eye ROI rectangle that downstream image loads inject
+when the slot's enable flag is True.
 """
 
 import json
@@ -81,8 +88,16 @@ CARRY_ROI_SLOTS = ("left", "right", "single")
 
 
 def _default_carry_roi() -> dict:
-    """Return a fresh carry-over block with the gate off and no stored rect."""
-    return {"enabled": False, "values": dict.fromkeys(CARRY_ROI_SLOTS)}
+    """Return a fresh carry-over block with every slot's gate off and no stored rect."""
+    return {
+        "enabled": dict.fromkeys(CARRY_ROI_SLOTS, False),
+        "values": dict.fromkeys(CARRY_ROI_SLOTS),
+    }
+
+
+def _default_params_per_eye() -> dict:
+    """Return a fresh per-eye params block with every slot empty."""
+    return dict.fromkeys(CARRY_ROI_SLOTS)
 
 
 def _default_settings() -> dict:
@@ -95,7 +110,7 @@ def _default_settings() -> dict:
         "detectors": {
             target: {
                 "plugin": DEFAULT_DETECTOR_PLUGINS[target],
-                "params": {},
+                "params": _default_params_per_eye(),
                 "carry_roi": _default_carry_roi(),
             }
             for target in DETECTOR_TARGETS
@@ -136,9 +151,21 @@ def _parse_detector_entry(entry: dict) -> dict:
     """Normalise one ``detectors.<target>`` block from disk into the in-memory shape."""
     return {
         "plugin": entry.get("plugin", "disabled"),
-        "params": dict(entry.get("params", {})),
+        "params": _parse_params_per_eye(entry.get("params")),
         "carry_roi": _parse_carry_roi(entry.get("carry_roi")),
     }
+
+
+def _parse_params_per_eye(params_in: object) -> dict:
+    """Normalise a per-eye ``params`` block; slots with non-dict values become ``None``."""
+    out = _default_params_per_eye()
+    if not isinstance(params_in, dict):
+        return out
+    for slot in CARRY_ROI_SLOTS:
+        slot_value = params_in.get(slot)
+        if isinstance(slot_value, dict):
+            out[slot] = dict(slot_value)
+    return out
 
 
 def _parse_carry_roi(carry_in: object) -> dict:
@@ -146,7 +173,10 @@ def _parse_carry_roi(carry_in: object) -> dict:
     carry = _default_carry_roi()
     if not isinstance(carry_in, dict):
         return carry
-    carry["enabled"] = bool(carry_in.get("enabled", False))
+    enabled_in = carry_in.get("enabled")
+    if isinstance(enabled_in, dict):
+        for slot in CARRY_ROI_SLOTS:
+            carry["enabled"][slot] = bool(enabled_in.get(slot, False))
     values_in = carry_in.get("values") or {}
     if isinstance(values_in, dict):
         for slot in CARRY_ROI_SLOTS:

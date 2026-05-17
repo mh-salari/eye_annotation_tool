@@ -129,16 +129,25 @@ class MainWindow(QMainWindow):
             "right": dict.fromkeys(DETECTOR_TARGETS),
             "single": dict.fromkeys(DETECTOR_TARGETS),
         }
-        # Carry-over ROI store. ``_carry_roi_enabled[target]`` is the
-        # per-target checkbox state from the project settings file;
-        # ``_carry_roi_values[target][slot]`` is the rectangle to apply
-        # to images that don't carry their own saved ROI for that
-        # (target, eye) pair. Both are populated from the project file
-        # in :meth:`_apply_enabled_plugins` and written back whenever
-        # the checkbox flips or a canvas ROI edit lands while the
-        # checkbox is on.
-        self._carry_roi_enabled: dict[Target, bool] = dict.fromkeys(DETECTOR_TARGETS, False)
+        # Carry-over ROI store. Both blocks are per-eye so toggling Carry
+        # for one eye doesn't drag the other along. ``_carry_roi_enabled``
+        # mirrors the active eye's checkbox state; ``_carry_roi_values``
+        # holds the rectangle each (target, eye) carries forward. Both
+        # are populated from the project file in
+        # :meth:`_apply_enabled_plugins` and written back whenever the
+        # checkbox flips or a canvas ROI edit lands while the active
+        # eye's flag is on.
+        self._carry_roi_enabled: dict[Target, dict[str, bool]] = {
+            target: {"left": False, "right": False, "single": False} for target in DETECTOR_TARGETS
+        }
         self._carry_roi_values: dict[Target, dict[str, tuple | None]] = {
+            target: {"left": None, "right": None, "single": None} for target in DETECTOR_TARGETS
+        }
+        # Per-eye project defaults — populated once from the project file
+        # in :meth:`_apply_enabled_plugins`. Used as the panel fallback
+        # when the user switches to an eye that has no per-image override
+        # or in-memory tuning yet.
+        self._project_default_params: dict[Target, dict[str, dict | None]] = {
             target: {"left": None, "right": None, "single": None} for target in DETECTOR_TARGETS
         }
         self.autosave_enabled = False
@@ -755,15 +764,18 @@ class MainWindow(QMainWindow):
     def _restore_panel_params_from_per_eye(self, slot: str) -> None:
         """Push the per-eye mirror's saved params back into each plugin panel.
 
-        Targets whose slot has no saved params yet are left as-is — the
-        live panel state carries forward so the user can start tuning
-        the new eye from the previous eye's last values rather than
-        from cold defaults.
+        Priority order per (target, slot): per-image mirror →
+        project-file defaults → plugin's ``default_params``. The last
+        fallback keeps the panel snapped to clean defaults on a slot
+        the user has never tuned and that has no project default,
+        rather than letting the previous eye's tuning leak across.
         """
         for target, plugin in self._enabled_plugins.items():
             params = self._per_eye_panel_params[slot].get(target)
             if params is None:
-                continue
+                params = self._project_default_params[target].get(slot)
+            if params is None:
+                params = plugin.default_params()
             panel = self.annotation_controls.auto_detect_panel(plugin.name)
             if panel is not None:
                 panel.set_params(params)
@@ -1347,6 +1359,11 @@ class MainWindow(QMainWindow):
         )
         if reply != QMessageBox.Yes:
             return
+        active_slot = self._active_eye_slot()
+        # Snapshot the active eye's live panel state into the per-eye mirror
+        # so the project file captures both eyes at once when the user has
+        # been tuning per-eye in the same image.
+        self._snapshot_panel_params_to_per_eye(active_slot)
         settings = load_project_settings(self.project_dir)
         detectors = settings.setdefault("detectors", {})
         for target, plugin in self._enabled_plugins.items():
@@ -1354,20 +1371,29 @@ class MainWindow(QMainWindow):
             if panel is None:
                 continue
             viewer_rois = {slot: self.image_viewer.get_target_roi(target, eye_slot=slot) for slot in CARRY_ROI_SLOTS}
-            carry_enabled = any(roi is not None for roi in viewer_rois.values())
-            self._carry_roi_enabled[target] = carry_enabled
             for slot, roi in viewer_rois.items():
                 self._carry_roi_values[target][slot] = roi
-            params = dict(panel.current_params())
-            # The ROI is stored once, in carry_roi.values; strip the
-            # duplicate ``<target>_roi`` slot from params so the project
-            # file has a single source of truth.
-            params.pop(_panel_roi_param_key(target), None)
+            # Per-eye params: take each slot's working state from the
+            # per-eye mirror; slots the user has never tuned stay null.
+            # The ROI lives in carry_roi.values, so strip the duplicate
+            # ``<target>_roi`` slot from each per-eye params dict.
+            params_by_slot: dict[str, dict | None] = {}
+            for slot in CARRY_ROI_SLOTS:
+                per_slot = self._per_eye_panel_params[slot].get(target)
+                if per_slot is None:
+                    params_by_slot[slot] = None
+                    continue
+                cleaned = dict(per_slot)
+                cleaned.pop(_panel_roi_param_key(target), None)
+                params_by_slot[slot] = cleaned
+                self._project_default_params[target][slot] = dict(cleaned)
             detectors[target] = {
                 "plugin": plugin.name,
-                "params": params,
+                "params": params_by_slot,
                 "carry_roi": {
-                    "enabled": carry_enabled,
+                    "enabled": {
+                        slot: bool(self._carry_roi_enabled[target][slot]) for slot in CARRY_ROI_SLOTS
+                    },
                     "values": {slot: list(roi) if roi is not None else None for slot, roi in viewer_rois.items()},
                 },
             }
@@ -1458,7 +1484,21 @@ class MainWindow(QMainWindow):
             # ``roi_color`` / ``mask_color`` palette when rendering.
             self.image_viewer.set_active_plugin(target, plugin)
             panel = plugin.make_panel(self)
-            initial_params = preserved_params.get(target, entry.get("params", {}))
+            # Cache the per-eye project defaults so eye-switch can fall
+            # back to them when the active slot has no in-memory tuning
+            # or per-image override.
+            params_by_slot = entry.get("params") or {}
+            for slot in CARRY_ROI_SLOTS:
+                slot_params = params_by_slot.get(slot) if isinstance(params_by_slot, dict) else None
+                self._project_default_params[target][slot] = (
+                    dict(slot_params) if isinstance(slot_params, dict) else None
+                )
+            active_slot = self._active_eye_slot()
+            initial_params = (
+                preserved_params.get(target)
+                or self._project_default_params[target].get(active_slot)
+                or {}
+            )
             panel.set_params(initial_params)
             panel.params_changed.connect(
                 # ``name`` and ``target`` are captured at connect time so the
@@ -1492,21 +1532,24 @@ class MainWindow(QMainWindow):
                 panel.detect_requested.connect(
                     lambda name=plugin.name, target_=plugin.target: self._on_panel_detect_requested(name, target_),
                 )
-            # Restore the carry-over checkbox + values from project
-            # settings. The checkbox state lives on the panel; the
-            # rectangle values live on MainWindow and only apply to
-            # subsequent image loads.
+            # Restore the per-eye carry-over enable flags + rectangle values
+            # from project settings. The checkbox state lives on the panel
+            # and tracks the active eye; the rectangle values live on
+            # MainWindow and only apply to subsequent image loads.
             carry_block = entry.get("carry_roi") or {}
-            carry_enabled = bool(carry_block.get("enabled", False))
-            self._carry_roi_enabled[target] = carry_enabled
+            enabled_by_slot_in = carry_block.get("enabled")
+            if not isinstance(enabled_by_slot_in, dict):
+                enabled_by_slot_in = {}
+            for slot in CARRY_ROI_SLOTS:
+                self._carry_roi_enabled[target][slot] = bool(enabled_by_slot_in.get(slot, False))
             carry_values = carry_block.get("values") or {}
-            for slot in ("left", "right", "single"):
+            for slot in CARRY_ROI_SLOTS:
                 value = carry_values.get(slot)
                 self._carry_roi_values[target][slot] = (
                     tuple(int(c) for c in value) if isinstance(value, (list, tuple)) and len(value) == 4 else None
                 )
             if hasattr(panel, "set_carry_roi_enabled"):
-                panel.set_carry_roi_enabled(carry_enabled)
+                panel.set_carry_roi_enabled(self._carry_roi_enabled[target][active_slot])
             if hasattr(panel, "carry_roi_toggled"):
                 panel.carry_roi_toggled.connect(
                     lambda checked, target_=plugin.target: self._on_carry_roi_toggled(target_, checked),
@@ -1515,12 +1558,6 @@ class MainWindow(QMainWindow):
                 panel.override_roi_requested.connect(
                     lambda target_=plugin.target: self._on_override_roi_requested(target_),
                 )
-            # Seed the viewer's ROI store from the project-saved params so
-            # the rectangle is rendered immediately when Auto Detect mode
-            # is entered.
-            saved_roi = initial_params.get(_panel_roi_param_key(plugin.target))
-            if saved_roi is not None:
-                self.image_viewer.set_target_roi(plugin.target, tuple(saved_roi))
             panels.append((plugin.name, panel))
         self.annotation_controls.set_auto_detect_panels(panels)
         self.orchestrator.set_enabled_plugins(dict(self._enabled_plugins))
@@ -1721,10 +1758,9 @@ class MainWindow(QMainWindow):
         debounce path then re-runs detection with the updated ROI.
 
         A canvas edit means the user is tuning THIS image's ROI
-        specifically, so Carry auto-disables when a non-empty rectangle
-        lands. The stored carry value isn't touched — re-checking
-        Carry captures the current rectangle as the new carry-over
-        value.
+        specifically, so Carry auto-disables for the active eye when a
+        non-empty rectangle lands. The other eye's carry stays untouched —
+        each eye's Carry flag is independent.
         """
         plugin = self._enabled_plugins.get(target)
         if plugin is None:
@@ -1733,26 +1769,29 @@ class MainWindow(QMainWindow):
         setter = getattr(panel, _panel_roi_setter_name(target), None) if panel is not None else None
         if setter is not None:
             setter(roi)
-        if roi is not None and self._carry_roi_enabled.get(target):
-            self._carry_roi_enabled[target] = False
+        active_slot = self._active_eye_slot()
+        if roi is not None and self._carry_roi_enabled.get(target, {}).get(active_slot, False):
+            self._carry_roi_enabled[target][active_slot] = False
             if panel is not None and hasattr(panel, "set_carry_roi_enabled"):
                 panel.set_carry_roi_enabled(False)
             self._persist_carry_roi(target)
 
     def _on_carry_roi_toggled(self, target: Target, enabled: bool) -> None:
-        """Persist the per-target carry-over enable flag.
+        """Persist the active eye's carry-over enable flag for ``target``.
 
-        Flipping the flag on captures the *current* canvas ROI for the
-        active eye as the initial carry-over value so the next image
-        load already has something to apply. Turning it off leaves the
-        stored rectangle in place — re-enabling later resumes from the
-        same value.
+        The Carry checkbox is per-eye: flipping the flag on captures the
+        *current* canvas ROI for the active eye as the initial carry-over
+        value so the next image load already has something to apply.
+        Turning it off leaves the stored rectangle in place — re-enabling
+        later resumes from the same value. The other eye's Carry flag is
+        untouched.
         """
-        self._carry_roi_enabled[target] = bool(enabled)
+        active_slot = self._active_eye_slot()
+        self._carry_roi_enabled[target][active_slot] = bool(enabled)
         if enabled:
             current_roi = self.image_viewer.get_target_roi(target)
             if current_roi is not None:
-                self._carry_roi_values[target][self._active_eye_slot()] = tuple(int(c) for c in current_roi)
+                self._carry_roi_values[target][active_slot] = tuple(int(c) for c in current_roi)
         self._persist_carry_roi(target)
         self._refresh_carry_checkboxes()
 
@@ -1779,15 +1818,20 @@ class MainWindow(QMainWindow):
         self._refresh_carry_checkboxes()
 
     def _persist_carry_roi(self, target: Target) -> None:
-        """Write the carry-over enable flag + values for ``target`` to the project file."""
+        """Write the per-eye carry-over enable flags + values for ``target`` to the project file."""
         if not self.project_dirs:
             return
         settings = load_project_settings(self.project_dir)
         detectors = settings.setdefault("detectors", {})
         entry = detectors.setdefault(target, {"plugin": "disabled", "params": {}})
         entry["carry_roi"] = {
-            "enabled": bool(self._carry_roi_enabled.get(target, False)),
-            "values": {slot: list(value) if value is not None else None for slot, value in self._carry_roi_values[target].items()},
+            "enabled": {
+                slot: bool(self._carry_roi_enabled.get(target, {}).get(slot, False)) for slot in CARRY_ROI_SLOTS
+            },
+            "values": {
+                slot: list(value) if value is not None else None
+                for slot, value in self._carry_roi_values[target].items()
+            },
         }
         self._save_to_all_projects(settings)
 
@@ -1819,7 +1863,7 @@ class MainWindow(QMainWindow):
 
     def _carry_checkbox_state(self, target: Target, slot: str) -> bool:
         """Return whether the Carry checkbox should display as checked for ``(target, slot)``."""
-        if not self._carry_roi_enabled.get(target):
+        if not self._carry_roi_enabled.get(target, {}).get(slot, False):
             return False
         carry_value = self._carry_roi_values.get(target, {}).get(slot)
         if carry_value is None:
@@ -1840,10 +1884,11 @@ class MainWindow(QMainWindow):
         active_slot = self._active_eye_slot()
         slots = ("left", "right") if self.binocular_mode else ("single",)
         for target, plugin in self._enabled_plugins.items():
-            if not self._carry_roi_enabled.get(target):
-                continue
+            enabled_by_slot = self._carry_roi_enabled.get(target, {})
             roi_key = _panel_roi_param_key(target)
             for slot in slots:
+                if not enabled_by_slot.get(slot, False):
+                    continue
                 if self._per_eye_panel_params[slot].get(target) is not None:
                     params = self._per_eye_panel_params[slot][target]
                     if params.get(roi_key) is not None:
