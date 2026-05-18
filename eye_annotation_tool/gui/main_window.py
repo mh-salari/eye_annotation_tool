@@ -28,7 +28,7 @@ from ..controllers.binocular_controller import BinocularController
 from ..controllers.detection_controller import DetectionController
 from ..controllers.navigation_controller import NavigationController
 from ..policy import CliOverridePolicy
-from ..state import CarryRoiStore, PerEyeStateStore, ProjectStore
+from ..state import CarryRoiStore, PerEyeStateStore, ProjectStore, SessionState
 from ..utils.project_settings import (
     DETECTOR_TARGETS,
     PROJECT_FILE_SUFFIX,
@@ -70,9 +70,10 @@ class MainWindow(QMainWindow):
         self.project_store = ProjectStore()
         self.per_eye_state = PerEyeStateStore(DETECTOR_TARGETS)
         self.carry_roi_state = CarryRoiStore(DETECTOR_TARGETS)
+        self.session = SessionState(self)
+        self.session.modified_changed.connect(self._refresh_save_state_indicator)
 
         self.setup_ui()
-        self.setup_variables()
 
         self.detection_controller = DetectionController(
             self.plugin_manager,
@@ -84,7 +85,7 @@ class MainWindow(QMainWindow):
             self.annotation_controls,
             parent=self,
         )
-        self.detection_controller.annotation_modified.connect(self.set_annotation_modified)
+        self.detection_controller.annotation_modified.connect(self._mark_modified)
         self.detection_controller.status_message.connect(self.statusBar().showMessage)
         self.detection_controller.detectors_changed.connect(self._on_detectors_changed)
 
@@ -102,26 +103,22 @@ class MainWindow(QMainWindow):
         )
         self.detection_controller.bind_binocular_controller(self.binocular_controller)
         self.binocular_controller.apply_mode(not self.cli_policy.monocular)
-        self.binocular_controller.annotation_modified.connect(self.set_annotation_modified)
+        self.binocular_controller.annotation_modified.connect(self._mark_modified)
 
         self.annotation_controller = AnnotationController(
             self.image_viewer,
             self.detection_controller,
             self.binocular_controller,
             self.project_store,
-            current_index_fn=lambda: self.current_image_index,
-            is_modified_fn=lambda: self.annotation_modified,
-            set_modified_fn=self.set_annotation_modified,
+            self.session,
             dialog_parent=self,
         )
         self.navigation_controller = NavigationController(
             self.annotation_controller,
             self.project_store,
+            self.session,
             self.image_list_widget,
             self.load_current_image,
-            current_index_getter=lambda: self.current_image_index,
-            current_index_setter=self._set_current_image_index,
-            is_modified_fn=lambda: self.annotation_modified,
             dialog_parent=self,
         )
         self.menu_handler = MenuHandler(self)
@@ -271,45 +268,26 @@ class MainWindow(QMainWindow):
         right_panel.setFixedWidth(360)  # 340 panel + room for the vertical scrollbar
         return right_panel
 
-    def setup_variables(self) -> None:
-        """Initialise instance variables."""
-        self.current_image_index = -1
-        self.annotation_modified = False
-
     @property
     def image_paths(self) -> list[str]:
         """Ordered list of image paths in the current project."""
         return self.project_store.image_paths()
 
-    @property
-    def autosave_enabled(self) -> bool:
-        """Autosave-on-image-change flag (read by NavigationController)."""
-        return self.project_store.autosave
-
-    @property
-    def project_divider_x_norm(self) -> float:
-        """Project-wide default divider position."""
-        return self.project_store.divider_x_norm
-
-    @property
-    def binocular_mode(self) -> bool:
-        """True when the active project is in binocular mode (read by external code)."""
-        return self.binocular_controller.is_binocular
-
     def _current_image_path(self) -> str | None:
         """Return the active image's path, or ``None`` when no image is loaded."""
-        if 0 <= self.current_image_index < len(self.image_paths):
-            return self.image_paths[self.current_image_index]
+        index = self.session.current_image_index
+        paths = self.image_paths
+        if 0 <= index < len(paths):
+            return paths[index]
         return None
 
-    def _set_current_image_index(self, index: int) -> None:
-        """Setter exposed to :class:`NavigationController` so the index lives here."""
-        self.current_image_index = index
+    def _mark_modified(self, modified: bool) -> None:
+        """Slot for controller ``annotation_modified`` signals.
 
-    def set_annotation_modified(self, modified: bool) -> None:
-        """Set the annotation modified flag and refresh the GUI save-state indicator."""
-        self.annotation_modified = modified
-        self._refresh_save_state_indicator()
+        Wrapping the property setter as a slot keeps the
+        ``connect(controller.signal, slot)`` form readable.
+        """
+        self.session.modified = modified
 
     def _refresh_save_state_indicator(self) -> None:
         """Sync the window title to the current save state.
@@ -319,10 +297,10 @@ class MainWindow(QMainWindow):
         sessions are tagged with a ``(read-only)`` suffix so the user can
         see at a glance that project-level edits won't persist.
         """
-        saved = self.autosave_enabled or not self.annotation_modified
+        saved = self.project_store.autosave or not self.session.modified
         ro = " (read-only)" if self.project_store.read_only else ""
-        if 0 <= self.current_image_index < len(self.image_paths):
-            name = Path(self.image_paths[self.current_image_index]).name
+        if 0 <= self.session.current_image_index < len(self.image_paths):
+            name = Path(self.image_paths[self.session.current_image_index]).name
             self.setWindowTitle(f"EyE Annotation Tool - {name}{'' if saved else ' *'}{ro}")
         else:
             self.setWindowTitle(f"EyE Annotation Tool{'' if saved else ' *'}{ro}")
@@ -371,7 +349,7 @@ class MainWindow(QMainWindow):
         """
         self.project_store.new(project_path, initial_project)
         self._apply_project_state()
-        self.current_image_index = 0 if self.image_paths else -1
+        self.session.current_image_index = 0 if self.image_paths else -1
         self.update_image_list()
         if self.image_paths:
             self.load_current_image()
@@ -380,7 +358,7 @@ class MainWindow(QMainWindow):
         """Load ``project_path`` from disk and apply it as the active project."""
         self.project_store.load(project_path)
         self._apply_project_state()
-        self.current_image_index = 0 if self.image_paths else -1
+        self.session.current_image_index = 0 if self.image_paths else -1
         self.update_image_list()
         if self.image_paths:
             self.load_current_image()
@@ -402,7 +380,7 @@ class MainWindow(QMainWindow):
         """
         self.project_store.load_for_review(project_path, image_paths)
         self._apply_project_state()
-        self.current_image_index = 0 if self.image_paths else -1
+        self.session.current_image_index = 0 if self.image_paths else -1
         self.update_image_list()
         if self.image_paths:
             self.load_current_image()
@@ -468,10 +446,10 @@ class MainWindow(QMainWindow):
         had_any_before = bool(self.image_paths)
         self.project_store.add_images(valid)
         if not had_any_before:
-            self.current_image_index = 0
+            self.session.current_image_index = 0
         self.update_image_list()
-        if self.image_paths and self.current_image_index < 0:
-            self.current_image_index = 0
+        if self.image_paths and self.session.current_image_index < 0:
+            self.session.current_image_index = 0
         self.load_current_image()
 
     def add_images_from_folder(self, folder: str) -> None:
@@ -501,15 +479,15 @@ class MainWindow(QMainWindow):
         if not paths_to_remove:
             return
         current_path = (
-            self.image_paths[self.current_image_index]
-            if 0 <= self.current_image_index < len(self.image_paths)
+            self.image_paths[self.session.current_image_index]
+            if 0 <= self.session.current_image_index < len(self.image_paths)
             else None
         )
         self.project_store.remove_images(paths_to_remove)
         if current_path in paths_to_remove or not self.image_paths:
-            self.current_image_index = 0 if self.image_paths else -1
+            self.session.current_image_index = 0 if self.image_paths else -1
         else:
-            self.current_image_index = self.image_paths.index(current_path)
+            self.session.current_image_index = self.image_paths.index(current_path)
         self.update_image_list()
         if self.image_paths:
             self.load_current_image()
@@ -672,13 +650,13 @@ class MainWindow(QMainWindow):
             else:
                 label = p.name
             self.image_list_widget.addItem(label)
-        if self.current_image_index >= 0:
-            self.image_list_widget.setCurrentRow(self.current_image_index)
+        if self.session.current_image_index >= 0:
+            self.image_list_widget.setCurrentRow(self.session.current_image_index)
 
     def load_current_image(self) -> None:
         """Load and display the current image with its annotations."""
-        if 0 <= self.current_image_index < len(self.image_paths):
-            image_path = self.image_paths[self.current_image_index]
+        if 0 <= self.session.current_image_index < len(self.image_paths):
+            image_path = self.image_paths[self.session.current_image_index]
             if self.image_viewer.load_image(image_path):
                 self.setWindowTitle(f"EyE Annotation Tool - {Path(image_path).name}")
                 self.annotation_controller.load_annotations()
@@ -693,7 +671,7 @@ class MainWindow(QMainWindow):
         re-run downstream live plugins (glint, limbus) against the
         new centre / radius.
         """
-        self.set_annotation_modified(True)
+        self.session.modified = True
         self.detection_controller.on_manual_annotation_changed()
 
     def _on_autosave_changed(self, enabled: bool) -> None:
@@ -763,8 +741,8 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event: QCloseEvent) -> None:  # noqa: N802
         """Handle the window close event with autosave + unsaved-changes prompt."""
-        if self.annotation_modified:
-            if self.autosave_enabled:
+        if self.session.modified:
+            if self.project_store.autosave:
                 self.annotation_controller.save_annotations()
             else:
                 reply = QMessageBox.question(

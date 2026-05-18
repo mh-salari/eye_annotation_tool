@@ -9,5 +9,6 @@ managing the state themselves.
 from .carry_roi_state import CarryRoiStore
 from .per_eye_state import PerEyeStateStore
 from .project_store import ProjectStore
+from .session_state import SessionState
 
-__all__ = ["CarryRoiStore", "PerEyeStateStore", "ProjectStore"]
+__all__ = ["CarryRoiStore", "PerEyeStateStore", "ProjectStore", "SessionState"]
