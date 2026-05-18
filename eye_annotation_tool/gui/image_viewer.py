@@ -1,7 +1,6 @@
 """Image viewer widget for displaying and annotating eye images."""
 
 import math
-from collections import deque
 from operator import itemgetter
 from typing import ClassVar
 
@@ -11,7 +10,7 @@ from PyQt5.QtCore import QEvent, QPoint, QPointF, QSizeF, Qt, pyqtSignal
 from PyQt5.QtGui import QColor, QImage, QKeyEvent, QPainter, QPen, QPixmap
 from PyQt5.QtWidgets import QLabel, QMessageBox, QScrollArea, QVBoxLayout, QWidget
 
-from ..state import EyeDataStore
+from ..state import EyeDataStore, UndoStack
 from ..utils.image_processing import find_closest_point, fit_ellipse
 
 # Display brightness step factor per Brighter / Darker click, and the
@@ -241,9 +240,8 @@ class ImageViewer(QWidget):
         self.inactive_eye_dim_color = QColor(0, 0, 0, 120)
 
     def setup_undo_system(self) -> None:
-        """Initialize the undo/redo system."""
-        self.undo_stack = deque(maxlen=10)
-        self.undo_index = -1
+        """Initialise the undo stack."""
+        self.undo_stack = UndoStack[dict](maxlen=10)
 
     # ---------------------------------------------------------------------------
     # Active-eye annotation properties (forward to :class:`EyeDataStore`)
@@ -375,16 +373,11 @@ class ImageViewer(QWidget):
         self.update_image()
 
     def reset_undo_stack(self, initial_state: dict | None = None) -> None:
-        """Reset the undo stack to initial state."""
-        self.undo_stack.clear()
-        self.undo_index = -1
-        if initial_state is None:
-            initial_state = self.get_current_state()
-        self.undo_stack.append(initial_state)
-        self.undo_index = 0
+        """Drop history and seed the stack with the current annotation state (or ``initial_state``)."""
+        self.undo_stack.reset(initial_state if initial_state is not None else self._snapshot_state())
 
-    def get_current_state(self) -> dict:
-        """Get the current state of all annotations."""
+    def _snapshot_state(self) -> dict:
+        """Capture the active eye's annotation fields as an undo-stack entry."""
         return {
             "pupil_points": self.pupil_points.copy(),
             "limbus_points": self.limbus_points.copy(),
@@ -395,31 +388,26 @@ class ImageViewer(QWidget):
         }
 
     def save_state(self) -> None:
-        """Save the current state to the undo stack."""
-        state = self.get_current_state()
-        if self.undo_index < len(self.undo_stack) - 1:
-            # If we're not at the end of the stack, remove future states
-            self.undo_stack = deque(list(self.undo_stack)[: self.undo_index + 1], maxlen=5)
-        self.undo_stack.append(state)
-        self.undo_index = len(self.undo_stack) - 1
+        """Push the current annotation state onto the undo stack."""
+        self.undo_stack.push(self._snapshot_state())
 
     def can_undo(self) -> bool:
-        """Check if undo operation is available."""
-        return self.undo_index > 0
+        """True when there's a previous state to step back to."""
+        return self.undo_stack.can_undo()
 
     def undo(self) -> None:
-        """Undo the last annotation change."""
-        if self.can_undo():
-            self.undo_index -= 1
-            state = self.undo_stack[self.undo_index]
-            self.pupil_points = state["pupil_points"].copy()
-            self.limbus_points = state["limbus_points"].copy()
-            self.eyelid_contour_points = state.get("eyelid_contour_points", []).copy()
-            self.glint_points = state.get("glint_points", []).copy()
-            self.pupil_ellipse = state["pupil_ellipse"]
-            self.limbus_ellipse = state["limbus_ellipse"]
-            self.update_image()
-            self.annotation_changed.emit()
+        """Restore the previous annotation state (no-op when at the start of history)."""
+        state = self.undo_stack.undo()
+        if state is None:
+            return
+        self.pupil_points = state["pupil_points"].copy()
+        self.limbus_points = state["limbus_points"].copy()
+        self.eyelid_contour_points = state.get("eyelid_contour_points", []).copy()
+        self.glint_points = state.get("glint_points", []).copy()
+        self.pupil_ellipse = state["pupil_ellipse"]
+        self.limbus_ellipse = state["limbus_ellipse"]
+        self.update_image()
+        self.annotation_changed.emit()
 
     def keyPressEvent(self, event: QKeyEvent) -> None:  # noqa: N802
         """Handle key press events."""
@@ -1554,7 +1542,7 @@ class ImageViewer(QWidget):
     def set_annotation_data(self, data: dict) -> None:
         """Set annotation data for both eyes."""
         self.set_all_eye_data(data)
-        self.reset_undo_stack(initial_state=self.get_current_state())
+        self.reset_undo_stack()
 
     def fit_ellipse(self) -> bool:
         """Fit an ellipse to annotation points."""

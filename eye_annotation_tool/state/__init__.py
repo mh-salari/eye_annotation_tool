@@ -11,5 +11,6 @@ from .eye_data_store import EyeDataStore
 from .per_eye_state import PerEyeStateStore
 from .project_store import ProjectStore
 from .session_state import SessionState
+from .undo_stack import UndoStack
 
-__all__ = ["CarryRoiStore", "EyeDataStore", "PerEyeStateStore", "ProjectStore", "SessionState"]
+__all__ = ["CarryRoiStore", "EyeDataStore", "PerEyeStateStore", "ProjectStore", "SessionState", "UndoStack"]
