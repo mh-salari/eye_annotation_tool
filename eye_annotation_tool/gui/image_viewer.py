@@ -10,7 +10,7 @@ from PyQt5.QtCore import QEvent, QPoint, QPointF, QSizeF, Qt, pyqtSignal
 from PyQt5.QtGui import QColor, QImage, QKeyEvent, QPainter, QPen, QPixmap
 from PyQt5.QtWidgets import QLabel, QMessageBox, QScrollArea, QVBoxLayout, QWidget
 
-from ..state import EyeDataStore, OverlayStore, UndoStack
+from ..state import EyeDataStore, OverlayStore, TargetRoiStore, UndoStack
 from ..utils.image_processing import find_closest_point, fit_ellipse
 
 # Display brightness step factor per Brighter / Darker click, and the
@@ -181,14 +181,11 @@ class ImageViewer(QWidget):
         # MainWindow flips this on mode change.
         self._manual_edit_enabled = True
 
-        # Per-eye, per-target Auto Detect ROI rectangles. Outer key the
-        # anatomical target, inner key the eye slot. ``_active_roi_target``
-        # is the target whose rectangle is currently in drag-edit mode —
-        # drag handles + canvas clicks only operate on the active eye's
-        # rectangle for that target; the inactive eye's rectangle paints
-        # without handles for context.
-        self._target_rois: dict[str, dict[str, tuple]] = {}
-        self._active_roi_target: str | None = None
+        # Per-eye, per-target Auto Detect ROI rectangles plus the
+        # active drag-edit target. Drag handles + canvas clicks only
+        # operate on the active eye's rectangle for the active target;
+        # the inactive eye's rectangle paints without handles for context.
+        self.target_rois = TargetRoiStore()
 
         # Per-eye, per-target threshold-mask overlays. ``_target_masks``
         # holds the ``uint8`` ndarray a plugin's ``detect`` returned under
@@ -449,19 +446,13 @@ class ImageViewer(QWidget):
 
     def _active_drag_roi(self) -> tuple | None:
         """Return the rectangle currently being drag-edited on the active eye (or None)."""
-        if self._active_roi_target is None:
-            return None
-        return self._target_rois.get(self._active_roi_target, {}).get(self.active_eye_slot())
+        return self.target_rois.active_drag_roi(self.active_eye_slot())
 
     def _set_active_drag_roi(self, value: tuple | None) -> None:
         """Write the in-progress drag rectangle to the active eye's slot for the active target."""
-        if self._active_roi_target is None:
+        if self.target_rois.active_target is None:
             return
-        slot = self.active_eye_slot()
-        if value is None:
-            self._drop_slot(self._target_rois, self._active_roi_target, slot)
-        else:
-            self._target_rois.setdefault(self._active_roi_target, {})[slot] = value
+        self.target_rois.set(self.target_rois.active_target, self.active_eye_slot(), value)
 
     # Minimum cursor movement (image coords) before a press counts as a
     # drag-to-draw rather than a click. Below this, the rectangle stays
@@ -576,7 +567,7 @@ class ImageViewer(QWidget):
                 # before any Manual-mode click-to-place flow runs. Drag
                 # operates on the active eye's slot for that target —
                 # the inactive eye's rectangle paints but isn't grabbable.
-                if self._active_roi_target is not None:
+                if self.target_rois.active_target is not None:
                     self._try_begin_roi_drag(image_pos, self._active_drag_roi())
                     return
 
@@ -695,12 +686,9 @@ class ImageViewer(QWidget):
                 self.roi_resize_handle = None
                 self._drawing_roi_committed = False
                 draw_changed_roi = (not was_drawing) or committed
-                if draw_changed_roi and self._active_roi_target is not None:
-                    target = self._active_roi_target
-                    self.target_roi_changed.emit(
-                        target,
-                        self._target_rois.get(target, {}).get(self.active_eye_slot()),
-                    )
+                if draw_changed_roi and self.target_rois.active_target is not None:
+                    target = self.target_rois.active_target
+                    self.target_roi_changed.emit(target, self.target_rois.get(target, self.active_eye_slot()))
                 return
 
             self.moving_point = False
@@ -746,7 +734,7 @@ class ImageViewer(QWidget):
         # transient (never persisted), so they always start empty on a
         # new image until the next plugin run.
         self.detection_overlays.clear_all()
-        self._target_rois.clear()
+        self.target_rois.clear_all()
         self._target_masks.clear()
         self.reset_undo_stack()
         if not self._zoom_initialized:
@@ -964,9 +952,9 @@ class ImageViewer(QWidget):
         Cancels any in-progress drag and re-paints so the corner-handle
         decoration follows the newly active target.
         """
-        if target is not None and target == self._active_roi_target:
+        if target is not None and target == self.target_rois.active_target:
             return
-        self._active_roi_target = target
+        self.target_rois.set_active_target(target)
         # Cancel any drag in progress; the user toggled the active ROI
         # while pressing the mouse — rare but worth a clean reset.
         self.drawing_roi = False
@@ -982,11 +970,7 @@ class ImageViewer(QWidget):
         Passing ``roi=None`` drops the rectangle for that slot.
         ``eye_slot`` defaults to the active eye.
         """
-        slot = self._resolve_slot(eye_slot)
-        if roi is None:
-            self._drop_slot(self._target_rois, target, slot)
-        else:
-            self._target_rois.setdefault(target, {})[slot] = tuple(roi)
+        self.target_rois.set(target, self._resolve_slot(eye_slot), roi)
         self.update_image()
 
     def clear_target_roi(self, target: str, *, eye_slot: str | None = None) -> None:
@@ -996,25 +980,20 @@ class ImageViewer(QWidget):
         plugin swap / Clear All); pass an explicit slot to clear only
         one eye's rectangle.
         """
-        if eye_slot is None:
-            if self._target_rois.pop(target, None) is None:
-                return
-        elif not self._drop_slot(self._target_rois, target, eye_slot):
+        slot = None if eye_slot is None else eye_slot
+        if not self.target_rois.clear(target, slot):
             return
         self.target_roi_changed.emit(target, None)
         self.update_image()
 
     def get_target_roi(self, target: str, *, eye_slot: str | None = None) -> tuple | None:
         """Return the ROI stored for ``(target, eye_slot)`` (or None)."""
-        slot = self._resolve_slot(eye_slot)
-        return self._target_rois.get(target, {}).get(slot)
+        return self.target_rois.get(target, self._resolve_slot(eye_slot))
 
     def clear_all_target_rois(self) -> None:
         """Drop every stored ROI across all targets and eyes (no signals)."""
-        if not self._target_rois:
-            return
-        self._target_rois.clear()
-        self.update_image()
+        if self.target_rois.clear_all():
+            self.update_image()
 
     # ----- Per-eye, per-target threshold-mask overlays -----
 
@@ -1302,14 +1281,12 @@ class ImageViewer(QWidget):
         anyway).
         """
         active_slot = self.active_eye_slot()
-        for target, by_slot in self._target_rois.items():
+        active_target = self.target_rois.active_target
+        for target, slot, roi in self.target_rois.items_for_paint():
             plugin = self._active_plugins.get(target)
             color = getattr(plugin, "roi_color", None) or self._fallback_roi_color
-            for slot, roi in by_slot.items():
-                if roi is None:
-                    continue
-                is_active = target == self._active_roi_target and slot == active_slot
-                self._draw_target_roi_box(painter, roi, color, active=is_active)
+            is_active = target == active_target and slot == active_slot
+            self._draw_target_roi_box(painter, roi, color, active=is_active)
 
     def _draw_target_roi_box(
         self,
