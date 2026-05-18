@@ -106,8 +106,26 @@ class MainWindow(QMainWindow):
         self.binocular_controller.apply_mode(not self.cli_policy.monocular)
         self.binocular_controller.annotation_modified.connect(self.set_annotation_modified)
 
-        self.annotation_controller = AnnotationController(self)
-        self.navigation_controller = NavigationController(self)
+        self.annotation_controller = AnnotationController(
+            self.image_viewer,
+            self.detection_controller,
+            self.binocular_controller,
+            self.project_store,
+            current_index_fn=lambda: self.current_image_index,
+            is_modified_fn=lambda: self.annotation_modified,
+            set_modified_fn=self.set_annotation_modified,
+            dialog_parent=self,
+        )
+        self.navigation_controller = NavigationController(
+            self.annotation_controller,
+            self.project_store,
+            self.image_list_widget,
+            self.load_current_image,
+            current_index_getter=lambda: self.current_image_index,
+            current_index_setter=self._set_current_image_index,
+            is_modified_fn=lambda: self.annotation_modified,
+            dialog_parent=self,
+        )
         self.menu_handler = MenuHandler(self)
         self.shortcut_handler = ShortcutHandler(self)
 
@@ -278,6 +296,10 @@ class MainWindow(QMainWindow):
         if 0 <= self.current_image_index < len(self.image_paths):
             return self.image_paths[self.current_image_index]
         return None
+
+    def _set_current_image_index(self, index: int) -> None:
+        """Setter exposed to :class:`NavigationController` so the index lives here."""
+        self.current_image_index = index
 
     def set_annotation_modified(self, modified: bool) -> None:
         """Set the annotation modified flag and refresh the GUI save-state indicator."""
@@ -657,10 +679,6 @@ class MainWindow(QMainWindow):
                 self.annotation_controller.load_annotations()
             else:
                 QMessageBox.critical(self, "Error", f"Failed to load image: {image_path}")
-
-    def save_current_annotations(self) -> None:
-        """Save annotations for the current image."""
-        self.annotation_controller.save_current_annotations()
 
     def on_annotation_changed(self) -> None:
         """Handle a manual-annotation edit: mark dirty and republish the manual pupil.
