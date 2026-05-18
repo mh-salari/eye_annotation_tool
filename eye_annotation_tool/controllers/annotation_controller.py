@@ -29,13 +29,15 @@ class AnnotationController:
     def save_current_annotations(self, silent: bool = False) -> None:
         """Persist annotations + detection results for the current image.
 
-        When ``silent`` is True the overwrite-confirmation dialog is skipped —
-        used by the autosave-on-image-change path so navigation isn't blocked.
+        When ``silent`` is True the overwrite-confirmation dialog is skipped
+        AND the ``annotation_modified`` gate is dropped — used by the
+        autosave-on-image-change path so every visited image's auto-detector
+        result lands on disk even when the user didn't touch the canvas.
+        Interactive (non-silent) saves still no-op when nothing changed.
         """
-        if not (
-            self.main_window.annotation_modified
-            and 0 <= self.main_window.current_image_index < len(self.main_window.image_paths)
-        ):
+        if not (0 <= self.main_window.current_image_index < len(self.main_window.image_paths)):
+            return
+        if not silent and not self.main_window.annotation_modified:
             return
         image_path = self.main_window.image_paths[self.main_window.current_image_index]
         annotation_path = get_annotation_path(image_path)

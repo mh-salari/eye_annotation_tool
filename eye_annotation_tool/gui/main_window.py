@@ -31,7 +31,14 @@ from ..auto_detectors.orchestrator import DetectorOrchestrator
 from ..auto_detectors.plugin_interface import DetectorPlugin, Target
 from ..controllers.annotation_controller import AnnotationController
 from ..controllers.navigation_controller import NavigationController
-from ..utils.project_settings import CARRY_ROI_SLOTS, DETECTOR_TARGETS, load_project_settings, save_project_settings
+from ..utils.project_settings import (
+    CARRY_ROI_SLOTS,
+    DETECTOR_TARGETS,
+    PROJECT_FILE_SUFFIX,
+    default_project,
+    load_project,
+    save_project,
+)
 from .annotation_controls import MODE_AUTO_DETECT, MODE_MANUAL, AnnotationControlPanel
 from .custom_widgets import MaterialButton
 from .image_viewer import ImageViewer
@@ -100,14 +107,19 @@ class MainWindow(QMainWindow):
         # scattering if/else checks across the code base.
         self._cli_overrides_active: bool | None = None
         self.binocular_mode = not self._cli_monocular
-        # Project-wide default divider position (0..1). Per-image overrides
-        # live in each image's annotation JSON and shadow this value while
-        # the corresponding image is loaded.
-        self.project_divider_x_norm = 0.5
-        # Per-image divider overrides keyed by absolute image path. ``None``
-        # means "no override — use project default". Populated from the
-        # image's saved JSON on load and from drag events on the canvas.
-        self._image_divider_overrides: dict[str, float | None] = {}
+        # Project state: a single in-memory dict matching the on-disk
+        # ``*.eye_annotation_project.json`` schema (see project_settings.py).
+        # ``self.project_path`` is the absolute file path the project is
+        # saved at, or ``None`` for an in-memory-only (unsaved) project.
+        # When ``project_path`` is set, every state mutation that touches
+        # the project (image add/remove, divider override change, autosave
+        # toggle, ...) writes back to disk immediately.
+        self.project: dict = default_project()
+        self.project_path: str | None = None
+        # Convenience accessor mirroring ``self.project["divider_x_norm"]``
+        # so call sites that read the project-wide default can stay terse.
+        # Per-image overrides live in ``self.project["images"][path]``.
+        self.project_divider_x_norm = float(self.project["divider_x_norm"])
         # Per-eye snapshot of every plugin's last result on the current
         # image. The orchestrator only carries the active eye's results;
         # this dict carries the OTHER eye's so switching the radio can
@@ -151,10 +163,6 @@ class MainWindow(QMainWindow):
             target: {"left": None, "right": None, "single": None} for target in DETECTOR_TARGETS
         }
         self.autosave_enabled = False
-        # All folders loaded for the current session. Project-settings writes
-        # propagate to every entry so any one of them can be reopened later
-        # with the same configuration.
-        self.project_dirs: list[str] = []
 
         # Resolved plugin instance per target, kept in sync with the current
         # project's "detectors" block. Targets whose project setting is
@@ -196,7 +204,7 @@ class MainWindow(QMainWindow):
         left_panel = QWidget()
         left_layout = QVBoxLayout()
         self.load_images_button = MaterialButton("Load Images")
-        self.load_folder_button = MaterialButton("Load Folder")
+        self.load_folder_button = MaterialButton("Load Images from Folder")
         self.prev_image_button = MaterialButton("Previous Image")
         self.next_image_button = MaterialButton("Next Image")
         self.save_annotations_button = MaterialButton("Save Annotations")
@@ -211,8 +219,18 @@ class MainWindow(QMainWindow):
         left_layout.addWidget(self.autosave_checkbox)
 
         self.image_list_widget = QListWidget()
+        self.image_list_widget.setSelectionMode(QListWidget.ExtendedSelection)
         left_layout.addWidget(QLabel("Loaded Images:"))
         left_layout.addWidget(self.image_list_widget)
+
+        # Trash button below the image list: drops selected entries from the
+        # project's image set (files on disk are untouched).
+        icon_colour_for_trash = "#e0e0e0"
+        self.remove_images_button = MaterialButton("  Remove from project", compact=True)
+        self.remove_images_button.setIcon(qta.icon("mdi6.trash-can-outline", color=icon_colour_for_trash))
+        self.remove_images_button.setIconSize(QSize(18, 18))
+        self.remove_images_button.setToolTip("Drop the selected images from the project (files on disk are kept).")
+        left_layout.addWidget(self.remove_images_button)
 
         left_layout.addStretch(1)
 
@@ -305,7 +323,6 @@ class MainWindow(QMainWindow):
 
     def setup_variables(self) -> None:
         """Initialise instance variables."""
-        self.image_paths: list[str] = []
         self.current_image_index = -1
         self.annotation_modified = False
         # Hashable identity of the last manual pupil ellipse we mirrored
@@ -315,14 +332,35 @@ class MainWindow(QMainWindow):
         self._last_manual_pupil_signature: tuple | None = None
 
     @property
-    def project_dir(self) -> str | None:
-        """Primary (first) loaded project dir, or None if no folders are loaded."""
-        return self.project_dirs[0] if self.project_dirs else None
+    def image_paths(self) -> list[str]:
+        """Ordered list of image paths in the current project, derived from ``self.project``."""
+        return list(self.project["images"].keys())
 
-    def _save_to_all_projects(self, settings: dict) -> None:
-        """Persist ``settings`` to every loaded project folder."""
-        for project_dir in self.project_dirs:
-            save_project_settings(project_dir, settings)
+    def _persist_project(self) -> None:
+        """Write ``self.project`` back to disk if the project is saved.
+
+        No-op when ``self.project_path`` is ``None`` (unsaved in-memory
+        project — the user must Save Project As before mutations persist).
+        """
+        if self.project_path is not None:
+            save_project(self.project_path, self.project)
+
+    def _project_divider_override(self, image_path: str) -> float | None:
+        """Per-image divider override stored under ``project["images"][path]``."""
+        entry = self.project["images"].get(image_path)
+        if not isinstance(entry, dict):
+            return None
+        value = entry.get("divider_x_norm")
+        return float(value) if isinstance(value, (int, float)) else None
+
+    def _set_project_divider_override(self, image_path: str, value: float | None) -> None:
+        """Set or clear the per-image divider override for ``image_path``."""
+        entry = self.project["images"].setdefault(image_path, {})
+        if value is None:
+            entry.pop("divider_x_norm", None)
+        else:
+            entry["divider_x_norm"] = float(value)
+        self._persist_project()
 
     def set_annotation_modified(self, modified: bool) -> None:
         """Set the annotation modified flag and refresh the GUI save-state indicator."""
@@ -344,12 +382,14 @@ class MainWindow(QMainWindow):
 
     def connect_signals(self) -> None:
         """Connect signals and slots for UI components."""
-        self.load_images_button.clicked.connect(self.load_images)
-        self.load_folder_button.clicked.connect(self.load_folder)
+        self.load_images_button.clicked.connect(self.on_load_images_clicked)
+        self.load_folder_button.clicked.connect(self.on_load_folder_clicked)
         self.prev_image_button.clicked.connect(self.navigation_controller.prev_image)
         self.next_image_button.clicked.connect(self.navigation_controller.next_image)
         self.save_annotations_button.clicked.connect(self.annotation_controller.save_annotations)
+        self.remove_images_button.clicked.connect(self.remove_selected_images)
         self.image_list_widget.itemClicked.connect(self.navigation_controller.on_image_selected)
+        self.image_list_widget.installEventFilter(self)
 
         self.annotation_controls.annotation_changed.connect(self.image_viewer.set_current_annotation)
         self.annotation_controls.eye_changed.connect(self._on_eye_changed)
@@ -381,73 +421,71 @@ class MainWindow(QMainWindow):
 
     IMAGE_SUFFIXES = (".png", ".jpg", ".jpeg", ".bmp")
 
-    def load_images(self) -> None:
-        """Open file dialog to load image files."""
-        file_dialog = QFileDialog()
-        image_files, _ = file_dialog.getOpenFileNames(
-            self, "Select Image Files", "", "Image Files (*.png *.jpg *.bmp)"
-        )
-        if image_files:
-            self.image_paths = image_files
-            self.current_image_index = 0
-            self._load_project_settings_from(image_files[0])
-            self.update_image_list()
+    # ----- Project lifecycle (new / open / save / save-as) -------------
+
+    def new_project(self, project_path: str, initial_project: dict | None = None) -> None:
+        """Create a brand-new project file at ``project_path`` and load it.
+
+        ``initial_project`` lets the New Project wizard pre-fill detector
+        choices, binocular mode, etc.; missing keys fall back to
+        :func:`default_project`. The file is written to disk immediately
+        and becomes the active session project.
+        """
+        self.project = default_project()
+        if isinstance(initial_project, dict):
+            for key, value in initial_project.items():
+                self.project[key] = value
+        self.project_path = str(project_path)
+        save_project(self.project_path, self.project)
+        self._apply_project_state()
+        self.current_image_index = 0 if self.image_paths else -1
+        self.update_image_list()
+        if self.image_paths:
             self.load_current_image()
 
-    def load_folder(self) -> None:
-        """Pick a folder via dialog and load every supported image (non-recursive)."""
-        folder = QFileDialog.getExistingDirectory(self, "Select Image Folder", "")
-        if folder:
-            self.load_folder_paths([folder])
-
-    def load_folder_paths(self, folders: list[str]) -> None:
-        """Load every supported image directly inside each of ``folders``.
-
-        Listing is non-recursive — subdirectories are ignored. The aggregated
-        image list is sorted lexicographically. If the loaded folders carry
-        different project-settings files, the user is asked which to use and
-        the chosen settings are written back to every folder.
-        """
-        if not folders:
-            return
-        suffixes = self.IMAGE_SUFFIXES
-        seen: set[str] = set()
-        for folder in folders:
-            for p in Path(folder).iterdir():
-                if p.is_file() and p.suffix.lower() in suffixes:
-                    seen.add(str(p))
-        image_paths = sorted(seen)
-        if not image_paths:
-            QMessageBox.warning(
-                self,
-                "No Images Found",
-                "No image files found in: " + ", ".join(str(Path(f)) for f in folders),
-            )
-            return
-        if not self._apply_project_settings([str(Path(f)) for f in folders]):
-            return
-        self.image_paths = image_paths
-        self.current_image_index = 0
+    def open_project(self, project_path: str) -> None:
+        """Load ``project_path`` from disk and apply it as the active project."""
+        self.project = load_project(project_path)
+        self.project_path = str(project_path)
+        self._apply_project_state()
+        self.current_image_index = 0 if self.image_paths else -1
         self.update_image_list()
-        self.load_current_image()
+        if self.image_paths:
+            self.load_current_image()
 
-    def load_image_paths(self, images: list[str]) -> None:
-        """Load an explicit list of image files in sorted order.
-
-        Lets a caller (or the ``--images`` CLI flag) hand-pick which
-        images to load, ignoring other files in the same folder.
-        Project settings are taken from the union of each image's
-        parent folder via the same chooser path as
-        :meth:`load_folder_paths`; non-image paths are dropped, missing
-        files are surfaced once.
-        """
-        if not images:
+    def save_project(self) -> None:
+        """Write ``self.project`` to ``self.project_path``; prompt for path if unsaved."""
+        if self.project_path is None:
+            self.save_project_as()
             return
+        save_project(self.project_path, self.project)
+
+    def save_project_as(self) -> None:
+        """Prompt for a save path and persist ``self.project`` there."""
+        path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Save Project As",
+            "",
+            f"Project Files (*{PROJECT_FILE_SUFFIX})",
+        )
+        if not path:
+            return
+        if not path.endswith(PROJECT_FILE_SUFFIX):
+            path = path + PROJECT_FILE_SUFFIX
+        self.project_path = path
+        save_project(self.project_path, self.project)
+
+    def add_images(self, image_paths: list[str]) -> None:
+        """Append ``image_paths`` to the project's images dict.
+
+        Already-present paths are skipped. Non-image / missing files are
+        filtered out and surfaced via a single info dialog so callers
+        don't need to pre-validate.
+        """
         suffixes = self.IMAGE_SUFFIXES
-        missing = [str(p) for p in images if not Path(p).is_file()]
-        valid_paths = [Path(p) for p in images if Path(p).is_file() and Path(p).suffix.lower() in suffixes]
-        image_paths = sorted({str(p) for p in valid_paths})
-        if not image_paths:
+        missing = [str(p) for p in image_paths if not Path(p).is_file()]
+        valid = [str(Path(p)) for p in image_paths if Path(p).is_file() and Path(p).suffix.lower() in suffixes]
+        if not valid:
             QMessageBox.warning(
                 self,
                 "No Images Loaded",
@@ -461,140 +499,133 @@ class MainWindow(QMainWindow):
                 "Some Images Skipped",
                 "Some supplied paths were not loadable images:\n  - " + "\n  - ".join(missing),
             )
-        parent_dirs = sorted({str(p.parent) for p in valid_paths})
-        if not self._apply_project_settings(parent_dirs):
-            return
-        self.image_paths = image_paths
-        self.current_image_index = 0
+        had_any_before = bool(self.image_paths)
+        for path in valid:
+            self.project["images"].setdefault(path, {})
+        self._persist_project()
+        if not had_any_before:
+            self.current_image_index = 0
         self.update_image_list()
+        if self.image_paths and self.current_image_index < 0:
+            self.current_image_index = 0
         self.load_current_image()
 
-    def _load_project_settings_from(self, image_path: str) -> None:
-        """Read the project settings file in the image's folder and apply it."""
-        self._apply_project_settings([str(Path(image_path).parent)])
+    def add_images_from_folder(self, folder: str) -> None:
+        """Append every supported image directly inside ``folder`` (non-recursive)."""
+        suffixes = self.IMAGE_SUFFIXES
+        found = sorted(
+            str(p) for p in Path(folder).iterdir()
+            if p.is_file() and p.suffix.lower() in suffixes
+        )
+        if not found:
+            QMessageBox.warning(
+                self,
+                "No Images Found",
+                f"No image files found in: {folder}",
+            )
+            return
+        self.add_images(found)
 
-    def _apply_project_settings(self, project_dirs: list[str]) -> bool:
-        """Apply project settings across ``project_dirs`` and propagate to all of them.
+    def remove_selected_images(self) -> None:
+        """Drop the currently-selected image-list rows from the project's image set.
 
-        Loads each folder's settings file; if non-empty configs differ, asks
-        the user which one to use as the source (default = first). The chosen
-        settings are immediately written to every folder so any of them can be
-        reopened later with the same configuration.
-
-        Returns ``False`` if the user cancels the chooser dialog; ``True``
-        otherwise (including the no-conflict path).
+        Files on disk are untouched — only the project's image dict is
+        mutated. Triggered by the trash icon below the image list and by
+        the Delete / Backspace key on the list widget.
         """
-        if not project_dirs:
-            self.project_dirs = []
-            return True
-        per_dir = {d: load_project_settings(d) for d in project_dirs}
-        # Group folders by configuration. Stable order = order of first
-        # appearance, so the first folder's settings stay the default.
-        groups: list[tuple[dict, list[str]]] = []
-        for d, settings in per_dir.items():
-            for cfg, dirs in groups:
-                if cfg == settings:
-                    dirs.append(d)
-                    break
-            else:
-                groups.append((settings, [d]))
-        if len(groups) == 1:
-            chosen = groups[0][0]
+        selected = self.image_list_widget.selectedIndexes()
+        if not selected:
+            return
+        paths_to_remove = [self.image_paths[idx.row()] for idx in selected if 0 <= idx.row() < len(self.image_paths)]
+        if not paths_to_remove:
+            return
+        current_path = (
+            self.image_paths[self.current_image_index]
+            if 0 <= self.current_image_index < len(self.image_paths) else None
+        )
+        for path in paths_to_remove:
+            self.project["images"].pop(path, None)
+        self._persist_project()
+        if current_path in paths_to_remove or not self.image_paths:
+            self.current_image_index = 0 if self.image_paths else -1
         else:
-            chosen = self._choose_settings_among(groups)
-            if chosen is None:
-                return False
-        self.project_dirs = list(project_dirs)
-        self._save_to_all_projects(chosen)
-        project_settings = chosen
-        # Decide once per session whether CLI flags win over the loaded
-        # project file. The decision lives in ``_cli_overrides_active``
-        # and is consulted only via the ``_session_*`` helpers below —
-        # adding a new CLI flag means adding one helper, not scattering
-        # if/else checks across every read site. When the user accepts
-        # the override, the resulting settings are written back to disk
-        # so subsequent launches read the new state directly and the
-        # dialog does not re-appear.
-        self._resolve_cli_overrides_policy(project_settings)
-        project_settings["binocular_mode"] = self._session_binocular(project_settings.get("binocular_mode", True))
-        project_settings["detectors"] = self._session_detectors(project_settings.get("detectors", {}))
+            self.current_image_index = self.image_paths.index(current_path)
+        self.update_image_list()
+        if self.image_paths:
+            self.load_current_image()
+        else:
+            self.image_viewer.clear()
+
+    # ----- Apply project state to the rest of the UI -------------------
+
+    def _apply_project_state(self) -> None:
+        """Push ``self.project`` settings into the dependent widgets.
+
+        Called once after every project load (new / open). Mutating
+        settings during a session is done in place on ``self.project``
+        + ``self._persist_project()``; no need to call this method
+        again unless the whole project is swapped.
+        """
+        self._resolve_cli_overrides_policy(self.project)
+        self.project["binocular_mode"] = self._session_binocular(self.project.get("binocular_mode", True))
+        self.project["detectors"] = self._session_detectors(self.project.get("detectors", {}))
         if self._cli_overrides_active:
-            self._save_to_all_projects(project_settings)
-        self._apply_binocular_mode(bool(project_settings.get("binocular_mode", True)))
-        self.project_divider_x_norm = float(project_settings.get("divider_x_norm", 0.5))
+            self._persist_project()
+        self._apply_binocular_mode(bool(self.project.get("binocular_mode", True)))
+        self.project_divider_x_norm = float(self.project.get("divider_x_norm", 0.5))
         self.image_viewer.set_divider_x_norm(self._effective_divider_x_norm())
-        self._apply_enabled_plugins(project_settings.get("detectors", {}))
+        self._apply_enabled_plugins(self.project.get("detectors", {}))
         self.menu_handler.update_auto_detectors_menu()
-        # Restore the last used mode for this project; setChecked fires the
-        # button's toggled signal which drives _on_mode_changed.
-        saved_mode = project_settings.get("current_mode", MODE_MANUAL)
+        saved_mode = self.project.get("current_mode", MODE_MANUAL)
         if saved_mode == MODE_AUTO_DETECT:
             self.annotation_controls.mode_auto_detect_button.setChecked(True)
         else:
             self.annotation_controls.mode_manual_button.setChecked(True)
-        # Restore autosave toggle from the project file.
-        autosave = bool(project_settings.get("autosave", False))
+        autosave = bool(self.project.get("autosave", False))
         self.autosave_enabled = autosave
         self.autosave_checkbox.blockSignals(True)
         self.autosave_checkbox.setChecked(autosave)
         self.autosave_checkbox.blockSignals(False)
-        return True
 
-    def _choose_settings_among(self, groups: list[tuple[dict, list[str]]]) -> dict | None:
-        """Modal radio chooser when loaded folders carry different settings.
+    # ----- File-menu action stubs (wired by MenuHandler) ---------------
 
-        ``groups`` is a list of ``(settings, [folders])`` tuples. Defaults to
-        the first group. Returns the chosen settings dict, or ``None`` if the
-        user cancels. The per-group preview is a short summary of the
-        meaningful fields (binocular flag, mode, autosave, enabled
-        detectors) rather than the raw dict, so the dialog stays
-        readable when multi-target carry-roi blocks bloat the settings.
-        """
-        dialog = QDialog(self)
-        dialog.setWindowTitle("Project settings differ")
-        dialog.setMinimumWidth(520)
-        layout = QVBoxLayout(dialog)
-        layout.addWidget(
-            QLabel(
-                "The selected folders carry different project settings. Pick the\n"
-                "configuration to use — it will be saved to all loaded folders.",
-            ),
-        )
-        button_group = QButtonGroup(dialog)
-        for i, (cfg, dirs) in enumerate(groups):
-            dirs_label = ", ".join(Path(d).name for d in dirs)
-            radio = QRadioButton(f"{dirs_label}\n    {self._format_project_settings_summary(cfg)}")
-            if i == 0:
-                radio.setChecked(True)
-            button_group.addButton(radio, i)
-            layout.addWidget(radio)
-        button_box = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
-        button_box.accepted.connect(dialog.accept)
-        button_box.rejected.connect(dialog.reject)
-        layout.addWidget(button_box)
+    def on_new_project(self) -> None:
+        """File > New Project — show the wizard, then create + load the project."""
+        from .new_project_dialog import NewProjectDialog  # local import: GUI-only
+
+        dialog = NewProjectDialog(self)
         if dialog.exec_() != QDialog.Accepted:
-            return None
-        return groups[button_group.checkedId()][0]
+            return
+        result = dialog.result_payload()
+        self.new_project(result["path"], result["project"])
 
-    @staticmethod
-    def _format_project_settings_summary(settings: dict) -> str:
-        """Compact one-liner of the human-meaningful project-settings fields.
+    def on_open_project(self) -> None:
+        """File > Open Project — pick a file, load it."""
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Open Project",
+            "",
+            f"Project Files (*{PROJECT_FILE_SUFFIX})",
+        )
+        if path:
+            self.open_project(path)
 
-        Skips bulky internals (carry-roi rectangles, per-plugin params)
-        and surfaces only what differs between two saved configurations
-        in practice: binocular flag, current mode, autosave, and which
-        detector targets are enabled.
-        """
-        parts: list[str] = [
-            "binocular" if settings.get("binocular_mode", True) else "monocular",
-            f"mode={settings.get('current_mode', 'manual')}",
-        ]
-        if settings.get("autosave"):
-            parts.append("autosave")
-        detectors = settings.get("detectors") or {}
-        enabled = [t for t, block in detectors.items() if block.get("plugin", "disabled") != "disabled"]
-        parts.append(f"detectors=[{', '.join(enabled) if enabled else 'none'}]")
-        return ", ".join(parts)
+    def on_load_images_clicked(self) -> None:
+        """Left-panel "Load Images" button — file picker, appends to project."""
+        files, _ = QFileDialog.getOpenFileNames(
+            self,
+            "Select Image Files",
+            "",
+            "Image Files (*.png *.jpg *.bmp)",
+        )
+        if files:
+            self.add_images(files)
+
+    def on_load_folder_clicked(self) -> None:
+        """Left-panel "Load Images from Folder" button — folder picker, appends to project."""
+        folder = QFileDialog.getExistingDirectory(self, "Select Image Folder", "")
+        if folder:
+            self.add_images_from_folder(folder)
 
     # ----- CLI override session policy ---------------------------------
 
@@ -700,12 +731,10 @@ class MainWindow(QMainWindow):
         self.annotation_controls.set_binocular(enabled)
 
     def _on_binocular_toggled(self, enabled: bool) -> None:
-        """Handle the Binocular checkbox flipping; persist to project settings."""
+        """Handle the Binocular checkbox flipping; persist to the project file."""
         self._apply_binocular_mode(enabled)
-        if self.project_dirs:
-            settings = load_project_settings(self.project_dir)
-            settings["binocular_mode"] = enabled
-            self._save_to_all_projects(settings)
+        self.project["binocular_mode"] = enabled
+        self._persist_project()
 
     def _active_eye_slot(self) -> str:
         """Return the per-eye cache slot for the currently active eye.
@@ -796,7 +825,7 @@ class MainWindow(QMainWindow):
         """Return the per-image divider override for the current image (or ``None``)."""
         if not (0 <= self.current_image_index < len(self.image_paths)):
             return None
-        return self._image_divider_overrides.get(self.image_paths[self.current_image_index])
+        return self._project_divider_override(self.image_paths[self.current_image_index])
 
     def _effective_divider_x_norm(self) -> float:
         """Return divider position for the current image (override or project default)."""
@@ -817,7 +846,7 @@ class MainWindow(QMainWindow):
         new override flag does not require touching this method.
         """
         if 0 <= self.current_image_index < len(self.image_paths):
-            self._image_divider_overrides[self.image_paths[self.current_image_index]] = divider_x_norm
+            self._set_project_divider_override(self.image_paths[self.current_image_index], divider_x_norm)
         effective_binocular = self._session_binocular(binocular_mode)
         if effective_binocular != self.binocular_mode:
             self._apply_binocular_mode(effective_binocular)
@@ -827,7 +856,7 @@ class MainWindow(QMainWindow):
         """Persist a user-driven divider drag as a per-image override."""
         if not (0 <= self.current_image_index < len(self.image_paths)):
             return
-        self._image_divider_overrides[self.image_paths[self.current_image_index]] = float(value)
+        self._set_project_divider_override(self.image_paths[self.current_image_index], float(value))
         self.set_annotation_modified(True)
 
     def _on_mode_changed(self, mode: str) -> None:
@@ -850,11 +879,8 @@ class MainWindow(QMainWindow):
         # manual annotations so the user can see them, but blocks edits
         # until they switch back.
         self.image_viewer.set_manual_edit_enabled(mode == MODE_MANUAL)
-        if not self.project_dirs:
-            return
-        settings = load_project_settings(self.project_dir)
-        settings["current_mode"] = mode
-        self._save_to_all_projects(settings)
+        self.project["current_mode"] = mode
+        self._persist_project()
 
     def _cancel_active_roi_edit(self) -> None:
         """Drop the active ROI drag-edit state on the canvas and untoggle every panel button.
@@ -875,12 +901,13 @@ class MainWindow(QMainWindow):
     def update_image_list(self) -> None:
         """Update the image list widget with current image paths.
 
-        When a project folder is set, display each entry as its path relative
-        to that root so files with the same basename in different subdirs are
-        distinguishable.
+        When a project file is set, display each entry as its path relative
+        to the project file's directory so files with the same basename in
+        different subdirs are distinguishable. Falls back to bare filenames
+        when the project hasn't been saved yet.
         """
         self.image_list_widget.clear()
-        project_root = Path(self.project_dir) if self.project_dir else None
+        project_root = Path(self.project_path).parent if self.project_path else None
         for image_path in self.image_paths:
             p = Path(image_path)
             if project_root is not None:
@@ -932,10 +959,8 @@ class MainWindow(QMainWindow):
     def _on_autosave_changed(self, enabled: bool) -> None:
         """Persist the autosave toggle in project settings."""
         self.autosave_enabled = enabled
-        if self.project_dirs:
-            project_settings = load_project_settings(self.project_dir)
-            project_settings["autosave"] = enabled
-            self._save_to_all_projects(project_settings)
+        self.project["autosave"] = enabled
+        self._persist_project()
         self._refresh_save_state_indicator()
 
     def collect_detections_for_save(self) -> dict:
@@ -1262,10 +1287,7 @@ class MainWindow(QMainWindow):
 
     def current_plugin_for_target(self, target: Target) -> str:
         """Return the slug of the plugin currently chosen for ``target`` (or ``"disabled"``)."""
-        if not self.project_dirs:
-            return "disabled"
-        settings = load_project_settings(self.project_dir)
-        return settings.get("detectors", {}).get(target, {}).get("plugin", "disabled")
+        return self.project.get("detectors", {}).get(target, {}).get("plugin", "disabled")
 
     def select_plugin_for_target(self, target: Target, plugin_name: str) -> None:
         """Set ``target``'s plugin to ``plugin_name`` and rebuild the Auto Detect panels.
@@ -1277,14 +1299,7 @@ class MainWindow(QMainWindow):
         a different plugin do not leak across. Switching to the same
         plugin is a no-op.
         """
-        if not self.project_dirs:
-            self.statusBar().showMessage(
-                "Load images first — detector choices live in the project settings file.",
-                5000,
-            )
-            return
-        settings = load_project_settings(self.project_dir)
-        detectors = settings.setdefault("detectors", {})
+        detectors = self.project.setdefault("detectors", {})
         current = detectors.get(target, {}).get("plugin", "disabled")
         if current == plugin_name:
             return
@@ -1295,8 +1310,7 @@ class MainWindow(QMainWindow):
             if plugin is None or plugin.target != target:
                 return
             detectors[target] = {"plugin": plugin_name, "params": plugin.default_params()}
-        settings["detectors"] = detectors
-        self._save_to_all_projects(settings)
+        self._persist_project()
         # Wipe per-image overlay / ROI / mask state across both eyes
         # for the target the user is actually changing — the old
         # plugin's result must not leak into the new plugin's slot.
@@ -1332,13 +1346,6 @@ class MainWindow(QMainWindow):
         about to be overwritten with the slider state from the Auto
         Detect panels.
         """
-        if not self.project_dirs:
-            QMessageBox.information(
-                self,
-                "No Project Loaded",
-                "Load images first; project defaults are saved into the loaded folder's settings file.",
-            )
-            return
         if not self._enabled_plugins:
             QMessageBox.information(
                 self,
@@ -1360,8 +1367,7 @@ class MainWindow(QMainWindow):
         # so the project file captures both eyes at once when the user has
         # been tuning per-eye in the same image.
         self._snapshot_panel_params_to_per_eye(active_slot)
-        settings = load_project_settings(self.project_dir)
-        detectors = settings.setdefault("detectors", {})
+        detectors = self.project.setdefault("detectors", {})
         for target, plugin in self._enabled_plugins.items():
             panel = self.annotation_controls.auto_detect_panel(plugin.name)
             if panel is None:
@@ -1393,8 +1399,7 @@ class MainWindow(QMainWindow):
                     "values": {slot: list(roi) if roi is not None else None for slot, roi in viewer_rois.items()},
                 },
             }
-        settings["detectors"] = detectors
-        self._save_to_all_projects(settings)
+        self._persist_project()
         self._refresh_carry_checkboxes()
         self.statusBar().showMessage("Project defaults saved.", 3000)
 
@@ -1815,10 +1820,7 @@ class MainWindow(QMainWindow):
 
     def _persist_carry_roi(self, target: Target) -> None:
         """Write the per-eye carry-over enable flags + values for ``target`` to the project file."""
-        if not self.project_dirs:
-            return
-        settings = load_project_settings(self.project_dir)
-        detectors = settings.setdefault("detectors", {})
+        detectors = self.project.setdefault("detectors", {})
         entry = detectors.setdefault(target, {"plugin": "disabled", "params": {}})
         entry["carry_roi"] = {
             "enabled": {
@@ -1829,7 +1831,7 @@ class MainWindow(QMainWindow):
                 for slot, value in self._carry_roi_values[target].items()
             },
         }
-        self._save_to_all_projects(settings)
+        self._persist_project()
 
     def _refresh_carry_checkboxes(self) -> None:
         """Sync each panel's Carry checkbox + Override button to the active eye's state.
@@ -1937,13 +1939,17 @@ class MainWindow(QMainWindow):
         super().moveEvent(event)
 
     def eventFilter(self, obj: QWidget, event: QEvent) -> bool:  # noqa: N802
-        """Filter events for window state changes."""
+        """Filter events for window state changes + image-list Delete/Backspace."""
         if event.type() == QEvent.WindowStateChange:
             if self.windowState() & Qt.WindowMaximized:
                 pass
             elif self.windowState() == Qt.WindowNoState:
                 # When restored from maximised, set to 75% of the current screen.
                 self.resize_to_percentage(0.75)
+        if obj is self.image_list_widget and event.type() == QEvent.KeyPress:
+            if event.key() in (Qt.Key_Delete, Qt.Key_Backspace):
+                self.remove_selected_images()
+                return True
         return super().eventFilter(obj, event)
 
     def closeEvent(self, event: QCloseEvent) -> None:  # noqa: N802

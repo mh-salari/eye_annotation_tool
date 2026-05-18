@@ -1,63 +1,44 @@
-"""Per-project settings persisted alongside the images.
+"""Single-file project persistence.
 
-Settings live in ``<project_dir>/.eye_annotation_project.json``. The project
-directory is the folder of the currently loaded images. The file is
-auto-created when a project-scoped setting is changed (e.g. a detector
-plugin is picked, autosave is toggled) and auto-loaded the next time
-images from that folder are opened.
+A project is one ``*.eye_annotation_project.json`` file at a path the user
+chooses. It holds the working image set plus all annotation settings, and is
+updated in place whenever the image set or settings change.
 
-Current schema::
+Schema::
 
     {
+      "images": {
+        "/abs/path/img1.png": {},
+        "/abs/path/img2.png": {"divider_x_norm": 0.47}
+      },
       "binocular_mode": true,
       "divider_x_norm": 0.5,
       "autosave": false,
       "current_mode": "manual",
       "detectors": {
-        "pupil":  {
-          "plugin": "threshold_pupil" | "disabled",
-          "params": {
-            "left":   {...} | null,
-            "right":  {...} | null,
-            "single": {...} | null
-          },
-          "carry_roi": {
-            "enabled": {"left": false, "right": false, "single": false},
-            "values":  {"left": [x, y, w, h] | null,
-                        "right": [x, y, w, h] | null,
-                        "single": [x, y, w, h] | null}
-          }
-        },
-        "glint":  {"plugin": "disabled", "params": {...}, "carry_roi": {...}},
-        "limbus": {"plugin": "disabled", "params": {...}, "carry_roi": {...}},
-        "eyelid": {"plugin": "disabled", "params": {...}, "carry_roi": {...}}
+        "pupil":  {"plugin": "threshold_pupil" | "disabled",
+                    "params": {"left": {...}|null, "right": {...}|null, "single": {...}|null},
+                    "carry_roi": {"enabled": {...}, "values": {...}}},
+        "glint":  {...},
+        "limbus": {...},
+        "eyelid": {...}
       }
     }
 
-``binocular_mode`` defaults to ``True``. ``divider_x_norm`` is the
-project-wide default split between the two eyes, expressed as a
-fraction of image width in ``[0, 1]``. Per-image annotation files can
-override the divider; the project value is the fallback when an image
-has no per-image override.
+Each image is keyed by its absolute path; the value is a dict of optional
+per-image overrides. Right now the only such override is ``divider_x_norm``,
+which beats the project-wide default for that one image. An empty ``{}`` means
+"no overrides, use project defaults".
 
-``params`` is per-eye: each slot (``left``, ``right``, ``single``) holds
-the panel-slider defaults for that eye, written by the plugin's "Set
-as project defaults" action. A slot value of ``null`` means "no
-project default for this eye"; the panel falls back to the plugin's
-:meth:`default_params` until the user tunes and saves. The ROI lives
-in :attr:`carry_roi.values`, not in ``params``.
-
-``carry_roi.enabled`` is per-eye too — the "Carry to other images"
-checkbox tracks the active eye's flag, so the user can enable carry
-for one eye without forcing it on for the other. ``carry_roi.values``
-holds the per-eye ROI rectangle that downstream image loads inject
-when the slot's enable flag is True.
+Per-image annotation files still live as ``<image_stem>_annotation.json`` next to
+each image — the project file owns the image *set* and the *settings*, not the
+per-image annotations.
 """
 
 import json
 from pathlib import Path
 
-PROJECT_SETTINGS_FILENAME = ".eye_annotation_project.json"
+PROJECT_FILE_SUFFIX = ".eye_annotation_project.json"
 
 # Anatomical targets the project can configure a detector plugin for.
 DETECTOR_TARGETS = ("pupil", "glint", "limbus", "eyelid")
@@ -72,12 +53,6 @@ DEFAULT_DETECTOR_PLUGINS: dict[str, str] = {
     "limbus": "daugman_limbus",
     "eyelid": "disabled",
 }
-
-
-def project_settings_path(project_dir: str | Path) -> Path:
-    """Return the path to the project settings file inside ``project_dir``."""
-    return Path(project_dir) / PROJECT_SETTINGS_FILENAME
-
 
 DEFAULT_DIVIDER_X_NORM = 0.5
 
@@ -100,9 +75,10 @@ def _default_params_per_eye() -> dict:
     return dict.fromkeys(CARRY_ROI_SLOTS)
 
 
-def _default_settings() -> dict:
-    """Return a fresh deep dict of the project-settings defaults."""
+def default_project() -> dict:
+    """Return a fresh deep dict of an empty project's defaults."""
     return {
+        "images": {},
         "binocular_mode": True,
         "divider_x_norm": DEFAULT_DIVIDER_X_NORM,
         "autosave": False,
@@ -118,33 +94,53 @@ def _default_settings() -> dict:
     }
 
 
-def load_project_settings(project_dir: str | Path | None) -> dict:
-    """Load project settings from ``project_dir``; return defaults if absent.
+def load_project(project_path: str | Path) -> dict:
+    """Load a project file from ``project_path`` and return a normalised payload.
 
-    Returns a fresh dict each time so the caller can mutate safely.
-    Unknown top-level keys in the loaded file are preserved; missing
-    keys are filled from defaults.
+    Missing or unreadable files return :func:`default_project`. Unknown top-level
+    keys in the loaded file are preserved; missing keys are filled from defaults.
     """
-    settings = _default_settings()
-    if project_dir is None:
-        return settings
-    path = project_settings_path(project_dir)
+    project = default_project()
+    path = Path(project_path)
     if not path.exists():
-        return settings
+        return project
     try:
         loaded = json.loads(path.read_text(encoding="utf-8"))
     except json.JSONDecodeError:
-        return settings
-    # Merge top-level keys first, then merge the detectors sub-dict so a
-    # file that only configures one target doesn't wipe the others.
+        return project
     detectors_in = loaded.pop("detectors", None)
-    settings.update(loaded)
+    images_in = loaded.pop("images", None)
+    project.update(loaded)
+    if isinstance(images_in, dict):
+        project["images"] = _parse_images(images_in)
     if isinstance(detectors_in, dict):
         for target in DETECTOR_TARGETS:
             entry = detectors_in.get(target)
             if isinstance(entry, dict):
-                settings["detectors"][target] = _parse_detector_entry(entry)
-    return settings
+                project["detectors"][target] = _parse_detector_entry(entry)
+    return project
+
+
+def save_project(project_path: str | Path, project: dict) -> None:
+    """Write ``project`` to ``project_path``."""
+    path = Path(project_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(project, indent=2) + "\n", encoding="utf-8")
+
+
+def _parse_images(images_in: dict) -> dict:
+    """Normalise the ``images`` map: keep absolute-path keys, well-formed value dicts."""
+    out: dict[str, dict] = {}
+    for key, value in images_in.items():
+        if not isinstance(key, str):
+            continue
+        per_image: dict = {}
+        if isinstance(value, dict):
+            divider = value.get("divider_x_norm")
+            if isinstance(divider, (int, float)):
+                per_image["divider_x_norm"] = float(divider)
+        out[key] = per_image
+    return out
 
 
 def _parse_detector_entry(entry: dict) -> dict:
@@ -185,9 +181,3 @@ def _parse_carry_roi(carry_in: object) -> dict:
                 tuple(int(c) for c in v) if isinstance(v, (list, tuple)) and len(v) == 4 else None
             )
     return carry
-
-
-def save_project_settings(project_dir: str | Path, settings: dict) -> None:
-    """Write ``settings`` to the project settings file under ``project_dir``."""
-    path = project_settings_path(project_dir)
-    path.write_text(json.dumps(settings, indent=2) + "\n", encoding="utf-8")

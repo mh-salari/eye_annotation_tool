@@ -21,11 +21,17 @@ class NavigationController:
         self.main_window = main_window
 
     def _handle_unsaved_before_switch(self) -> bool:
-        """Save / prompt / cancel based on autosave; return True to proceed with the switch."""
-        if not self.main_window.annotation_modified:
-            return True
+        """Save / prompt / cancel based on autosave; return True to proceed with the switch.
+
+        When autosave is enabled, every navigation persists the current image
+        regardless of whether the user touched it — auto-detector results are
+        produced automatically on image load, and skipping the save would
+        leave them out of the on-disk annotation.
+        """
         if self.main_window.autosave_enabled:
             self.main_window.annotation_controller.save_current_annotations(silent=True)
+            return True
+        if not self.main_window.annotation_modified:
             return True
         reply = self.show_save_dialog()
         if reply == QMessageBox.Cancel:
