@@ -31,6 +31,7 @@ from ..auto_detectors.orchestrator import DetectorOrchestrator
 from ..auto_detectors.plugin_interface import DetectorPlugin, Target
 from ..controllers.annotation_controller import AnnotationController
 from ..controllers.navigation_controller import NavigationController
+from ..policy import CliOverridePolicy
 from ..state import CarryRoiStore, PerEyeStateStore
 from ..utils.project_settings import (
     CARRY_ROI_SLOTS,
@@ -94,18 +95,8 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("EyE Annotation Tool")
         self.plugin_manager = PluginManager()
         self.orchestrator = DetectorOrchestrator(self)
-        self._cli_monocular = bool(cli_monocular)
-        self._cli_auto_detectors: set[str] | None = set(cli_auto_detectors) if cli_auto_detectors is not None else None
-        # Session policy for CLI flag overrides. ``None`` = undecided
-        # (no CLI flags or no project file loaded yet); ``True`` = user
-        # accepted the override at startup, so CLI flags win for the
-        # whole session; ``False`` = user kept the project settings,
-        # CLI flags are ignored. Single source of truth queried by
-        # :meth:`_monocular_locked` / :meth:`_auto_detectors_locked` —
-        # adding a new CLI flag means extending one helper, not
-        # scattering if/else checks across the code base.
-        self._cli_overrides_active: bool | None = None
-        self.binocular_mode = not self._cli_monocular
+        self.cli_policy = CliOverridePolicy(cli_monocular, cli_auto_detectors)
+        self.binocular_mode = not self.cli_policy.monocular
         # Project state: a single in-memory dict matching the on-disk
         # ``*.eye_annotation_project.json`` schema (see project_settings.py).
         # ``self.project_path`` is the absolute file path the project is
@@ -585,9 +576,9 @@ class MainWindow(QMainWindow):
         again unless the whole project is swapped.
         """
         self._resolve_cli_overrides_policy(self.project)
-        self.project["binocular_mode"] = self._session_binocular(self.project.get("binocular_mode", True))
-        self.project["detectors"] = self._session_detectors(self.project.get("detectors", {}))
-        if self._cli_overrides_active:
+        self.project["binocular_mode"] = self.cli_policy.session_binocular(self.project.get("binocular_mode", True))
+        self.project["detectors"] = self.cli_policy.session_detectors(self.project.get("detectors", {}))
+        if self.cli_policy.is_active():
             self._persist_project()
         self._apply_binocular_mode(bool(self.project.get("binocular_mode", True)))
         self.project_divider_x_norm = float(self.project.get("divider_x_norm", 0.5))
@@ -647,82 +638,29 @@ class MainWindow(QMainWindow):
 
     # ----- CLI override session policy ---------------------------------
 
-    def _has_any_cli_override(self) -> bool:
-        """Return True iff at least one CLI override flag was given."""
-        return self._cli_monocular or self._cli_auto_detectors is not None
-
-    def _monocular_locked(self) -> bool:
-        """``--monocular`` is in force for this session."""
-        return self._cli_monocular and self._cli_overrides_active is True
-
-    def _auto_detectors_locked(self) -> bool:
-        """``--auto-detectors`` is in force for this session."""
-        return self._cli_auto_detectors is not None and self._cli_overrides_active is True
-
-    def _session_binocular(self, source_value: bool) -> bool:
-        """Apply the session policy to a raw binocular flag.
-
-        Returns ``False`` when ``--monocular`` is locked for the session,
-        otherwise returns ``source_value`` unchanged. Used by both the
-        project-settings load path and the per-image meta load path so
-        the policy gate lives in exactly one helper.
-        """
-        return False if self._monocular_locked() else bool(source_value)
-
-    def _session_detectors(self, source_value: dict) -> dict:
-        """Apply the session policy to a raw detectors dict.
-
-        When ``--auto-detectors`` is locked, returns a dict with only
-        the CLI-listed targets enabled (the others forced to
-        ``"disabled"``); otherwise returns ``source_value`` unchanged.
-        """
-        if self._auto_detectors_locked():
-            return self._override_detectors_from_cli(source_value)
-        return source_value
-
     def _resolve_cli_overrides_policy(self, project_settings: dict) -> None:
-        """Set ``self._cli_overrides_active`` once for the loaded project.
+        """Decide whether CLI flags win for this session.
 
-        With no CLI flags, the policy is irrelevant — set to ``False``
-        and return. With CLI flags but no conflict (the project file
-        already matches the requested state), set to ``True`` silently;
-        applying overrides is a no-op so there is nothing for the user
-        to decide. With CLI flags that disagree with the project file,
-        show a dialog so the user picks which side wins for the session.
+        With no CLI flags, the policy stays inactive — applying overrides
+        is a no-op. With CLI flags but no conflict, the policy activates
+        silently. With CLI flags that disagree with the project file,
+        show a dialog so the user picks which side wins.
         """
-        if not self._has_any_cli_override():
-            self._cli_overrides_active = False
+        if not self.cli_policy.has_any_override():
+            self.cli_policy.set_active(False)
             return
-        conflicts = self._cli_override_conflicts(project_settings)
+        conflicts = self.cli_policy.conflicts(project_settings)
         if not conflicts:
-            self._cli_overrides_active = True
+            self.cli_policy.set_active(True)
             return
-        self._cli_overrides_active = self._ask_cli_overrides_dialog(conflicts)
-
-    def _cli_override_conflicts(self, project_settings: dict) -> list[str]:
-        """Return human-readable descriptions of fields where CLI disagrees with project."""
-        conflicts: list[str] = []
-        if self._cli_monocular and bool(project_settings.get("binocular_mode", True)):
-            conflicts.append("Binocular mode: project file = binocular, CLI = monocular.")
-        if self._cli_auto_detectors is not None:
-            current = {
-                target
-                for target, block in project_settings.get("detectors", {}).items()
-                if block.get("plugin", "disabled") != "disabled"
-            }
-            if current != self._cli_auto_detectors:
-                conflicts.append(
-                    "Auto detectors enabled: project file = "
-                    f"{sorted(current) or 'none'}, CLI = {sorted(self._cli_auto_detectors)}.",
-                )
-        return conflicts
+        self.cli_policy.set_active(self._ask_cli_overrides_dialog(conflicts))
 
     def _ask_cli_overrides_dialog(self, conflicts: list[str]) -> bool:
         """Prompt: should the CLI flags override (and persist over) the project file?
 
         Yes -> CLI wins for the session AND the project settings file is
-        rewritten with the CLI values (``_cli_overrides_active = True``).
-        No  -> project file wins, CLI flags are ignored for the session.
+        rewritten with the CLI values. No -> project file wins, CLI
+        flags are ignored for the session.
         """
         body = (
             "Your CLI flags disagree with the loaded project file:\n\n  - "
@@ -829,13 +767,14 @@ class MainWindow(QMainWindow):
         and the image viewer's divider position + binocular flag are
         updated so the canvas renders the correct geometry.
 
-        The per-image binocular flag goes through :meth:`_session_binocular`
-        so the active CLI override policy is the only gate — adding a
-        new override flag does not require touching this method.
+        The per-image binocular flag goes through
+        :meth:`CliOverridePolicy.session_binocular` so the active CLI
+        override policy is the only gate — adding a new override flag
+        does not require touching this method.
         """
         if 0 <= self.current_image_index < len(self.image_paths):
             self._set_project_divider_override(self.image_paths[self.current_image_index], divider_x_norm)
-        effective_binocular = self._session_binocular(binocular_mode)
+        effective_binocular = self.cli_policy.session_binocular(binocular_mode)
         if effective_binocular != self.binocular_mode:
             self._apply_binocular_mode(effective_binocular)
         self.image_viewer.set_divider_x_norm(self._effective_divider_x_norm())
@@ -1390,36 +1329,6 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage("Project defaults saved.", 3000)
 
     # ----- Auto Detect mode: plugin resolution, run dispatch, signal forwarding -----
-
-    def _override_detectors_from_cli(self, project_detectors: dict) -> dict:
-        """Return a detectors dict honouring ``--auto-detectors`` for this session.
-
-        Targets in ``self._cli_auto_detectors`` keep the project file's
-        plugin choice (and any tuned params) untouched; every other
-        target is forced to ``"disabled"``. The original
-        ``project_detectors`` dict is not mutated.
-
-        Fails fast when a CLI-enabled target is set to ``"disabled"`` in
-        the project file — that combination is a user-side conflict and
-        silently substituting a default plugin would surprise the user.
-        """
-        overridden: dict = {}
-        for target in DETECTOR_TARGETS:
-            existing = project_detectors.get(target, {})
-            if target in self._cli_auto_detectors:
-                plugin_slug = existing.get("plugin", "disabled")
-                if plugin_slug == "disabled":
-                    raise SystemExit(
-                        f"--auto-detectors includes {target!r} but the project "
-                        f"settings file has {target!r} set to 'disabled'. Enable "
-                        f"a plugin for {target!r} via the Auto Detectors menu "
-                        f"(or hand-edit the settings file) and re-run, or drop "
-                        f"{target!r} from --auto-detectors.",
-                    )
-                overridden[target] = {"plugin": plugin_slug, "params": dict(existing.get("params", {}))}
-            else:
-                overridden[target] = {"plugin": "disabled", "params": {}}
-        return overridden
 
     def _apply_enabled_plugins(
         self,
