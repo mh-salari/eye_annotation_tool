@@ -12,6 +12,7 @@ from PyQt5.QtWidgets import QLabel, QMessageBox, QScrollArea, QVBoxLayout, QWidg
 from ..state import EyeDataStore, OverlayStore, TargetMaskStore, TargetRoiStore, UndoStack
 from ..utils.image_processing import find_closest_point, fit_ellipse
 from .brightness_controller import BrightnessController
+from .mouse_drag_state import MouseDragState
 from .zoom_controller import ZoomController
 
 
@@ -74,11 +75,17 @@ class ImageViewer(QWidget):
 
         self.current_annotation = "pupil"
         self.original_pixmap = None
-        self.selected_point = None
-        self.moving_point = False
-        self.panning = False
-        self.last_pan_pos = None
         self.pixmap = None
+
+        # Mutable drag-state flags + coordinates spanning the three
+        # mouse-event handlers. Grouped into one dataclass so the
+        # widget exposes a single ``self.mouse_state`` instead of
+        # thirteen mutable attributes. ``drawing_roi_committed`` flips
+        # True only once the user has dragged past :attr:`ROI_DRAG_THRESHOLD_PX`
+        # since press — below that the previous rectangle is preserved
+        # and the release path skips re-emitting, so a stray click
+        # doesn't clear a valid ROI.
+        self.mouse_state = MouseDragState()
 
         # Display-only brightness adjustment. The source pixmap is
         # never modified, so detector plugins keep seeing the original
@@ -95,24 +102,6 @@ class ImageViewer(QWidget):
         # requested. Depth-counted so nested pause/resume composes safely.
         self._updates_paused = 0
         self._update_pending = False
-        # Variables for shift-click point movement
-        self.shift_pressed = False
-        self.last_mouse_pos = None
-        self.moving_all_points = False
-
-        # Per-target ROI drag state. Used by both mouse-event paths for
-        # any plugin whose panel exposes roi_edit_requested. The
-        # ``drawing_roi_committed`` flag flips True only once the user
-        # has dragged past :attr:`ROI_DRAG_THRESHOLD_PX` since press —
-        # below that the previous rectangle is preserved and the
-        # release path skips re-emitting, so a stray click doesn't
-        # clear a valid ROI.
-        self.drawing_roi = False
-        self.roi_start_pos = None
-        self.moving_roi = False
-        self.resizing_roi = False
-        self.roi_resize_handle = None  # 'tl', 'tr', 'bl', 'br' for corners
-        self._drawing_roi_committed = False
 
         # Binocular mode: True when the image contains two eyes split by
         # a vertical divider. False = monocular (single eye fills the
@@ -124,9 +113,8 @@ class ImageViewer(QWidget):
         # ``[0, 1]``. Only used when ``binocular_mode`` is True; defines
         # which half of the image counts as the left eye vs the right
         # eye for click gating, dim-overlay rendering, and auto-detector
-        # cropping. ``divider_drag_active`` flags the in-progress drag.
+        # cropping. The in-progress drag flag lives on ``mouse_state``.
         self._divider_x_norm = 0.5
-        self._divider_drag_active = False
 
         # Grayscale numpy view of the currently loaded image, kept alongside
         # the Qt pixmap so detector plugins can consume it without re-reading
@@ -401,19 +389,19 @@ class ImageViewer(QWidget):
         elif event.key() == Qt.Key_Delete:
             self.delete_selected_point()
         elif event.key() == Qt.Key_Shift:
-            self.shift_pressed = True
+            self.mouse_state.shift_pressed = True
         else:
             super().keyPressEvent(event)
 
     def keyReleaseEvent(self, event: QKeyEvent) -> None:  # noqa: N802
         """Handle key release events."""
         if event.key() == Qt.Key_Shift:
-            self.shift_pressed = False
+            self.mouse_state.shift_pressed = False
         super().keyReleaseEvent(event)
 
     def delete_selected_point(self) -> None:
         """Delete the currently selected point."""
-        if self.selected_point:
+        if self.mouse_state.selected_point:
             if self.current_annotation == "pupil":
                 points = self.pupil_points
             elif self.current_annotation == "limbus":
@@ -423,9 +411,9 @@ class ImageViewer(QWidget):
             else:  # glint
                 points = self.glint_points
 
-            if self.selected_point in points:
-                points.remove(self.selected_point)
-                self.selected_point = None
+            if self.mouse_state.selected_point in points:
+                points.remove(self.mouse_state.selected_point)
+                self.mouse_state.selected_point = None
                 self.save_state()
                 self.annotation_changed.emit()
                 self.update_image()
@@ -453,41 +441,41 @@ class ImageViewer(QWidget):
         flags. The active rectangle is read via :meth:`_active_drag_roi`
         and written back via :meth:`_set_active_drag_roi`.
         """
-        if self.drawing_roi:
-            dx = new_pos.x() - self.roi_start_pos.x()
-            dy = new_pos.y() - self.roi_start_pos.y()
+        if self.mouse_state.drawing_roi:
+            dx = new_pos.x() - self.mouse_state.roi_start_pos.x()
+            dy = new_pos.y() - self.mouse_state.roi_start_pos.y()
             if max(abs(dx), abs(dy)) < self.ROI_DRAG_THRESHOLD_PX:
                 return
-            x = min(self.roi_start_pos.x(), new_pos.x())
-            y = min(self.roi_start_pos.y(), new_pos.y())
+            x = min(self.mouse_state.roi_start_pos.x(), new_pos.x())
+            y = min(self.mouse_state.roi_start_pos.y(), new_pos.y())
             w = abs(dx)
             h = abs(dy)
             self._set_active_drag_roi((x, y, w, h))
-            self._drawing_roi_committed = True
+            self.mouse_state.drawing_roi_committed = True
             return
         current = self._active_drag_roi()
         if current is None:
             return
-        if self.moving_roi:
-            delta_x = new_pos.x() - self.roi_start_pos.x()
-            delta_y = new_pos.y() - self.roi_start_pos.y()
+        if self.mouse_state.moving_roi:
+            delta_x = new_pos.x() - self.mouse_state.roi_start_pos.x()
+            delta_y = new_pos.y() - self.mouse_state.roi_start_pos.y()
             x, y, w, h = current
             self._set_active_drag_roi((x + delta_x, y + delta_y, w, h))
-            self.roi_start_pos = new_pos
+            self.mouse_state.roi_start_pos = new_pos
             return
-        if self.resizing_roi:
+        if self.mouse_state.resizing_roi:
             x, y, w, h = current
-            if "t" in self.roi_resize_handle:
+            if "t" in self.mouse_state.roi_resize_handle:
                 delta_y = new_pos.y() - y
                 y = new_pos.y()
                 h -= delta_y
-            if "b" in self.roi_resize_handle:
+            if "b" in self.mouse_state.roi_resize_handle:
                 h = new_pos.y() - y
-            if "l" in self.roi_resize_handle:
+            if "l" in self.mouse_state.roi_resize_handle:
                 delta_x = new_pos.x() - x
                 x = new_pos.x()
                 w -= delta_x
-            if "r" in self.roi_resize_handle:
+            if "r" in self.mouse_state.roi_resize_handle:
                 w = new_pos.x() - x
             self._set_active_drag_roi((x, y, max(10, w), max(10, h)))
 
@@ -502,22 +490,22 @@ class ImageViewer(QWidget):
         if current:
             handle = self.get_roi_handle_at_pos(image_pos, current)
             if handle:
-                self.resizing_roi = True
-                self.roi_resize_handle = handle
-                self.roi_start_pos = image_pos
+                self.mouse_state.resizing_roi = True
+                self.mouse_state.roi_resize_handle = handle
+                self.mouse_state.roi_start_pos = image_pos
                 return True
             if self.is_point_in_roi(image_pos, current):
-                self.moving_roi = True
-                self.roi_start_pos = image_pos
+                self.mouse_state.moving_roi = True
+                self.mouse_state.roi_start_pos = image_pos
                 return True
         if not self._point_on_active_side(image_pos):
             return True
         # Begin a fresh draw, but keep the previous rectangle in place
         # until the user actually drags past the threshold — a stray
         # click without movement leaves the existing ROI untouched.
-        self.drawing_roi = True
-        self._drawing_roi_committed = False
-        self.roi_start_pos = image_pos
+        self.mouse_state.drawing_roi = True
+        self.mouse_state.drawing_roi_committed = False
+        self.mouse_state.roi_start_pos = image_pos
         return True
 
     # Half-width of the hot zone for grabbing the binocular divider, in
@@ -535,8 +523,8 @@ class ImageViewer(QWidget):
     def mousePressEvent(self, event: QEvent) -> None:  # noqa: N802
         """Handle mouse press events."""
         if event.button() == Qt.MiddleButton:
-            self.panning = True
-            self.last_pan_pos = event.pos()
+            self.mouse_state.panning = True
+            self.mouse_state.last_pan_pos = event.pos()
             self.setCursor(Qt.ClosedHandCursor)
         elif event.button() == Qt.LeftButton:
             image_pos = self.get_image_position(event.pos())
@@ -545,7 +533,7 @@ class ImageViewer(QWidget):
                 # else so the user can always retarget the line even when
                 # it overlaps an ROI handle or an annotation point.
                 if self._hit_divider(image_pos):
-                    self._divider_drag_active = True
+                    self.mouse_state.divider_drag_active = True
                     self.setCursor(Qt.SizeHorCursor)
                     return
 
@@ -564,12 +552,12 @@ class ImageViewer(QWidget):
                 if not self._manual_edit_enabled:
                     return
 
-                self.selected_point, selected_annotation = self.find_closest_point_and_type(image_pos)
+                self.mouse_state.selected_point, selected_annotation = self.find_closest_point_and_type(image_pos)
 
-                if self.selected_point:
-                    self.moving_point = True
-                    self.last_mouse_pos = image_pos
-                    self.moving_all_points = self.shift_pressed
+                if self.mouse_state.selected_point:
+                    self.mouse_state.moving_point = True
+                    self.mouse_state.last_mouse_pos = image_pos
+                    self.mouse_state.moving_all_points = self.mouse_state.shift_pressed
 
                     if selected_annotation != self.current_annotation:
                         self.current_annotation = selected_annotation
@@ -599,28 +587,28 @@ class ImageViewer(QWidget):
 
     def mouseMoveEvent(self, event: QEvent) -> None:  # noqa: N802
         """Handle mouse move events."""
-        if self.panning:
-            delta = event.pos() - self.last_pan_pos
+        if self.mouse_state.panning:
+            delta = event.pos() - self.mouse_state.last_pan_pos
             self.scroll_area.horizontalScrollBar().setValue(self.scroll_area.horizontalScrollBar().value() - delta.x())
             self.scroll_area.verticalScrollBar().setValue(self.scroll_area.verticalScrollBar().value() - delta.y())
-            self.last_pan_pos = event.pos()
-        elif self._divider_drag_active:
+            self.mouse_state.last_pan_pos = event.pos()
+        elif self.mouse_state.divider_drag_active:
             new_pos = self.get_image_position(event.pos())
             if new_pos is not None and self.original_pixmap is not None:
                 self.set_divider_x_norm(new_pos.x() / self.original_pixmap.width())
-        elif self.drawing_roi or self.moving_roi or self.resizing_roi:
+        elif self.mouse_state.is_dragging_roi():
             new_pos = self.get_image_position(event.pos())
-            if new_pos and self.roi_start_pos:
+            if new_pos and self.mouse_state.roi_start_pos:
                 self._drag_active_roi(new_pos)
                 self.update_image()
-        elif self.moving_point and self.selected_point:
+        elif self.mouse_state.moving_point and self.mouse_state.selected_point:
             new_pos = self.get_image_position(event.pos())
-            if new_pos and self.last_mouse_pos:
+            if new_pos and self.mouse_state.last_mouse_pos:
                 # Calculate the movement delta
-                delta_x = new_pos.x() - self.last_mouse_pos.x()
-                delta_y = new_pos.y() - self.last_mouse_pos.y()
+                delta_x = new_pos.x() - self.mouse_state.last_mouse_pos.x()
+                delta_y = new_pos.y() - self.mouse_state.last_mouse_pos.y()
 
-                if self.moving_all_points:
+                if self.mouse_state.moving_all_points:
                     # Move all points in the current annotation type
                     if self.current_annotation == "pupil":
                         self.move_points_by_delta(self.pupil_points, delta_x, delta_y)
@@ -632,53 +620,49 @@ class ImageViewer(QWidget):
                         self.move_points_by_delta(self.glint_points, delta_x, delta_y)
                 # Move only the selected point
                 elif self.current_annotation == "pupil":
-                    index = self.pupil_points.index(self.selected_point)
+                    index = self.pupil_points.index(self.mouse_state.selected_point)
                     self.pupil_points[index] = new_pos
                 elif self.current_annotation == "limbus":
-                    index = self.limbus_points.index(self.selected_point)
+                    index = self.limbus_points.index(self.mouse_state.selected_point)
                     self.limbus_points[index] = new_pos
                 elif self.current_annotation == "eyelid_contour":
-                    index = self.eyelid_contour_points.index(self.selected_point)
+                    index = self.eyelid_contour_points.index(self.mouse_state.selected_point)
                     self.eyelid_contour_points[index] = new_pos
                 else:  # glint
-                    index = self.glint_points.index(self.selected_point)
+                    index = self.glint_points.index(self.mouse_state.selected_point)
                     self.glint_points[index] = new_pos
 
-                self.selected_point = new_pos
-                self.last_mouse_pos = new_pos
+                self.mouse_state.selected_point = new_pos
+                self.mouse_state.last_mouse_pos = new_pos
                 self.update_image()
 
     def mouseReleaseEvent(self, event: QEvent) -> None:  # noqa: N802
         """Handle mouse release events."""
         if event.button() == Qt.MiddleButton:
-            self.panning = False
+            self.mouse_state.panning = False
             self.setCursor(Qt.ArrowCursor)
         elif event.button() == Qt.LeftButton:
-            if self._divider_drag_active:
-                self._divider_drag_active = False
+            if self.mouse_state.divider_drag_active:
+                self.mouse_state.divider_drag_active = False
                 self.setCursor(Qt.ArrowCursor)
                 self.divider_x_norm_changed.emit(self._divider_x_norm)
                 return
-            if self.drawing_roi or self.moving_roi or self.resizing_roi:
+            if self.mouse_state.is_dragging_roi():
                 # A draw that never crossed the threshold is treated as
                 # a stray click — leave the previous ROI alone and skip
                 # the emit so the panel doesn't get re-notified with
                 # stale data.
-                was_drawing = self.drawing_roi
-                committed = self._drawing_roi_committed
-                self.drawing_roi = False
-                self.moving_roi = False
-                self.resizing_roi = False
-                self.roi_resize_handle = None
-                self._drawing_roi_committed = False
+                was_drawing = self.mouse_state.drawing_roi
+                committed = self.mouse_state.drawing_roi_committed
+                self.mouse_state.reset_roi_drag()
                 draw_changed_roi = (not was_drawing) or committed
                 if draw_changed_roi and self.target_rois.active_target is not None:
                     target = self.target_rois.active_target
                     self.target_roi_changed.emit(target, self.target_rois.get(target, self.active_eye_slot()))
                 return
 
-            self.moving_point = False
-            if self.selected_point:
+            self.mouse_state.moving_point = False
+            if self.mouse_state.selected_point:
                 self.save_state()
                 self.annotation_changed.emit()
 
@@ -880,11 +864,7 @@ class ImageViewer(QWidget):
         self.target_rois.set_active_target(target)
         # Cancel any drag in progress; the user toggled the active ROI
         # while pressing the mouse — rare but worth a clean reset.
-        self.drawing_roi = False
-        self.moving_roi = False
-        self.resizing_roi = False
-        self.roi_resize_handle = None
-        self._drawing_roi_committed = False
+        self.mouse_state.reset_roi_drag()
         self.update_image()
 
     def set_target_roi(self, target: str, roi: tuple | None, *, eye_slot: str | None = None) -> None:
@@ -1047,7 +1027,7 @@ class ImageViewer(QWidget):
             for point in points:
                 scaled_point = QPointF(point.x() * self.factor, point.y() * self.factor)
                 # Only show selection highlight for active eye
-                if is_active and point == self.selected_point and self.current_annotation == annotation_type:
+                if is_active and point == self.mouse_state.selected_point and self.current_annotation == annotation_type:
                     if annotation_type == "pupil":
                         painter.setPen(QPen(self.pupil_select_color, 3, Qt.SolidLine))
                     elif annotation_type == "limbus":
@@ -1249,7 +1229,7 @@ class ImageViewer(QWidget):
         ]:
             for point in points:
                 scaled_point = QPointF(point.x() * self.factor, point.y() * self.factor)
-                if point == self.selected_point and self.current_annotation == annotation_type:
+                if point == self.mouse_state.selected_point and self.current_annotation == annotation_type:
                     if annotation_type == "pupil":
                         painter.setPen(QPen(self.pupil_select_color, 3, Qt.SolidLine))
                     elif annotation_type == "limbus":
