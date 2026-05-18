@@ -8,5 +8,6 @@ managing the state themselves.
 
 from .carry_roi_state import CarryRoiStore
 from .per_eye_state import PerEyeStateStore
+from .project_store import ProjectStore
 
-__all__ = ["CarryRoiStore", "PerEyeStateStore"]
+__all__ = ["CarryRoiStore", "PerEyeStateStore", "ProjectStore"]

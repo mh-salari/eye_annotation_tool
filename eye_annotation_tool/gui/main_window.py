@@ -32,14 +32,11 @@ from ..auto_detectors.plugin_interface import DetectorPlugin, Target
 from ..controllers.annotation_controller import AnnotationController
 from ..controllers.navigation_controller import NavigationController
 from ..policy import CliOverridePolicy
-from ..state import CarryRoiStore, PerEyeStateStore
+from ..state import CarryRoiStore, PerEyeStateStore, ProjectStore
 from ..utils.project_settings import (
     CARRY_ROI_SLOTS,
     DETECTOR_TARGETS,
     PROJECT_FILE_SUFFIX,
-    default_project,
-    load_project,
-    save_project,
 )
 from .annotation_controls import MODE_AUTO_DETECT, MODE_MANUAL, AnnotationControlPanel
 from .custom_widgets import MaterialButton
@@ -97,32 +94,9 @@ class MainWindow(QMainWindow):
         self.orchestrator = DetectorOrchestrator(self)
         self.cli_policy = CliOverridePolicy(cli_monocular, cli_auto_detectors)
         self.binocular_mode = not self.cli_policy.monocular
-        # Project state: a single in-memory dict matching the on-disk
-        # ``*.eye_annotation_project.json`` schema (see project_settings.py).
-        # ``self.project_path`` is the absolute file path the project is
-        # saved at, or ``None`` for an in-memory-only (unsaved) project.
-        # When ``project_path`` is set, every state mutation that touches
-        # the project (image add/remove, divider override change, autosave
-        # toggle, ...) writes back to disk immediately.
-        self.project: dict = default_project()
-        self.project_path: str | None = None
-        # Read-only session flag. When True, the in-memory project is *not*
-        # written back to ``self.project_path`` on any mutation - settings
-        # tweaks, image list edits, divider drags, etc. all stay session-
-        # local. Per-image annotation files (saved next to each image) are
-        # unaffected: they are independent of the project file.
-        #
-        # Useful for opening a small ad-hoc image list with a saved project's
-        # settings without mutating the project's own image list.
-        # Enter the mode via :meth:`open_project_for_review`.
-        self.read_only: bool = False
-        # Convenience accessor mirroring ``self.project["divider_x_norm"]``
-        # so call sites that read the project-wide default can stay terse.
-        # Per-image overrides live in ``self.project["images"][path]``.
-        self.project_divider_x_norm = float(self.project["divider_x_norm"])
+        self.project_store = ProjectStore()
         self.per_eye_state = PerEyeStateStore(DETECTOR_TARGETS)
         self.carry_roi_state = CarryRoiStore(DETECTOR_TARGETS)
-        self.autosave_enabled = False
 
         # Resolved plugin instance per target, kept in sync with the current
         # project's "detectors" block. Targets whose project setting is
@@ -293,37 +267,18 @@ class MainWindow(QMainWindow):
 
     @property
     def image_paths(self) -> list[str]:
-        """Ordered list of image paths in the current project, derived from ``self.project``."""
-        return list(self.project["images"].keys())
+        """Ordered list of image paths in the current project."""
+        return self.project_store.image_paths()
 
-    def _persist_project(self) -> None:
-        """Write ``self.project`` back to disk if the project is saved.
+    @property
+    def autosave_enabled(self) -> bool:
+        """Autosave-on-image-change flag (read by NavigationController)."""
+        return self.project_store.autosave
 
-        No-op when ``self.project_path`` is ``None`` (unsaved in-memory
-        project — the user must Save Project As before mutations persist)
-        or when ``self.read_only`` is ``True`` (session-local edits, see
-        :meth:`open_project_for_review`).
-        """
-        if self.project_path is None or self.read_only:
-            return
-        save_project(self.project_path, self.project)
-
-    def _project_divider_override(self, image_path: str) -> float | None:
-        """Per-image divider override stored under ``project["images"][path]``."""
-        entry = self.project["images"].get(image_path)
-        if not isinstance(entry, dict):
-            return None
-        value = entry.get("divider_x_norm")
-        return float(value) if isinstance(value, (int, float)) else None
-
-    def _set_project_divider_override(self, image_path: str, value: float | None) -> None:
-        """Set or clear the per-image divider override for ``image_path``."""
-        entry = self.project["images"].setdefault(image_path, {})
-        if value is None:
-            entry.pop("divider_x_norm", None)
-        else:
-            entry["divider_x_norm"] = float(value)
-        self._persist_project()
+    @property
+    def project_divider_x_norm(self) -> float:
+        """Project-wide default divider position."""
+        return self.project_store.divider_x_norm
 
     def set_annotation_modified(self, modified: bool) -> None:
         """Set the annotation modified flag and refresh the GUI save-state indicator."""
@@ -339,7 +294,7 @@ class MainWindow(QMainWindow):
         see at a glance that project-level edits won't persist.
         """
         saved = self.autosave_enabled or not self.annotation_modified
-        ro = " (read-only)" if self.read_only else ""
+        ro = " (read-only)" if self.project_store.read_only else ""
         if 0 <= self.current_image_index < len(self.image_paths):
             name = Path(self.image_paths[self.current_image_index]).name
             self.setWindowTitle(f"EyE Annotation Tool - {name}{'' if saved else ' *'}{ro}")
@@ -397,13 +352,7 @@ class MainWindow(QMainWindow):
         :func:`default_project`. The file is written to disk immediately
         and becomes the active session project.
         """
-        self.project = default_project()
-        if isinstance(initial_project, dict):
-            for key, value in initial_project.items():
-                self.project[key] = value
-        self.project_path = str(project_path)
-        self.read_only = False
-        save_project(self.project_path, self.project)
+        self.project_store.new(project_path, initial_project)
         self._apply_project_state()
         self.current_image_index = 0 if self.image_paths else -1
         self.update_image_list()
@@ -412,9 +361,7 @@ class MainWindow(QMainWindow):
 
     def open_project(self, project_path: str) -> None:
         """Load ``project_path`` from disk and apply it as the active project."""
-        self.project = load_project(project_path)
-        self.project_path = str(project_path)
-        self.read_only = False
+        self.project_store.load(project_path)
         self._apply_project_state()
         self.current_image_index = 0 if self.image_paths else -1
         self.update_image_list()
@@ -428,22 +375,15 @@ class MainWindow(QMainWindow):
         params, autosave) are loaded as usual, but the in-memory image list
         is replaced with ``image_paths``. Every subsequent edit (slider
         changes, image list edits, divider drags) stays in memory for the
-        session only — :meth:`_persist_project` is a no-op while
-        ``self.read_only`` is set. Per-image annotation files still save
-        next to their PNGs.
+        session only — ``ProjectStore.persist`` is a no-op while the
+        store's ``read_only`` flag is set. Per-image annotation files
+        still save next to their PNGs.
 
         The user can still snapshot the session to a different file via
         File > Save Project As…; ``save_project_as`` clears the read-only
         flag (the snapshot becomes the new active project).
         """
-        self.project = load_project(project_path)
-        self.project_path = str(project_path)
-        self.read_only = True
-        # Replace the image set without touching settings. Missing files
-        # are dropped silently here; ``add_images`` reports them when the
-        # GUI launches via the dialog path instead.
-        valid = [str(Path(p)) for p in image_paths if Path(p).is_file()]
-        self.project["images"] = {p: {} for p in valid}
+        self.project_store.load_for_review(project_path, image_paths)
         self._apply_project_state()
         self.current_image_index = 0 if self.image_paths else -1
         self.update_image_list()
@@ -452,20 +392,20 @@ class MainWindow(QMainWindow):
         self._refresh_save_state_indicator()
 
     def save_project(self) -> None:
-        """Write ``self.project`` to ``self.project_path``; prompt for path if unsaved.
+        """Write the active project to disk; prompt for path if unsaved.
 
         Refuses to overwrite the active path in read-only mode — re-routes
         to :meth:`save_project_as` so the user must pick a fresh path. This
         keeps Save Project's quick-write semantics from silently mutating
         a project a read-only session was meant to leave alone.
         """
-        if self.project_path is None or self.read_only:
+        if self.project_store.path is None or self.project_store.read_only:
             self.save_project_as()
             return
-        save_project(self.project_path, self.project)
+        self.project_store.save()
 
     def save_project_as(self) -> None:
-        """Prompt for a save path and persist ``self.project`` there.
+        """Prompt for a save path and persist the active project there.
 
         Snapshotting clears the read-only flag: the chosen path becomes
         the new active project, and subsequent edits write through to it
@@ -481,9 +421,7 @@ class MainWindow(QMainWindow):
             return
         if not path.endswith(PROJECT_FILE_SUFFIX):
             path = path + PROJECT_FILE_SUFFIX
-        self.project_path = path
-        self.read_only = False
-        save_project(self.project_path, self.project)
+        self.project_store.save_as(path)
         self._refresh_save_state_indicator()
 
     def add_images(self, image_paths: list[str]) -> None:
@@ -511,9 +449,7 @@ class MainWindow(QMainWindow):
                 "Some supplied paths were not loadable images:\n  - " + "\n  - ".join(missing),
             )
         had_any_before = bool(self.image_paths)
-        for path in valid:
-            self.project["images"].setdefault(path, {})
-        self._persist_project()
+        self.project_store.add_images(valid)
         if not had_any_before:
             self.current_image_index = 0
         self.update_image_list()
@@ -552,9 +488,7 @@ class MainWindow(QMainWindow):
             if 0 <= self.current_image_index < len(self.image_paths)
             else None
         )
-        for path in paths_to_remove:
-            self.project["images"].pop(path, None)
-        self._persist_project()
+        self.project_store.remove_images(paths_to_remove)
         if current_path in paths_to_remove or not self.image_paths:
             self.current_image_index = 0 if self.image_paths else -1
         else:
@@ -568,32 +502,28 @@ class MainWindow(QMainWindow):
     # ----- Apply project state to the rest of the UI -------------------
 
     def _apply_project_state(self) -> None:
-        """Push ``self.project`` settings into the dependent widgets.
+        """Push the active project's settings into the dependent widgets.
 
-        Called once after every project load (new / open). Mutating
-        settings during a session is done in place on ``self.project``
-        + ``self._persist_project()``; no need to call this method
-        again unless the whole project is swapped.
+        Called once after every project load (new / open). Mid-session
+        mutations go through :class:`ProjectStore` setters which persist
+        on the spot; this method only runs on full project swaps.
         """
-        self._resolve_cli_overrides_policy(self.project)
-        self.project["binocular_mode"] = self.cli_policy.session_binocular(self.project.get("binocular_mode", True))
-        self.project["detectors"] = self.cli_policy.session_detectors(self.project.get("detectors", {}))
+        project = self.project_store.project
+        self._resolve_cli_overrides_policy(project)
+        project["binocular_mode"] = self.cli_policy.session_binocular(self.project_store.binocular_mode)
+        project["detectors"] = self.cli_policy.session_detectors(project.get("detectors", {}))
         if self.cli_policy.is_active():
-            self._persist_project()
-        self._apply_binocular_mode(bool(self.project.get("binocular_mode", True)))
-        self.project_divider_x_norm = float(self.project.get("divider_x_norm", 0.5))
+            self.project_store.persist()
+        self._apply_binocular_mode(self.project_store.binocular_mode)
         self.image_viewer.set_divider_x_norm(self._effective_divider_x_norm())
-        self._apply_enabled_plugins(self.project.get("detectors", {}))
+        self._apply_enabled_plugins(project.get("detectors", {}))
         self.menu_handler.update_auto_detectors_menu()
-        saved_mode = self.project.get("current_mode", MODE_MANUAL)
-        if saved_mode == MODE_AUTO_DETECT:
+        if self.project_store.current_mode == MODE_AUTO_DETECT:
             self.annotation_controls.mode_auto_detect_button.setChecked(True)
         else:
             self.annotation_controls.mode_manual_button.setChecked(True)
-        autosave = bool(self.project.get("autosave", False))
-        self.autosave_enabled = autosave
         self.autosave_checkbox.blockSignals(True)
-        self.autosave_checkbox.setChecked(autosave)
+        self.autosave_checkbox.setChecked(self.project_store.autosave)
         self.autosave_checkbox.blockSignals(False)
 
     # ----- File-menu action stubs (wired by MenuHandler) ---------------
@@ -689,8 +619,7 @@ class MainWindow(QMainWindow):
     def _on_binocular_toggled(self, enabled: bool) -> None:
         """Handle the Binocular checkbox flipping; persist to the project file."""
         self._apply_binocular_mode(enabled)
-        self.project["binocular_mode"] = enabled
-        self._persist_project()
+        self.project_store.binocular_mode = enabled
 
     def _active_eye_slot(self) -> str:
         """Return the per-eye cache slot for the currently active eye.
@@ -751,7 +680,7 @@ class MainWindow(QMainWindow):
         """Return the per-image divider override for the current image (or ``None``)."""
         if not (0 <= self.current_image_index < len(self.image_paths)):
             return None
-        return self._project_divider_override(self.image_paths[self.current_image_index])
+        return self.project_store.divider_override(self.image_paths[self.current_image_index])
 
     def _effective_divider_x_norm(self) -> float:
         """Return divider position for the current image (override or project default)."""
@@ -773,7 +702,7 @@ class MainWindow(QMainWindow):
         does not require touching this method.
         """
         if 0 <= self.current_image_index < len(self.image_paths):
-            self._set_project_divider_override(self.image_paths[self.current_image_index], divider_x_norm)
+            self.project_store.set_divider_override(self.image_paths[self.current_image_index], divider_x_norm)
         effective_binocular = self.cli_policy.session_binocular(binocular_mode)
         if effective_binocular != self.binocular_mode:
             self._apply_binocular_mode(effective_binocular)
@@ -783,7 +712,7 @@ class MainWindow(QMainWindow):
         """Persist a user-driven divider drag as a per-image override."""
         if not (0 <= self.current_image_index < len(self.image_paths)):
             return
-        self._set_project_divider_override(self.image_paths[self.current_image_index], float(value))
+        self.project_store.set_divider_override(self.image_paths[self.current_image_index], float(value))
         self.set_annotation_modified(True)
 
     def _on_mode_changed(self, mode: str) -> None:
@@ -806,8 +735,7 @@ class MainWindow(QMainWindow):
         # manual annotations so the user can see them, but blocks edits
         # until they switch back.
         self.image_viewer.set_manual_edit_enabled(mode == MODE_MANUAL)
-        self.project["current_mode"] = mode
-        self._persist_project()
+        self.project_store.current_mode = mode
 
     def _cancel_active_roi_edit(self) -> None:
         """Drop the active ROI drag-edit state on the canvas and untoggle every panel button.
@@ -834,7 +762,7 @@ class MainWindow(QMainWindow):
         when the project hasn't been saved yet.
         """
         self.image_list_widget.clear()
-        project_root = Path(self.project_path).parent if self.project_path else None
+        project_root = self.project_store.project_root()
         for image_path in self.image_paths:
             p = Path(image_path)
             if project_root is not None:
@@ -885,9 +813,7 @@ class MainWindow(QMainWindow):
 
     def _on_autosave_changed(self, enabled: bool) -> None:
         """Persist the autosave toggle in project settings."""
-        self.autosave_enabled = enabled
-        self.project["autosave"] = enabled
-        self._persist_project()
+        self.project_store.autosave = enabled
         self._refresh_save_state_indicator()
 
     def collect_detections_for_save(self) -> dict:
@@ -1214,7 +1140,7 @@ class MainWindow(QMainWindow):
 
     def current_plugin_for_target(self, target: Target) -> str:
         """Return the slug of the plugin currently chosen for ``target`` (or ``"disabled"``)."""
-        return self.project.get("detectors", {}).get(target, {}).get("plugin", "disabled")
+        return self.project_store.project.get("detectors", {}).get(target, {}).get("plugin", "disabled")
 
     def select_plugin_for_target(self, target: Target, plugin_name: str) -> None:
         """Set ``target``'s plugin to ``plugin_name`` and rebuild the Auto Detect panels.
@@ -1226,7 +1152,7 @@ class MainWindow(QMainWindow):
         a different plugin do not leak across. Switching to the same
         plugin is a no-op.
         """
-        detectors = self.project.setdefault("detectors", {})
+        detectors = self.project_store.project.setdefault("detectors", {})
         current = detectors.get(target, {}).get("plugin", "disabled")
         if current == plugin_name:
             return
@@ -1237,7 +1163,7 @@ class MainWindow(QMainWindow):
             if plugin is None or plugin.target != target:
                 return
             detectors[target] = {"plugin": plugin_name, "params": plugin.default_params()}
-        self._persist_project()
+        self.project_store.persist()
         # Wipe per-image overlay / ROI / mask state across both eyes
         # for the target the user is actually changing — the old
         # plugin's result must not leak into the new plugin's slot.
@@ -1294,7 +1220,7 @@ class MainWindow(QMainWindow):
         # so the project file captures both eyes at once when the user has
         # been tuning per-eye in the same image.
         self.per_eye_state.snapshot_panel(active_slot, self._panel_for_target)
-        detectors = self.project.setdefault("detectors", {})
+        detectors = self.project_store.project.setdefault("detectors", {})
         for target, plugin in self._enabled_plugins.items():
             panel = self.annotation_controls.auto_detect_panel(plugin.name)
             if panel is None:
@@ -1324,7 +1250,7 @@ class MainWindow(QMainWindow):
                 "params": params_by_slot,
                 "carry_roi": self.carry_roi_state.to_project_block(target),
             }
-        self._persist_project()
+        self.project_store.persist()
         self._refresh_carry_checkboxes()
         self.statusBar().showMessage("Project defaults saved.", 3000)
 
@@ -1718,10 +1644,10 @@ class MainWindow(QMainWindow):
 
     def _persist_carry_roi(self, target: Target) -> None:
         """Write the per-eye carry-over enable flags + values for ``target`` to the project file."""
-        detectors = self.project.setdefault("detectors", {})
+        detectors = self.project_store.project.setdefault("detectors", {})
         entry = detectors.setdefault(target, {"plugin": "disabled", "params": {}})
         entry["carry_roi"] = self.carry_roi_state.to_project_block(target)
-        self._persist_project()
+        self.project_store.persist()
 
     def _refresh_carry_checkboxes(self) -> None:
         """Sync each panel's Carry checkbox + Override button to the active eye's state.
