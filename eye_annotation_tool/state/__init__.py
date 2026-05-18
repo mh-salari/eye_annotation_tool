@@ -8,9 +8,18 @@ managing the state themselves.
 
 from .carry_roi_state import CarryRoiStore
 from .eye_data_store import EyeDataStore
+from .overlay_store import OverlayStore
 from .per_eye_state import PerEyeStateStore
 from .project_store import ProjectStore
 from .session_state import SessionState
 from .undo_stack import UndoStack
 
-__all__ = ["CarryRoiStore", "EyeDataStore", "PerEyeStateStore", "ProjectStore", "SessionState", "UndoStack"]
+__all__ = [
+    "CarryRoiStore",
+    "EyeDataStore",
+    "OverlayStore",
+    "PerEyeStateStore",
+    "ProjectStore",
+    "SessionState",
+    "UndoStack",
+]

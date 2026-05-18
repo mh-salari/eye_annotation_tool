@@ -10,7 +10,7 @@ from PyQt5.QtCore import QEvent, QPoint, QPointF, QSizeF, Qt, pyqtSignal
 from PyQt5.QtGui import QColor, QImage, QKeyEvent, QPainter, QPen, QPixmap
 from PyQt5.QtWidgets import QLabel, QMessageBox, QScrollArea, QVBoxLayout, QWidget
 
-from ..state import EyeDataStore, UndoStack
+from ..state import EyeDataStore, OverlayStore, UndoStack
 from ..utils.image_processing import find_closest_point, fit_ellipse
 
 # Display brightness step factor per Brighter / Darker click, and the
@@ -156,7 +156,7 @@ class ImageViewer(QWidget):
         # over the inactive half indicates which side they're currently
         # working on. The inner dict's value shape matches the
         # corresponding plugin's serialise/deserialise contract.
-        self._detection_overlays: dict[str, dict[str, dict]] = {}
+        self.detection_overlays = OverlayStore()
 
         # Plugin instance currently owning each target. Populated by
         # MainWindow when panels are mounted (and cleared when a target's
@@ -745,7 +745,7 @@ class ImageViewer(QWidget):
         # whatever the new image's saved annotation carries. Masks are
         # transient (never persisted), so they always start empty on a
         # new image until the next plugin run.
-        self._detection_overlays.clear()
+        self.detection_overlays.clear_all()
         self._target_rois.clear()
         self._target_masks.clear()
         self.reset_undo_stack()
@@ -938,29 +938,23 @@ class ImageViewer(QWidget):
         ``"right"`` / ``"single"`` explicitly when populating from a
         loaded annotation file that carries results for both eyes.
         """
-        slot = self._resolve_slot(eye_slot)
-        self._detection_overlays.setdefault(target, {})[slot] = result
+        self.detection_overlays.set(target, self._resolve_slot(eye_slot), result)
         self.update_image()
 
     def clear_detection_overlay(self, target: str, *, eye_slot: str | None = None) -> None:
         """Drop the stored result for ``target`` at ``eye_slot`` (or every slot when ``eye_slot`` is None)."""
-        if eye_slot is None:
-            if self._detection_overlays.pop(target, None) is not None:
-                self.update_image()
-            return
-        if self._drop_slot(self._detection_overlays, target, eye_slot):
+        slot = None if eye_slot is None else self._resolve_slot(eye_slot)
+        if self.detection_overlays.clear(target, slot):
             self.update_image()
 
     def clear_all_detection_overlays(self) -> None:
         """Drop every stored Auto Detect result and re-paint. Called on image change."""
-        if self._detection_overlays:
-            self._detection_overlays.clear()
+        if self.detection_overlays.clear_all():
             self.update_image()
 
     def get_detection_overlay(self, target: str, *, eye_slot: str | None = None) -> dict | None:
         """Return the result stored for ``(target, eye_slot)``, or None."""
-        slot = self._resolve_slot(eye_slot)
-        return self._detection_overlays.get(target, {}).get(slot)
+        return self.detection_overlays.get(target, self._resolve_slot(eye_slot))
 
     # ----- Per-eye, per-target Auto Detect ROIs -----
 
@@ -1247,15 +1241,12 @@ class ImageViewer(QWidget):
         # paints only when its "Show mask" toggle is on.
         self._draw_target_masks(painter)
         pairs: list[tuple[int, object, dict]] = []
-        for target, by_slot in self._detection_overlays.items():
+        for target, result in self.detection_overlays.items_for_paint():
             plugin = self._active_plugins.get(target)
             if plugin is None:
                 continue
             z = int(getattr(plugin, "overlay_z_order", 0))
-            for result in by_slot.values():
-                if result is None:
-                    continue
-                pairs.append((z, plugin, result))
+            pairs.append((z, plugin, result))
         pairs.sort(key=itemgetter(0))
         for _z, plugin, result in pairs:
             plugin.draw_overlay(painter, result, self.factor)
