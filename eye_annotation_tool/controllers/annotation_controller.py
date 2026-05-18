@@ -56,8 +56,8 @@ class AnnotationController:
         save_annotations(
             annotation_path,
             eye_data,
-            binocular_mode=self.main_window.binocular_mode,
-            divider_x_norm=self.main_window.divider_override_for_current_image(),
+            binocular_mode=self.main_window.binocular_controller.is_binocular,
+            divider_x_norm=self.main_window.binocular_controller.divider_override_for_current_image(),
             detections=detections,
         )
         self.main_window.set_annotation_modified(False)
@@ -69,7 +69,7 @@ class AnnotationController:
         image_path = self.main_window.image_paths[self.main_window.current_image_index]
         annotation_path = get_annotation_path(image_path)
         payload = load_annotations(annotation_path)
-        self.main_window.apply_loaded_image_meta(
+        self.main_window.binocular_controller.apply_loaded_image_meta(
             binocular_mode=payload["binocular_mode"],
             divider_x_norm=payload["divider_x_norm"],
         )

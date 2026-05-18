@@ -25,6 +25,7 @@ from PyQt5.QtWidgets import (
 from ..auto_detectors import PluginManager
 from ..auto_detectors.orchestrator import DetectorOrchestrator
 from ..controllers.annotation_controller import AnnotationController
+from ..controllers.binocular_controller import BinocularController
 from ..controllers.detection_controller import DetectionController
 from ..controllers.navigation_controller import NavigationController
 from ..policy import CliOverridePolicy
@@ -66,7 +67,6 @@ class MainWindow(QMainWindow):
         self.plugin_manager = PluginManager()
         self.orchestrator = DetectorOrchestrator(self)
         self.cli_policy = CliOverridePolicy(cli_monocular, cli_auto_detectors)
-        self.binocular_mode = not self.cli_policy.monocular
         self.project_store = ProjectStore()
         self.per_eye_state = PerEyeStateStore(DETECTOR_TARGETS)
         self.carry_roi_state = CarryRoiStore(DETECTOR_TARGETS)
@@ -82,14 +82,29 @@ class MainWindow(QMainWindow):
             self.project_store,
             self.image_viewer,
             self.annotation_controls,
-            active_slot_fn=self._active_eye_slot,
-            binocular_mode_fn=lambda: self.binocular_mode,
-            effective_divider_fn=self._effective_divider_x_norm,
+            active_slot_fn=lambda: self.binocular_controller.active_eye_slot(),
+            binocular_mode_fn=lambda: self.binocular_controller.is_binocular,
+            effective_divider_fn=lambda: self.binocular_controller.effective_divider_x_norm(),
             parent=self,
         )
         self.detection_controller.annotation_modified.connect(self.set_annotation_modified)
         self.detection_controller.status_message.connect(self.statusBar().showMessage)
         self.detection_controller.detectors_changed.connect(self._on_detectors_changed)
+
+        self.binocular_controller = BinocularController(
+            self.image_viewer,
+            self.annotation_controls,
+            self.per_eye_state,
+            self.cli_policy,
+            self.project_store,
+            self.detection_controller,
+            current_image_path_fn=self._current_image_path,
+            orchestrator=self.orchestrator,
+            initial_binocular=not self.cli_policy.monocular,
+            parent=self,
+        )
+        self.binocular_controller.apply_mode(not self.cli_policy.monocular)
+        self.binocular_controller.annotation_modified.connect(self.set_annotation_modified)
 
         self.annotation_controller = AnnotationController(self)
         self.navigation_controller = NavigationController(self)
@@ -253,6 +268,17 @@ class MainWindow(QMainWindow):
         """Project-wide default divider position."""
         return self.project_store.divider_x_norm
 
+    @property
+    def binocular_mode(self) -> bool:
+        """True when the active project is in binocular mode (read by external code)."""
+        return self.binocular_controller.is_binocular
+
+    def _current_image_path(self) -> str | None:
+        """Return the active image's path, or ``None`` when no image is loaded."""
+        if 0 <= self.current_image_index < len(self.image_paths):
+            return self.image_paths[self.current_image_index]
+        return None
+
     def set_annotation_modified(self, modified: bool) -> None:
         """Set the annotation modified flag and refresh the GUI save-state indicator."""
         self.annotation_modified = modified
@@ -286,9 +312,6 @@ class MainWindow(QMainWindow):
         self.image_list_widget.installEventFilter(self)
 
         self.annotation_controls.annotation_changed.connect(self.image_viewer.set_current_annotation)
-        self.annotation_controls.eye_changed.connect(self._on_eye_changed)
-        self.annotation_controls.binocular_toggled.connect(self._on_binocular_toggled)
-        self.image_viewer.divider_x_norm_changed.connect(self._on_divider_x_norm_changed)
         self.annotation_controls.fit_annotation_requested.connect(self.image_viewer.fit_annotation)
         self.annotation_controls.clear_selected_annotation_requested.connect(self.image_viewer.clear_selected_ellipse)
         self.annotation_controls.clear_pupil_requested.connect(self.image_viewer.clear_pupil_points)
@@ -481,8 +504,8 @@ class MainWindow(QMainWindow):
         project["detectors"] = self.cli_policy.session_detectors(project.get("detectors", {}))
         if self.cli_policy.is_active():
             self.project_store.persist()
-        self._apply_binocular_mode(self.project_store.binocular_mode)
-        self.image_viewer.set_divider_x_norm(self._effective_divider_x_norm())
+        self.binocular_controller.apply_mode(self.project_store.binocular_mode)
+        self.image_viewer.set_divider_x_norm(self.binocular_controller.effective_divider_x_norm())
         self.detection_controller.apply_enabled_plugins(project.get("detectors", {}))
         self.menu_handler.update_auto_detectors_menu()
         if self.project_store.current_mode == MODE_AUTO_DETECT:
@@ -575,102 +598,10 @@ class MainWindow(QMainWindow):
         )
         return reply == QMessageBox.Yes
 
-    # ----- Mode / binocular toggles ------------------------------------
-
-    def _apply_binocular_mode(self, enabled: bool) -> None:
-        """Propagate the binocular flag to the dependent widgets."""
-        self.binocular_mode = enabled
-        self.image_viewer.set_binocular_mode(enabled)
-        self.annotation_controls.set_binocular(enabled)
-
-    def _on_binocular_toggled(self, enabled: bool) -> None:
-        """Handle the Binocular checkbox flipping; persist to the project file."""
-        self._apply_binocular_mode(enabled)
-        self.project_store.binocular_mode = enabled
-
-    def _active_eye_slot(self) -> str:
-        """Return the per-eye cache slot for the currently active eye.
-
-        ``"left"`` / ``"right"`` in binocular mode, ``"single"`` in
-        monocular mode. Used as the dict key for the per-eye detection
-        cache and the per-eye JSON detection block.
-        """
-        if not self.binocular_mode:
-            return "single"
-        return self.image_viewer.current_eye
-
-    def _on_eye_changed(self, eye: str) -> None:
-        """Switch the active eye and swap the per-eye panel + orchestrator state.
-
-        The viewer keeps each eye's detection overlay / mask / ROI in
-        its own slot so both halves' work stays visible across the
-        switch — only the panel state and the orchestrator's dep cache
-        (which only ever holds the active eye) get swapped here. Live
-        plugins re-run against the new eye so the active half's
-        overlay tracks the new panel values without waiting for slider
-        drags.
-        """
-        if not self.binocular_mode:
-            return
-        old_slot = self._active_eye_slot()
-        self.per_eye_state.snapshot_orchestrator(old_slot, self.orchestrator)
-        self.per_eye_state.snapshot_panel(old_slot, self.detection_controller.panel_for_target)
-        self.image_viewer.switch_eye(eye)
-        new_slot = self._active_eye_slot()
-        self.per_eye_state.restore_panel(
-            new_slot,
-            self.detection_controller.panel_for_target,
-            self.detection_controller.plugin_default_params,
-        )
-        self.per_eye_state.restore_orchestrator(new_slot, self.orchestrator)
-        self.detection_controller.refresh_carry_checkboxes()
-        self.detection_controller.refresh_manual_pupil_in_cache()
-        self.detection_controller.refresh_live_plugin_results()
-        self.detection_controller.refresh_panel_availability()
-
     def _on_image_loaded(self) -> None:
         """Drop orchestrator cache + per-eye snapshots when a new image lands."""
         self.orchestrator.clear_cache()
         self.per_eye_state.clear_all()
-
-    def divider_override_for_current_image(self) -> float | None:
-        """Return the per-image divider override for the current image (or ``None``)."""
-        if not (0 <= self.current_image_index < len(self.image_paths)):
-            return None
-        return self.project_store.divider_override(self.image_paths[self.current_image_index])
-
-    def _effective_divider_x_norm(self) -> float:
-        """Return divider position for the current image (override or project default)."""
-        override = self.divider_override_for_current_image()
-        return self.project_divider_x_norm if override is None else override
-
-    def apply_loaded_image_meta(self, *, binocular_mode: bool, divider_x_norm: float | None) -> None:
-        """Apply binocular + divider metadata for a freshly loaded image.
-
-        Called by AnnotationController right after the image's annotation
-        JSON has been parsed. The per-image divider override (or ``None``
-        to inherit the project default) is stashed for save round-trip,
-        and the image viewer's divider position + binocular flag are
-        updated so the canvas renders the correct geometry.
-
-        The per-image binocular flag goes through
-        :meth:`CliOverridePolicy.session_binocular` so the active CLI
-        override policy is the only gate — adding a new override flag
-        does not require touching this method.
-        """
-        if 0 <= self.current_image_index < len(self.image_paths):
-            self.project_store.set_divider_override(self.image_paths[self.current_image_index], divider_x_norm)
-        effective_binocular = self.cli_policy.session_binocular(binocular_mode)
-        if effective_binocular != self.binocular_mode:
-            self._apply_binocular_mode(effective_binocular)
-        self.image_viewer.set_divider_x_norm(self._effective_divider_x_norm())
-
-    def _on_divider_x_norm_changed(self, value: float) -> None:
-        """Persist a user-driven divider drag as a per-image override."""
-        if not (0 <= self.current_image_index < len(self.image_paths)):
-            return
-        self.project_store.set_divider_override(self.image_paths[self.current_image_index], float(value))
-        self.set_annotation_modified(True)
 
     def _on_mode_changed(self, mode: str) -> None:
         """Persist the new mode and cancel any Auto-Detect ROI drag state.
