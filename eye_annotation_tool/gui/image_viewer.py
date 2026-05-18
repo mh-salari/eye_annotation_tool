@@ -9,6 +9,7 @@ from PyQt5.QtGui import QKeyEvent, QPixmap
 from PyQt5.QtWidgets import QLabel, QMessageBox, QScrollArea, QVBoxLayout, QWidget
 
 from ..state import EyeDataStore, OverlayStore, TargetMaskStore, TargetRoiStore, UndoStack
+from ..state.eye_data_store import FIELDS_BY_ANNOTATION
 from ..utils.image_processing import find_closest_point, fit_ellipse
 from .brightness_controller import BrightnessController
 from .canvas_renderer import AnnotationColors, CanvasGeometry, CanvasRenderer
@@ -371,23 +372,18 @@ class ImageViewer(QWidget):
         super().keyReleaseEvent(event)
 
     def delete_selected_point(self) -> None:
-        """Delete the currently selected point."""
-        if self.mouse_state.selected_point:
-            if self.current_annotation == "pupil":
-                points = self.pupil_points
-            elif self.current_annotation == "limbus":
-                points = self.limbus_points
-            elif self.current_annotation == "eyelid_contour":
-                points = self.eyelid_contour_points
-            else:  # glint
-                points = self.glint_points
-
-            if self.mouse_state.selected_point in points:
-                points.remove(self.mouse_state.selected_point)
-                self.mouse_state.selected_point = None
-                self.save_state()
-                self.annotation_changed.emit()
-                self.update_image()
+        """Delete the currently selected point from the active annotation's list."""
+        if self.mouse_state.selected_point is None:
+            return
+        points_field, _ = FIELDS_BY_ANNOTATION[self.current_annotation]
+        points = self.eye_data_store.get_field(points_field)
+        if self.mouse_state.selected_point not in points:
+            return
+        points.remove(self.mouse_state.selected_point)
+        self.mouse_state.selected_point = None
+        self.save_state()
+        self.annotation_changed.emit()
+        self.update_image()
 
     def _active_drag_roi(self) -> tuple | None:
         """Return the rectangle currently being drag-edited on the active eye (or None)."""
@@ -575,34 +571,15 @@ class ImageViewer(QWidget):
         elif self.mouse_state.moving_point and self.mouse_state.selected_point:
             new_pos = self.get_image_position(event.pos())
             if new_pos and self.mouse_state.last_mouse_pos:
-                # Calculate the movement delta
                 delta_x = new_pos.x() - self.mouse_state.last_mouse_pos.x()
                 delta_y = new_pos.y() - self.mouse_state.last_mouse_pos.y()
-
+                points_field, _ = FIELDS_BY_ANNOTATION[self.current_annotation]
+                points = self.eye_data_store.get_field(points_field)
                 if self.mouse_state.moving_all_points:
-                    # Move all points in the current annotation type
-                    if self.current_annotation == "pupil":
-                        self.move_points_by_delta(self.pupil_points, delta_x, delta_y)
-                    elif self.current_annotation == "limbus":
-                        self.move_points_by_delta(self.limbus_points, delta_x, delta_y)
-                    elif self.current_annotation == "eyelid_contour":
-                        self.move_points_by_delta(self.eyelid_contour_points, delta_x, delta_y)
-                    else:  # glint
-                        self.move_points_by_delta(self.glint_points, delta_x, delta_y)
-                # Move only the selected point
-                elif self.current_annotation == "pupil":
-                    index = self.pupil_points.index(self.mouse_state.selected_point)
-                    self.pupil_points[index] = new_pos
-                elif self.current_annotation == "limbus":
-                    index = self.limbus_points.index(self.mouse_state.selected_point)
-                    self.limbus_points[index] = new_pos
-                elif self.current_annotation == "eyelid_contour":
-                    index = self.eyelid_contour_points.index(self.mouse_state.selected_point)
-                    self.eyelid_contour_points[index] = new_pos
-                else:  # glint
-                    index = self.glint_points.index(self.mouse_state.selected_point)
-                    self.glint_points[index] = new_pos
-
+                    self.move_points_by_delta(points, delta_x, delta_y)
+                else:
+                    index = points.index(self.mouse_state.selected_point)
+                    points[index] = new_pos
                 self.mouse_state.selected_point = new_pos
                 self.mouse_state.last_mouse_pos = new_pos
                 self.update_image()
@@ -1008,49 +985,46 @@ class ImageViewer(QWidget):
             self.annotation_type_changed.emit(self.current_annotation)  # Emit the new signal
         self.annotation_changed.emit()
 
-    def clear_pupil_points(self) -> None:
-        """Clear all pupil annotation points."""
-        self.pupil_points = []
-        self.pupil_ellipse = None
+    def _clear_annotation(self, annotation: str, *, ellipse_only: bool = False) -> None:
+        """Clear ``annotation``'s ellipse, and (unless ``ellipse_only``) its point list.
+
+        Shared implementation behind the public ``clear_*_points`` /
+        ``clear_*_ellipse`` wrappers — the signal/slot wiring on the
+        annotation panel still binds to those names so the wrappers
+        stay.
+        """
+        points_field, ellipse_field = FIELDS_BY_ANNOTATION[annotation]
+        if not ellipse_only:
+            self.eye_data_store.set_field(points_field, [])
+        if ellipse_field is not None:
+            self.eye_data_store.set_field(ellipse_field, None)
         self.save_state()
         self.annotation_changed.emit()
         self.update_image()
+
+    def clear_pupil_points(self) -> None:
+        """Clear all pupil annotation points (and the fitted ellipse)."""
+        self._clear_annotation("pupil")
 
     def clear_limbus_points(self) -> None:
-        """Clear all limbus annotation points."""
-        self.limbus_points = []
-        self.limbus_ellipse = None
-        self.save_state()
-        self.annotation_changed.emit()
-        self.update_image()
+        """Clear all limbus annotation points (and the fitted ellipse)."""
+        self._clear_annotation("limbus")
 
     def clear_limbus_ellipse(self) -> None:
-        """Clear the fitted limbus ellipse."""
-        self.limbus_ellipse = None
-        self.save_state()
-        self.annotation_changed.emit()
-        self.update_image()
+        """Clear the fitted limbus ellipse (point list stays)."""
+        self._clear_annotation("limbus", ellipse_only=True)
 
     def clear_pupil_ellipse(self) -> None:
-        """Clear the fitted pupil ellipse."""
-        self.pupil_ellipse = None
-        self.save_state()
-        self.annotation_changed.emit()
-        self.update_image()
+        """Clear the fitted pupil ellipse (point list stays)."""
+        self._clear_annotation("pupil", ellipse_only=True)
 
     def clear_eyelid_points(self) -> None:
         """Clear all eyelid contour points."""
-        self.eyelid_contour_points = []
-        self.save_state()
-        self.annotation_changed.emit()
-        self.update_image()
+        self._clear_annotation("eyelid_contour")
 
     def clear_glint_points(self) -> None:
         """Clear all glint points."""
-        self.glint_points = []
-        self.save_state()
-        self.annotation_changed.emit()
-        self.update_image()
+        self._clear_annotation("glint")
 
     def clear_all(self) -> None:
         """Clear all annotations."""

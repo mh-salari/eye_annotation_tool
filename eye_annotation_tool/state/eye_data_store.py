@@ -22,6 +22,17 @@ ELLIPSE_FIELDS: tuple[str, ...] = ("pupil_ellipse", "limbus_ellipse")
 ALL_FIELDS: tuple[str, ...] = POINT_FIELDS + ELLIPSE_FIELDS
 EYES: tuple[str, ...] = ("left", "right")
 
+# Map each annotation slug (used by ``current_annotation`` and the UI
+# layer) to its ``(points_field, ellipse_field | None)`` pair in
+# :class:`EyeDataStore`. Pupil + limbus carry both a point list and a
+# fitted ellipse; eyelid + glint are points-only.
+FIELDS_BY_ANNOTATION: dict[str, tuple[str, str | None]] = {
+    "pupil": ("pupil_points", "pupil_ellipse"),
+    "limbus": ("limbus_points", "limbus_ellipse"),
+    "eyelid_contour": ("eyelid_contour_points", None),
+    "glint": ("glint_points", None),
+}
+
 # Per-eye field values: point lists hold :class:`QPointF`, ellipse
 # slots hold the 3-tuple returned by ``cv2.fitEllipse`` or ``None``.
 EyeField = list | tuple | None
