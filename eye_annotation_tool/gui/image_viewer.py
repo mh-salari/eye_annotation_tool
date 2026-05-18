@@ -12,6 +12,7 @@ from PyQt5.QtWidgets import QLabel, QMessageBox, QScrollArea, QVBoxLayout, QWidg
 from ..state import EyeDataStore, OverlayStore, TargetMaskStore, TargetRoiStore, UndoStack
 from ..utils.image_processing import find_closest_point, fit_ellipse
 from .brightness_controller import BrightnessController
+from .zoom_controller import ZoomController
 
 
 class ImageViewer(QWidget):
@@ -68,11 +69,7 @@ class ImageViewer(QWidget):
 
     def setup_variables(self) -> None:
         """Initialize instance variables."""
-        self.factor = 1.0
-        # Set on the first ``load_image`` so the zoom factor only auto-fits
-        # the inaugural image; subsequent navigations keep whatever zoom the
-        # user has dialed in.
-        self._zoom_initialized = False
+        self.zoom_state = ZoomController()
         self.eye_data_store = EyeDataStore()
 
         self.current_annotation = "pupil"
@@ -180,6 +177,11 @@ class ImageViewer(QWidget):
         # the public setters; the viewer never inspects plugin result
         # shapes itself.
         self.target_masks = TargetMaskStore()
+
+    @property
+    def factor(self) -> float:
+        """Current zoom factor (read-only mirror of :attr:`ZoomController.factor`)."""
+        return self.zoom_state.factor
 
     def setup_colors(self) -> None:
         # Define colors with transparency
@@ -721,24 +723,26 @@ class ImageViewer(QWidget):
         self.target_rois.clear_all()
         self.target_masks.clear_all()
         self.reset_undo_stack()
-        if not self._zoom_initialized:
-            self._fit_to_viewport()
-            self._zoom_initialized = True
+        if not self.zoom_state.is_initialized():
+            self.zoom_state.fit_to_viewport(self.scroll_area, self.original_pixmap)
+            self.zoom_state.mark_initialized()
         self.update_image()
         self.image_loaded.emit()
         return True
 
     def zoom_in_centered(self) -> None:
         """Zoom in around the centre of the visible viewport."""
-        self.zoom(True, self.scroll_area.viewport().rect().center())
+        self.zoom_state.zoom_in_centered(self.scroll_area, self)
+        self.update_image()
 
     def zoom_out_centered(self) -> None:
         """Zoom out around the centre of the visible viewport."""
-        self.zoom(False, self.scroll_area.viewport().rect().center())
+        self.zoom_state.zoom_out_centered(self.scroll_area, self)
+        self.update_image()
 
     def reset_zoom_to_fit(self) -> None:
         """Restore the zoom factor to fit the whole image inside the viewport."""
-        self._fit_to_viewport()
+        self.zoom_state.fit_to_viewport(self.scroll_area, self.original_pixmap)
         self.update_image()
 
     def brighten_display(self) -> None:
@@ -758,29 +762,6 @@ class ImageViewer(QWidget):
         if self.brightness.reset():
             self.brightness.rebuild(self.original_pixmap, self.image_grayscale)
             self.update_image()
-
-    def _fit_to_viewport(self) -> None:
-        """Pick a zoom factor so the loaded image fits inside the scroll viewport.
-
-        Called on the first ``load_image`` and by the user-facing
-        ``reset_zoom_to_fit`` action. A wide binocular image is fully
-        visible without manual zoom-out; smaller images don't get scaled
-        up past 1x (we never enlarge — only shrink to fit).
-        """
-        if self.original_pixmap is None or self.original_pixmap.isNull():
-            return
-        viewport = self.scroll_area.viewport().size()
-        if viewport.width() <= 0 or viewport.height() <= 0:
-            self.factor = 1.0
-            return
-        img_w = self.original_pixmap.width()
-        img_h = self.original_pixmap.height()
-        if img_w == 0 or img_h == 0:
-            self.factor = 1.0
-            return
-        fit_w = viewport.width() / img_w
-        fit_h = viewport.height() / img_h
-        self.factor = max(0.1, min(1.0, fit_w, fit_h))
 
     def get_current_image_grayscale(self) -> np.ndarray | None:
         """Return the grayscale numpy view of the current image (or None)."""
@@ -977,26 +958,8 @@ class ImageViewer(QWidget):
         return super().eventFilter(source, event)  # Propagate other events
 
     def zoom(self, zoom_in: bool, pos: QPoint) -> None:
-        """Zoom in or out at the specified position."""
-        old_factor = self.factor
-        if zoom_in:
-            self.factor *= 1.1
-        else:
-            self.factor /= 1.1
-
-        self.factor = max(0.1, min(25, self.factor))  # Limit zoom level
-
-        # Calculate the new scroll position to keep the point under the cursor fixed
-        viewport_center = self.scroll_area.viewport().rect().center()
-        scene_pos = self.scroll_area.mapToGlobal(viewport_center) - self.mapToGlobal(QPoint(0, 0))
-        delta = pos - scene_pos
-
-        h_bar = self.scroll_area.horizontalScrollBar()
-        v_bar = self.scroll_area.verticalScrollBar()
-
-        h_bar.setValue(int(h_bar.value() + delta.x() * (self.factor / old_factor - 1)))
-        v_bar.setValue(int(v_bar.value() + delta.y() * (self.factor / old_factor - 1)))
-
+        """Zoom in or out around ``pos`` (cursor position in viewer-local coords)."""
+        self.zoom_state.zoom(zoom_in, pos, self.scroll_area, self)
         self.update_image()
 
     def pause_updates(self) -> None:
