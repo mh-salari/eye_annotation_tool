@@ -1,11 +1,10 @@
 """Main application window for the eye annotation tool."""
 
-import ast
 from pathlib import Path
 
 import qtawesome as qta
 from PyQt5.QtCore import QEvent, QRect, QSize, Qt
-from PyQt5.QtGui import QCloseEvent, QIcon, QPixmap, QScreen
+from PyQt5.QtGui import QCloseEvent, QIcon, QScreen
 from PyQt5.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -34,6 +33,7 @@ from ..utils.project_settings import (
     DETECTOR_TARGETS,
     PROJECT_FILE_SUFFIX,
 )
+from .about_dialog import show_about_dialog
 from .annotation_controls import MODE_AUTO_DETECT, MODE_MANUAL, AnnotationControlPanel
 from .custom_widgets import MaterialButton
 from .image_viewer import ImageViewer
@@ -142,10 +142,23 @@ class MainWindow(QMainWindow):
 
     def setup_ui(self) -> None:
         """Set up the user interface components."""
+        self.image_viewer = ImageViewer()
+        left_panel = self._build_left_panel()
+        right_panel = self._build_right_panel()
+
         central_widget = QWidget()
         main_layout = QHBoxLayout()
+        main_layout.addWidget(left_panel)
+        main_layout.addWidget(self.image_viewer, 1)
+        main_layout.addWidget(right_panel)
+        central_widget.setLayout(main_layout)
+        self.setCentralWidget(central_widget)
 
-        # Left panel: load + navigate + save controls and the image list.
+        self.setStatusBar(QStatusBar())
+        self.image_viewer.setFocus()
+
+    def _build_left_panel(self) -> QWidget:
+        """Build the left panel: load/navigate/save buttons, image list, zoom + brightness rows."""
         left_panel = QWidget()
         left_layout = QVBoxLayout()
         self.load_images_button = MaterialButton("Load Images")
@@ -228,19 +241,22 @@ class MainWindow(QMainWindow):
         left_layout.addLayout(brightness_row)
         left_panel.setLayout(left_layout)
 
-        self.image_viewer = ImageViewer()
         self.zoom_in_button.clicked.connect(self.image_viewer.zoom_in_centered)
         self.zoom_out_button.clicked.connect(self.image_viewer.zoom_out_centered)
         self.zoom_reset_button.clicked.connect(self.image_viewer.reset_zoom_to_fit)
         self.brighter_button.clicked.connect(self.image_viewer.brighten_display)
         self.darker_button.clicked.connect(self.image_viewer.darken_display)
         self.brightness_reset_button.clicked.connect(self.image_viewer.reset_display_brightness)
+        return left_panel
 
-        # Right panel: AnnotationControlPanel inside a QScrollArea so taller
-        # Auto Detect plugin stacks scroll instead of pushing the window
-        # past the screen. Clear All sits below the scroll area as a fixed
-        # footer so it stays visible regardless of how tall the panel
-        # contents grow.
+    def _build_right_panel(self) -> QWidget:
+        """Build the right panel: scrolling AnnotationControlPanel + Clear All footer.
+
+        The panel sits inside a QScrollArea so taller Auto Detect plugin
+        stacks scroll instead of pushing the window past the screen.
+        Clear All is a fixed footer below the scroll area so it stays
+        visible regardless of how tall the panel contents grow.
+        """
         self.annotation_controls = AnnotationControlPanel()
         right_scroll = QScrollArea()
         right_scroll.setWidget(self.annotation_controls)
@@ -255,16 +271,7 @@ class MainWindow(QMainWindow):
         right_layout.addWidget(self.annotation_controls.clear_all_button)
         right_panel.setLayout(right_layout)
         right_panel.setFixedWidth(360)  # 340 panel + room for the vertical scrollbar
-
-        main_layout.addWidget(left_panel)
-        main_layout.addWidget(self.image_viewer, 1)
-        main_layout.addWidget(right_panel)
-
-        central_widget.setLayout(main_layout)
-        self.setCentralWidget(central_widget)
-
-        self.setStatusBar(QStatusBar())
-        self.image_viewer.setFocus()
+        return right_panel
 
     def setup_variables(self) -> None:
         """Initialise instance variables."""
@@ -776,51 +783,6 @@ class MainWindow(QMainWindow):
                     return
         event.accept()
 
-    @staticmethod
-    def get_version_from_setup() -> str:
-        """Read the application version literal from ``setup.py``."""
-        setup_path = Path(__file__).parent / ".." / ".." / "setup.py"
-        tree = ast.parse(setup_path.read_text(encoding="utf-8"))
-        for node in ast.walk(tree):
-            if isinstance(node, ast.Call) and node.func.id == "setup":
-                for keyword in node.keywords:
-                    if keyword.arg == "version":
-                        return ast.literal_eval(keyword.value)
-        return "Unknown"
-
     def show_about_dialog(self) -> None:
-        """Show the about dialog with application information."""
-        about_text = (
-            "<h3>EyE Annotation Tool</h3>"
-            "<p>A tool to annotate eye images for pupil, limbus and eyelid detection.</p>"
-            "<p>Developed by "
-            "<a href='https://mh-salari.ir/'"
-            "style='color: #8b7aa2;'>Mohammadhossein Salari</a></p>"
-            f"<p>Current version: {self.get_version_from_setup()}</p>"
-            "<p>To get the latest version of Eye Annotation Tool, visit<br>"
-            "<a href='https://github.com/mh-salari/eye_annotation_tool' "
-            "style='color: #8b7aa2;' target='_blank' rel='noopener noreferrer'>"
-            "github.com/mh-salari/eye_annotation_tool</a></p>"
-            "<p>This project has received funding from the European Union's Horizon "
-            "Europe research and innovation funding program under grant "
-            "agreement No 101072410, Eyes4ICU project.</p>"
-        )
-        about_widget = QWidget()
-        layout = QVBoxLayout()
-        text_label = QLabel(about_text)
-        text_label.setTextFormat(Qt.RichText)
-        text_label.setOpenExternalLinks(True)
-        text_label.setWordWrap(True)
-        layout.addWidget(text_label)
-        image_label = QLabel()
-        image_path = str(Path(__file__).parent / ".." / "resources" / "Funded_by_EU_Eyes4ICU.png")
-        pixmap = QPixmap(image_path)
-        image_label.setPixmap(pixmap.scaled(400, 100, Qt.KeepAspectRatio, Qt.SmoothTransformation))
-        image_label.setAlignment(Qt.AlignCenter)
-        layout.addWidget(image_label)
-        about_widget.setLayout(layout)
-        msg_box = QMessageBox(self)
-        msg_box.setWindowTitle("About EyE Annotation Tool")
-        msg_box.setIcon(QMessageBox.NoIcon)
-        msg_box.layout().addWidget(about_widget, 0, 0, 1, msg_box.layout().columnCount())
-        msg_box.exec_()
+        """Show the Help > About dialog parented to the main window."""
+        show_about_dialog(self)
