@@ -1,6 +1,5 @@
 """Image viewer widget for displaying and annotating eye images."""
 
-import math
 from operator import itemgetter
 from typing import ClassVar
 
@@ -12,15 +11,7 @@ from PyQt5.QtWidgets import QLabel, QMessageBox, QScrollArea, QVBoxLayout, QWidg
 
 from ..state import EyeDataStore, OverlayStore, TargetMaskStore, TargetRoiStore, UndoStack
 from ..utils.image_processing import find_closest_point, fit_ellipse
-
-# Display brightness step factor per Brighter / Darker click, and the
-# clamp range applied around the unmodified 1.0. 1.2 ~= +20 % per step
-# (15 steps spans roughly 0.16x .. 6.2x). The brightening multiplies the
-# numpy grayscale values and clips to [0, 255]; the source pixmap is
-# never modified, so detector plugins keep seeing the original image.
-BRIGHTNESS_STEP = 1.2
-BRIGHTNESS_MIN = 0.1
-BRIGHTNESS_MAX = 10.0
+from .brightness_controller import BrightnessController
 
 
 class ImageViewer(QWidget):
@@ -92,14 +83,11 @@ class ImageViewer(QWidget):
         self.last_pan_pos = None
         self.pixmap = None
 
-        # Display brightness. ``1.0`` = unmodified (the canvas paints the
-        # original pixels). Brighter / darker buttons step this by
-        # ``BRIGHTNESS_STEP`` and rebuild ``_brightness_pixmap`` from the
-        # numpy grayscale view so the source-of-truth ``original_pixmap``
-        # stays untouched and detector plugins keep seeing the unmodified
-        # image.
-        self._display_brightness = 1.0
-        self._brightness_pixmap: QPixmap | None = None
+        # Display-only brightness adjustment. The source pixmap is
+        # never modified, so detector plugins keep seeing the original
+        # image; the controller caches an adjusted pixmap built from
+        # the numpy grayscale view.
+        self.brightness = BrightnessController()
 
         # Batch-update gate. Setters call ``update_image()`` to repaint after
         # mutating state; on heavy load paths (apply_loaded_detections,
@@ -719,7 +707,7 @@ class ImageViewer(QWidget):
         # pixels in one frame, the next frame keeps the same factor so
         # they don't have to re-tune per image. Rebuild the cached
         # brightness pixmap against the freshly loaded grayscale.
-        self._rebuild_brightness_pixmap()
+        self.brightness.rebuild(self.original_pixmap, self.image_grayscale)
         self.pupil_points = []
         self.limbus_points = []
         self.pupil_ellipse = None
@@ -754,53 +742,22 @@ class ImageViewer(QWidget):
         self.update_image()
 
     def brighten_display(self) -> None:
-        """Multiply the displayed grayscale by ``BRIGHTNESS_STEP`` (clamped)."""
-        self._set_display_brightness(self._display_brightness * BRIGHTNESS_STEP)
+        """Multiply the displayed grayscale by the brightness step."""
+        if self.brightness.brighten():
+            self.brightness.rebuild(self.original_pixmap, self.image_grayscale)
+            self.update_image()
 
     def darken_display(self) -> None:
-        """Divide the displayed grayscale by ``BRIGHTNESS_STEP`` (clamped)."""
-        self._set_display_brightness(self._display_brightness / BRIGHTNESS_STEP)
+        """Divide the displayed grayscale by the brightness step."""
+        if self.brightness.darken():
+            self.brightness.rebuild(self.original_pixmap, self.image_grayscale)
+            self.update_image()
 
     def reset_display_brightness(self) -> None:
-        """Restore the displayed grayscale to its source values (factor = 1.0)."""
-        self._set_display_brightness(1.0)
-
-    def _set_display_brightness(self, factor: float) -> None:
-        """Clamp ``factor`` to the brightness range, rebuild the display pixmap, repaint."""
-        factor = max(BRIGHTNESS_MIN, min(BRIGHTNESS_MAX, float(factor)))
-        if factor == self._display_brightness and self._brightness_pixmap is not None:
-            return
-        self._display_brightness = factor
-        self._rebuild_brightness_pixmap()
-        self.update_image()
-
-    def _rebuild_brightness_pixmap(self) -> None:
-        """Recompute the cached brightness-adjusted pixmap from the numpy grayscale.
-
-        Identity case (factor == 1.0) reuses ``original_pixmap`` directly so
-        the no-adjustment path costs nothing. Other factors multiply the
-        ``image_grayscale`` array, clip to ``[0, 255]``, and wrap the result
-        back into a QPixmap — kept as a class attribute so ``update_image``
-        can scale from it without recomputing each repaint.
-        """
-        if self.original_pixmap is None or self.original_pixmap.isNull():
-            self._brightness_pixmap = None
-            return
-        # Brighten/darken steps multiply by 1.2 so the value rarely lands
-        # back on exactly 1.0 after a few cycles; treat anything within
-        # ``1e-6`` of unity as identity to short-circuit the rebuild.
-        if math.isclose(self._display_brightness, 1.0, abs_tol=1e-6) or self.image_grayscale is None:
-            self._brightness_pixmap = self.original_pixmap
-            return
-        adjusted = np.clip(
-            self.image_grayscale.astype(np.float32) * self._display_brightness,
-            0,
-            255,
-        ).astype(np.uint8)
-        h, w = adjusted.shape[:2]
-        # Copy ensures the numpy buffer outlives the QImage view.
-        qimg = QImage(adjusted.tobytes(), w, h, w, QImage.Format_Grayscale8)
-        self._brightness_pixmap = QPixmap.fromImage(qimg)
+        """Restore the displayed grayscale to its source values."""
+        if self.brightness.reset():
+            self.brightness.rebuild(self.original_pixmap, self.image_grayscale)
+            self.update_image()
 
     def _fit_to_viewport(self) -> None:
         """Pick a zoom factor so the loaded image fits inside the scroll viewport.
@@ -1069,8 +1026,8 @@ class ImageViewer(QWidget):
             return
         # The brightness-adjusted pixmap is identical to the original when
         # the factor is 1.0; with any other factor it carries the clipped
-        # numpy-rescaled grayscale rebuilt by ``_rebuild_brightness_pixmap``.
-        source_pixmap = self._brightness_pixmap or self.original_pixmap
+        # numpy-rescaled grayscale cached by ``BrightnessController``.
+        source_pixmap = self.brightness.display_pixmap(self.original_pixmap)
         scaled_pixmap = source_pixmap.scaled(
             source_pixmap.size() * self.factor,
             Qt.KeepAspectRatio,
