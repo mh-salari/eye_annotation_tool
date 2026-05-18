@@ -12,6 +12,7 @@ from .overlay_store import OverlayStore
 from .per_eye_state import PerEyeStateStore
 from .project_store import ProjectStore
 from .session_state import SessionState
+from .target_mask_store import TargetMaskStore
 from .target_roi_store import TargetRoiStore
 from .undo_stack import UndoStack
 
@@ -22,6 +23,7 @@ __all__ = [
     "PerEyeStateStore",
     "ProjectStore",
     "SessionState",
+    "TargetMaskStore",
     "TargetRoiStore",
     "UndoStack",
 ]

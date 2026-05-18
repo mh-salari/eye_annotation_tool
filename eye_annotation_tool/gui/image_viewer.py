@@ -10,7 +10,7 @@ from PyQt5.QtCore import QEvent, QPoint, QPointF, QSizeF, Qt, pyqtSignal
 from PyQt5.QtGui import QColor, QImage, QKeyEvent, QPainter, QPen, QPixmap
 from PyQt5.QtWidgets import QLabel, QMessageBox, QScrollArea, QVBoxLayout, QWidget
 
-from ..state import EyeDataStore, OverlayStore, TargetRoiStore, UndoStack
+from ..state import EyeDataStore, OverlayStore, TargetMaskStore, TargetRoiStore, UndoStack
 from ..utils.image_processing import find_closest_point, fit_ellipse
 
 # Display brightness step factor per Brighter / Darker click, and the
@@ -187,15 +187,11 @@ class ImageViewer(QWidget):
         # the inactive eye's rectangle paints without handles for context.
         self.target_rois = TargetRoiStore()
 
-        # Per-eye, per-target threshold-mask overlays. ``_target_masks``
-        # holds the ``uint8`` ndarray a plugin's ``detect`` returned under
-        # its ``"mask"`` key (or absent when the plugin didn't produce
-        # one). ``_show_target_masks`` is per-target (not per-eye) — the
-        # Show mask checkbox toggles every stored mask for that target.
-        # All stores are populated from outside via the public setters;
-        # the viewer never inspects plugin result shapes itself.
-        self._target_masks: dict[str, dict[str, np.ndarray]] = {}
-        self._show_target_masks: dict[str, bool] = {}
+        # Per-eye, per-target threshold masks + per-target Show-mask
+        # visibility flags. All stores are populated from outside via
+        # the public setters; the viewer never inspects plugin result
+        # shapes itself.
+        self.target_masks = TargetMaskStore()
 
     def setup_colors(self) -> None:
         # Define colors with transparency
@@ -735,7 +731,7 @@ class ImageViewer(QWidget):
         # new image until the next plugin run.
         self.detection_overlays.clear_all()
         self.target_rois.clear_all()
-        self._target_masks.clear()
+        self.target_masks.clear_all()
         self.reset_undo_stack()
         if not self._zoom_initialized:
             self._fit_to_viewport()
@@ -906,17 +902,6 @@ class ImageViewer(QWidget):
         """Map ``None`` to the currently active eye slot."""
         return eye_slot if eye_slot is not None else self.active_eye_slot()
 
-    @staticmethod
-    def _drop_slot(store: dict, target: str, slot: str) -> bool:
-        """Remove ``slot`` from ``store[target]``; prune empty target dicts. Returns whether anything was removed."""
-        by_slot = store.get(target)
-        if not by_slot or slot not in by_slot:
-            return False
-        del by_slot[slot]
-        if not by_slot:
-            del store[target]
-        return True
-
     # ----- Per-eye, per-target Auto Detect overlays -----
 
     def set_detection_overlay(self, target: str, result: dict, *, eye_slot: str | None = None) -> None:
@@ -999,43 +984,26 @@ class ImageViewer(QWidget):
 
     def set_target_mask(self, target: str, mask: "np.ndarray | None", *, eye_slot: str | None = None) -> None:
         """Store ``(target, eye_slot)``'s threshold mask. Repaints when masks are visible."""
-        slot = self._resolve_slot(eye_slot)
-        if mask is None:
-            removed = self._drop_slot(self._target_masks, target, slot)
-            if removed and self._show_target_masks.get(target):
-                self.update_image()
-            return
-        self._target_masks.setdefault(target, {})[slot] = mask
-        if self._show_target_masks.get(target):
+        if self.target_masks.set(target, self._resolve_slot(eye_slot), mask):
             self.update_image()
 
     def set_show_target_mask(self, target: str, on: bool) -> None:
         """Toggle visibility of every stored mask for ``target`` (across all eyes)."""
-        self._show_target_masks[target] = bool(on)
+        self.target_masks.set_show(target, on)
         self.update_image()
 
     def clear_target_mask(self, target: str, *, eye_slot: str | None = None) -> None:
         """Drop the mask for ``(target, eye_slot)`` (or every slot when ``eye_slot`` is None)."""
-        was_visible = bool(self._show_target_masks.get(target)) and bool(self._target_masks.get(target))
-        if eye_slot is None:
-            if self._target_masks.pop(target, None) is not None and was_visible:
-                self.update_image()
-            return
-        if self._drop_slot(self._target_masks, target, eye_slot) and was_visible:
+        if self.target_masks.clear(target, eye_slot):
             self.update_image()
 
     def get_target_mask(self, target: str, *, eye_slot: str | None = None) -> "np.ndarray | None":
         """Return the mask stored for ``(target, eye_slot)`` (or None)."""
-        slot = self._resolve_slot(eye_slot)
-        return self._target_masks.get(target, {}).get(slot)
+        return self.target_masks.get(target, self._resolve_slot(eye_slot))
 
     def clear_all_target_masks(self) -> None:
         """Drop every stored mask across all targets and eyes. Repaints if anything was visible."""
-        if not self._target_masks:
-            return
-        had_visible = any(self._show_target_masks.get(t) for t in self._target_masks)
-        self._target_masks.clear()
-        if had_visible:
+        if self.target_masks.clear_all():
             self.update_image()
 
     def eventFilter(self, source: QWidget, event: QEvent) -> bool:  # noqa: N802
@@ -1238,15 +1206,10 @@ class ImageViewer(QWidget):
         the mask is still visible. The Show mask toggle is per-target,
         so flipping it reveals both eyes' masks at once.
         """
-        for target, by_slot in self._target_masks.items():
-            if not self._show_target_masks.get(target):
-                continue
+        for target, mask in self.target_masks.visible_items():
             plugin = self._active_plugins.get(target)
             color = getattr(plugin, "mask_color", None) or self._fallback_mask_color
-            for mask in by_slot.values():
-                if mask is None:
-                    continue
-                self._draw_mask(painter, mask, color)
+            self._draw_mask(painter, mask, color)
 
     def _draw_mask(self, painter: QPainter, mask: "np.ndarray", color: QColor) -> None:
         """Blit a uint8 0/255 mask onto the canvas as a single coloured RGBA fill."""
