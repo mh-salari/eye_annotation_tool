@@ -93,6 +93,10 @@ class _ThresholdPupilPanel(QGroupBox):
     # MainWindow forwards this to the image viewer so the threshold
     # mask paint path can be gated independently per plugin.
     show_mask_toggled = pyqtSignal(bool)
+    # Emitted when the user toggles the "Show ellipse" checkbox. The
+    # MainWindow flips the plugin's render flag and re-paints; the
+    # fitted ellipse outline disappears while the centre dot stays.
+    show_ellipse_toggled = pyqtSignal(bool)
     # Emitted when the user flips the "Carry to other images" checkbox
     # next to the ROI row. MainWindow tracks the carry-over state in
     # project settings and applies the value to subsequent image loads
@@ -136,10 +140,17 @@ class _ThresholdPupilPanel(QGroupBox):
         layout.addWidget(self.roundness_row)
         layout.addLayout(self._build_roi_row())
 
+        toggles_row = QHBoxLayout()
         self.show_mask_check = QCheckBox("Show mask")
         self.show_mask_check.setChecked(False)
         self.show_mask_check.toggled.connect(self.show_mask_toggled.emit)
-        layout.addWidget(self.show_mask_check)
+        toggles_row.addWidget(self.show_mask_check)
+        self.show_ellipse_check = QCheckBox("Show ellipse")
+        self.show_ellipse_check.setChecked(True)
+        self.show_ellipse_check.toggled.connect(self.show_ellipse_toggled.emit)
+        toggles_row.addWidget(self.show_ellipse_check)
+        toggles_row.addStretch()
+        layout.addLayout(toggles_row)
 
         self.setLayout(layout)
 
@@ -305,6 +316,14 @@ class ThresholdPupil(DetectorPlugin):
     overlay_z_order = 0
     roi_color = ROI_COLOR
     mask_color = MASK_COLOR
+    # Gates the fitted ellipse outline in :meth:`draw_overlay`. Flipped
+    # by MainWindow when the panel's "Show ellipse" checkbox toggles;
+    # the centre dot still paints when this is False.
+    _show_ellipse: bool = True
+
+    def set_show_ellipse(self, on: bool) -> None:
+        """Set whether :meth:`draw_overlay` renders the fitted ellipse outline."""
+        self._show_ellipse = bool(on)
 
     @classmethod
     def default_params(cls) -> dict:
@@ -407,7 +426,7 @@ class ThresholdPupil(DetectorPlugin):
     def draw_overlay(self, painter: QPainter, result: dict, scale: float) -> None:
         """Render the fitted pupil ellipse and its centre dot."""
         ellipse = result.get("ellipse")
-        if ellipse is not None:
+        if ellipse is not None and self._show_ellipse:
             ecx, ecy = ellipse["center"]
             ew, eh = ellipse["size"]
             angle = float(ellipse["angle"])

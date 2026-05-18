@@ -113,6 +113,11 @@ class _ThresholdGlintPanel(QGroupBox):
     # forwards to the image viewer so the threshold mask paint path is
     # gated independently per plugin.
     show_mask_toggled = pyqtSignal(bool)
+    # Emitted when the user toggles the "Show ellipse" checkbox. The
+    # MainWindow flips the plugin's render flag and re-paints; each
+    # glint's fitted ellipse outline disappears while its centre dot
+    # stays visible.
+    show_ellipse_toggled = pyqtSignal(bool)
     # Emitted when the user toggles the "Glint ROI" button. The image
     # viewer puts itself in drag-edit mode for the glint ROI rectangle
     # while this is True.
@@ -169,10 +174,17 @@ class _ThresholdGlintPanel(QGroupBox):
         layout.addWidget(self.roundness_row)
         layout.addLayout(self._build_roi_row())
 
+        toggles_row = QHBoxLayout()
         self.show_mask_check = QCheckBox("Show mask")
         self.show_mask_check.setChecked(False)
         self.show_mask_check.toggled.connect(self.show_mask_toggled.emit)
-        layout.addWidget(self.show_mask_check)
+        toggles_row.addWidget(self.show_mask_check)
+        self.show_ellipse_check = QCheckBox("Show ellipse")
+        self.show_ellipse_check.setChecked(True)
+        self.show_ellipse_check.toggled.connect(self.show_ellipse_toggled.emit)
+        toggles_row.addWidget(self.show_ellipse_check)
+        toggles_row.addStretch()
+        layout.addLayout(toggles_row)
 
         self.setLayout(layout)
 
@@ -531,6 +543,14 @@ class ThresholdGlint(DetectorPlugin):
     overlay_z_order = 10
     roi_color = ROI_COLOR
     mask_color = MASK_COLOR
+    # Gates the fitted ellipse outline in :meth:`draw_overlay`. Flipped
+    # by MainWindow when the panel's "Show ellipse" checkbox toggles;
+    # each glint's centre dot still paints when this is False.
+    _show_ellipse: bool = True
+
+    def set_show_ellipse(self, on: bool) -> None:
+        """Set whether :meth:`draw_overlay` renders each glint's fitted ellipse outline."""
+        self._show_ellipse = bool(on)
 
     @classmethod
     def default_params(cls) -> dict:
@@ -617,7 +637,7 @@ class ThresholdGlint(DetectorPlugin):
         glints = result.get("glints") or []
         for g in glints:
             ellipse = g.get("ellipse")
-            if ellipse is not None:
+            if ellipse is not None and self._show_ellipse:
                 ecx, ecy = ellipse["center"]
                 ew, eh = ellipse["size"]
                 angle = float(ellipse["angle"])

@@ -1529,6 +1529,16 @@ class MainWindow(QMainWindow):
                 panel.show_mask_toggled.connect(
                     lambda on, target_=plugin.target: self._on_panel_show_mask_toggled(target_, on),
                 )
+            if hasattr(panel, "show_ellipse_toggled"):
+                panel.show_ellipse_toggled.connect(
+                    lambda on, plugin_=plugin: self._on_panel_show_ellipse_toggled(plugin_, on),
+                )
+                # Plugin instances outlive their panels; sync the persistent
+                # render flag to the freshly built checkbox state so a
+                # disable / re-enable cycle does not leave the plugin showing
+                # an outline the new panel claims is off.
+                if hasattr(plugin, "set_show_ellipse") and hasattr(panel, "show_ellipse_check"):
+                    plugin.set_show_ellipse(panel.show_ellipse_check.isChecked())
             if hasattr(panel, "detect_requested"):
                 panel.detect_requested.connect(
                     lambda name=plugin.name, target_=plugin.target: self._on_panel_detect_requested(name, target_),
@@ -1732,6 +1742,14 @@ class MainWindow(QMainWindow):
         and populates the mask; nothing implicit happens on toggle.
         """
         self.image_viewer.set_show_target_mask(target, on)
+
+    def _on_panel_show_ellipse_toggled(self, plugin: object, on: bool) -> None:
+        """Flip the plugin's fitted-ellipse render flag and repaint the canvas."""
+        setter = getattr(plugin, "set_show_ellipse", None)
+        if setter is None:
+            return
+        setter(on)
+        self.image_viewer.update_image()
 
     def _on_panel_roi_edit_requested(self, target: str, active: bool) -> None:
         """Enter (or leave) drag-edit mode for ``target``'s ROI on the canvas."""
