@@ -1,17 +1,17 @@
 """Image viewer widget for displaying and annotating eye images."""
 
-from operator import itemgetter
 from typing import ClassVar
 
 import cv2
 import numpy as np
 from PyQt5.QtCore import QEvent, QPoint, QPointF, QSizeF, Qt, pyqtSignal
-from PyQt5.QtGui import QColor, QImage, QKeyEvent, QPainter, QPen, QPixmap
+from PyQt5.QtGui import QKeyEvent, QPixmap
 from PyQt5.QtWidgets import QLabel, QMessageBox, QScrollArea, QVBoxLayout, QWidget
 
 from ..state import EyeDataStore, OverlayStore, TargetMaskStore, TargetRoiStore, UndoStack
 from ..utils.image_processing import find_closest_point, fit_ellipse
 from .brightness_controller import BrightnessController
+from .canvas_renderer import AnnotationColors, CanvasGeometry, CanvasRenderer
 from .mouse_drag_state import MouseDragState
 from .zoom_controller import ZoomController
 
@@ -49,7 +49,17 @@ class ImageViewer(QWidget):
         self.setup_ui()
         self.setup_variables()
         self.setup_undo_system()
-        self.setup_colors()
+        self.colors = AnnotationColors.default()
+        self.renderer = CanvasRenderer(
+            self.colors,
+            self.eye_data_store,
+            self.detection_overlays,
+            self.target_rois,
+            self.target_masks,
+            self._active_plugins,
+            self.brightness,
+            self.zoom_state,
+        )
 
         self.setFocusPolicy(Qt.StrongFocus)
         self.setAttribute(Qt.WA_MouseTracking, True)
@@ -170,45 +180,6 @@ class ImageViewer(QWidget):
     def factor(self) -> float:
         """Current zoom factor (read-only mirror of :attr:`ZoomController.factor`)."""
         return self.zoom_state.factor
-
-    def setup_colors(self) -> None:
-        # Define colors with transparency
-        """Set up color definitions for annotations."""
-        self.pupil_color = QColor(150, 213, 116, 255)
-        self.pupil_select_color = QColor(249, 248, 113, 255)
-        self.pupil_ellipse_color = QColor(25, 145, 50, 255)
-        # Brighter shade than the ellipse outline so the centre dot
-        # reads on top of both the outline and the soft-green mask
-        # fill the auto pupil plugin can paint underneath.
-        self.pupil_center_color = QColor(180, 240, 80, 255)
-
-        self.limbus_color = QColor(194, 149, 188, 255)
-        self.limbus_select_color = QColor(249, 178, 208, 255)
-        self.limbus_ellipse_color = QColor(139, 122, 162, 255)
-
-        self.eyelid_color = QColor(0, 155, 201, 255)
-        self.eyelid_select_color = QColor(0, 189, 194, 255)
-        self.eyelid_ellipse_color = QColor(0, 118, 195, 255)
-
-        self.glint_color = QColor(255, 165, 0, 255)  # Orange
-        self.glint_select_color = QColor(255, 215, 0, 255)  # Gold
-
-        # Fallback colours used when an Auto Detect ROI or threshold mask
-        # belongs to a plugin that didn't declare its own colour. Plugins
-        # are expected to set ``roi_color`` / ``mask_color`` on the class
-        # body — these defaults exist only so a misconfigured plugin
-        # still renders something visible instead of crashing.
-        self._fallback_roi_color = QColor(255, 255, 255, 200)
-        self._fallback_mask_color = QColor(255, 255, 255, 64)
-
-        # Binocular divider line + dim overlay for the inactive eye.
-        # Divider is bright white so it reads as a UI separator distinct
-        # from every data layer (pupil teal / limbus purple / glint red
-        # / mask cyan / mask magenta). The dim overlay is a low-alpha
-        # black wash that darkens the inactive half without hiding the
-        # eye entirely.
-        self.divider_color = QColor(255, 255, 255, 230)
-        self.inactive_eye_dim_color = QColor(0, 0, 0, 120)
 
     def setup_undo_system(self) -> None:
         """Initialise the undo stack."""
@@ -961,308 +932,30 @@ class ImageViewer(QWidget):
             self.update_image()
 
     def update_image(self) -> None:
-        """Update the displayed image with annotations."""
+        """Repaint the canvas (or buffer the request while updates are paused)."""
         if self._updates_paused:
             self._update_pending = True
             return
-        if self.original_pixmap is None or self.original_pixmap.isNull():
-            return
-        # The brightness-adjusted pixmap is identical to the original when
-        # the factor is 1.0; with any other factor it carries the clipped
-        # numpy-rescaled grayscale cached by ``BrightnessController``.
-        source_pixmap = self.brightness.display_pixmap(self.original_pixmap)
-        scaled_pixmap = source_pixmap.scaled(
-            source_pixmap.size() * self.factor,
-            Qt.KeepAspectRatio,
-            Qt.SmoothTransformation,
+        geometry = CanvasGeometry(
+            current_eye=self.current_eye,
+            binocular_mode=self.binocular_mode,
+            divider_x_image=self._divider_x_image(),
+            current_annotation=self.current_annotation,
+            auto_managed_annotations=self._auto_managed_annotations,
+            selected_point=self.mouse_state.selected_point,
         )
-        self.pixmap = QPixmap(scaled_pixmap.size())
-        self.pixmap.fill(Qt.transparent)
-        painter = QPainter(self.pixmap)
-        painter.drawPixmap(0, 0, scaled_pixmap)
-
-        self.draw_eye_annotations(painter, "left")
-        if self.binocular_mode:
-            self.draw_eye_annotations(painter, "right")
-
-        self._draw_detection_overlays(painter)
-        self._draw_target_rois(painter)
-        if self.binocular_mode:
-            self._draw_inactive_half_dim(painter)
-            self._draw_divider(painter)
-
-        painter.end()
-        self.image_label.setPixmap(self.pixmap)
-        self.image_label.resize(self.pixmap.size())
-
-    def draw_eye_annotations(self, painter: QPainter, eye: str) -> None:
-        """Draw all annotations for a specific eye with eye label.
-
-        Args:
-            painter: QPainter object to draw with
-            eye: "left" or "right"
-
-        """
-        eye_data = self.eye_data[eye]
-
-        # Draw points for this eye
-        self.draw_points_for_eye(painter, eye_data, eye)
-
-        # Draw ellipses for this eye
-        self.draw_ellipses_for_eye(painter, eye_data)
-
-    def draw_points_for_eye(self, painter: QPainter, eye_data: dict, eye: str) -> None:
-        """Draw annotation points for a specific eye."""
-        is_active = eye == self.current_eye
-        eye_label = "L" if eye == "left" else "R"
-
-        for points, color, annotation_type in [
-            (eye_data["pupil_points"], self.pupil_color, "pupil"),
-            (eye_data["limbus_points"], self.limbus_color, "limbus"),
-            (eye_data["eyelid_contour_points"], self.eyelid_color, "eyelid_contour"),
-            (eye_data["glint_points"], self.glint_color, "glint"),
-        ]:
-            if annotation_type in self._auto_managed_annotations:
-                continue
-            for point in points:
-                scaled_point = QPointF(point.x() * self.factor, point.y() * self.factor)
-                # Only show selection highlight for active eye
-                if is_active and point == self.mouse_state.selected_point and self.current_annotation == annotation_type:
-                    if annotation_type == "pupil":
-                        painter.setPen(QPen(self.pupil_select_color, 3, Qt.SolidLine))
-                    elif annotation_type == "limbus":
-                        painter.setPen(QPen(self.limbus_select_color, 3, Qt.SolidLine))
-                    elif annotation_type == "eyelid_contour":
-                        painter.setPen(QPen(self.eyelid_select_color, 3, Qt.SolidLine))
-                    else:  # glint
-                        painter.setPen(QPen(self.glint_select_color, 3, Qt.SolidLine))
-                else:
-                    painter.setPen(QPen(color, 3, Qt.SolidLine))
-                painter.drawEllipse(scaled_point, 1.5, 1.5)
-
-                # In monocular mode the L/R distinction is meaningless, so
-                # the per-point eye label is suppressed entirely.
-                if self.binocular_mode:
-                    font = painter.font()
-                    font.setPointSize(8)
-                    painter.setFont(font)
-                    painter.setPen(QPen(color, 1, Qt.SolidLine))
-                    text_pos = QPointF(scaled_point.x() + 6, scaled_point.y() - 4)
-                    painter.drawText(text_pos, eye_label)
-
-    def draw_ellipses_for_eye(self, painter: QPainter, eye_data: dict) -> None:
-        """Draw fitted ellipses + their centre markers for a specific eye."""
-        if eye_data["pupil_ellipse"] and "pupil" not in self._auto_managed_annotations:
-            painter.setPen(QPen(self.pupil_ellipse_color, 1, Qt.SolidLine))
-            self.draw_single_ellipse(painter, eye_data["pupil_ellipse"])
-            self._draw_ellipse_center(painter, eye_data["pupil_ellipse"], self.pupil_center_color)
-        if eye_data["limbus_ellipse"] and "limbus" not in self._auto_managed_annotations:
-            painter.setPen(QPen(self.limbus_ellipse_color, 1, Qt.SolidLine))
-            self.draw_single_ellipse(painter, eye_data["limbus_ellipse"])
-            self._draw_ellipse_center(painter, eye_data["limbus_ellipse"], self.limbus_ellipse_color)
-
-    def _draw_ellipse_center(self, painter: QPainter, ellipse: tuple, color: QColor) -> None:
-        """Render a small filled dot at the centre of a manually fitted ellipse."""
-        if ellipse is None:
+        pixmap = self.renderer.render(self.original_pixmap, geometry)
+        if pixmap is None:
             return
-        center, _size, _angle = ellipse
-        scaled = QPointF(center.x() * self.factor, center.y() * self.factor)
-        painter.save()
-        painter.setBrush(color)
-        painter.setPen(QPen(color, 1, Qt.SolidLine))
-        painter.drawEllipse(scaled, 2.0, 2.0)
-        painter.restore()
-
-    def _draw_detection_overlays(self, painter: QPainter) -> None:
-        """Render every per-eye, per-target Auto Detect overlay via the plugins.
-
-        Each plugin owns its ``draw_overlay(painter, result, scale)`` and
-        declares an integer ``overlay_z_order`` — overlays are drawn in
-        ascending z-order so a plugin can sit visually behind or on top
-        of others (e.g. limbus iris ring goes under the pupil + glint
-        markers). Both eyes' stored results paint in the same pass so
-        the user sees their work on every half they've processed.
-        """
-        # Threshold-mask fills go under the markers so the centres and
-        # ellipses remain legible on top of the mask. Each plugin's mask
-        # paints only when its "Show mask" toggle is on.
-        self._draw_target_masks(painter)
-        pairs: list[tuple[int, object, dict]] = []
-        for target, result in self.detection_overlays.items_for_paint():
-            plugin = self._active_plugins.get(target)
-            if plugin is None:
-                continue
-            z = int(getattr(plugin, "overlay_z_order", 0))
-            pairs.append((z, plugin, result))
-        pairs.sort(key=itemgetter(0))
-        for _z, plugin, result in pairs:
-            plugin.draw_overlay(painter, result, self.factor)
-
-    def _draw_target_masks(self, painter: QPainter) -> None:
-        """Render every visible per-eye threshold mask as a semi-transparent fill.
-
-        Colour is read from the active plugin's :attr:`mask_color`; a
-        plugin that didn't declare one falls back to neutral white so
-        the mask is still visible. The Show mask toggle is per-target,
-        so flipping it reveals both eyes' masks at once.
-        """
-        for target, mask in self.target_masks.visible_items():
-            plugin = self._active_plugins.get(target)
-            color = getattr(plugin, "mask_color", None) or self._fallback_mask_color
-            self._draw_mask(painter, mask, color)
-
-    def _draw_mask(self, painter: QPainter, mask: "np.ndarray", color: QColor) -> None:
-        """Blit a uint8 0/255 mask onto the canvas as a single coloured RGBA fill."""
-        if mask.size == 0:
-            return
-        h, w = mask.shape[:2]
-        rgba = np.zeros((h, w, 4), dtype=np.uint8)
-        bool_mask = mask > 0
-        rgba[bool_mask, 0] = color.red()
-        rgba[bool_mask, 1] = color.green()
-        rgba[bool_mask, 2] = color.blue()
-        rgba[bool_mask, 3] = color.alpha()
-        rgba = np.ascontiguousarray(rgba)
-        qimg = QImage(rgba.data, w, h, w * 4, QImage.Format_RGBA8888)
-        scaled = QPixmap.fromImage(qimg).scaled(
-            int(w * self.factor),
-            int(h * self.factor),
-            Qt.IgnoreAspectRatio,
-            Qt.FastTransformation,
-        )
-        painter.drawPixmap(0, 0, scaled)
-
-    def _draw_target_rois(self, painter: QPainter) -> None:
-        """Render every stored per-eye ROI rectangle.
-
-        Colour is read from the active plugin's :attr:`roi_color`; a
-        plugin that didn't declare one falls back to neutral white.
-        Only the active eye's rectangle for the active drag-edit target
-        gets corner handles — the inactive eye's rectangle paints
-        plain so the user sees their saved ROI without it tempting
-        edit attempts (clicks on the inactive half are ignored
-        anyway).
-        """
-        active_slot = self.active_eye_slot()
-        active_target = self.target_rois.active_target
-        for target, slot, roi in self.target_rois.items_for_paint():
-            plugin = self._active_plugins.get(target)
-            color = getattr(plugin, "roi_color", None) or self._fallback_roi_color
-            is_active = target == active_target and slot == active_slot
-            self._draw_target_roi_box(painter, roi, color, active=is_active)
-
-    def _draw_target_roi_box(
-        self,
-        painter: QPainter,
-        roi: tuple,
-        color: QColor,
-        *,
-        active: bool,
-    ) -> None:
-        """Render one per-target ROI rectangle, with corner handles when ``active``."""
-        x, y, w, h = roi
-        scaled_x = x * self.factor
-        scaled_y = y * self.factor
-        scaled_w = w * self.factor
-        scaled_h = h * self.factor
-        painter.setPen(QPen(color, 2, Qt.DashLine))
-        painter.setBrush(Qt.NoBrush)
-        painter.drawRect(int(scaled_x), int(scaled_y), int(scaled_w), int(scaled_h))
-        if active:
-            handle_size = 8
-            painter.setPen(QPen(color, 2, Qt.SolidLine))
-            painter.setBrush(color)
-            for cx, cy in (
-                (scaled_x, scaled_y),
-                (scaled_x + scaled_w, scaled_y),
-                (scaled_x, scaled_y + scaled_h),
-                (scaled_x + scaled_w, scaled_y + scaled_h),
-            ):
-                painter.drawRect(
-                    int(cx - handle_size / 2),
-                    int(cy - handle_size / 2),
-                    handle_size,
-                    handle_size,
-                )
-
-    def _draw_divider(self, painter: QPainter) -> None:
-        """Draw the vertical binocular divider as a dashed line."""
-        if self.pixmap is None or self.pixmap.isNull():
-            return
-        x = self._divider_x_image() * self.factor
-        height = self.pixmap.height()
-        painter.save()
-        painter.setPen(QPen(self.divider_color, 2, Qt.DashLine))
-        painter.drawLine(int(x), 0, int(x), height)
-        painter.restore()
-
-    def _draw_inactive_half_dim(self, painter: QPainter) -> None:
-        """Wash the half of the canvas not owned by the active eye with a low-alpha fill."""
-        if self.pixmap is None or self.pixmap.isNull():
-            return
-        canvas_width = self.pixmap.width()
-        canvas_height = self.pixmap.height()
-        divider_canvas_x = int(self._divider_x_image() * self.factor)
-        if self.current_eye == "left":
-            rect = (divider_canvas_x, 0, canvas_width - divider_canvas_x, canvas_height)
-        else:
-            rect = (0, 0, divider_canvas_x, canvas_height)
-        painter.save()
-        painter.setPen(Qt.NoPen)
-        painter.setBrush(self.inactive_eye_dim_color)
-        painter.drawRect(*rect)
-        painter.restore()
+        self.pixmap = pixmap
+        self.image_label.setPixmap(pixmap)
+        self.image_label.resize(pixmap.size())
 
     def fit_annotation(self) -> bool:
         """Fit an ellipse to the current annotation points."""
         if self.current_annotation in {"pupil", "limbus"}:
             return self.fit_ellipse()
         return False
-
-    def draw_points(self, painter: QPainter) -> None:
-        """Draw annotation points on the image."""
-        for points, color, annotation_type in [
-            (self.pupil_points, self.pupil_color, "pupil"),
-            (self.limbus_points, self.limbus_color, "limbus"),
-            (self.eyelid_contour_points, self.eyelid_color, "eyelid_contour"),
-            (self.glint_points, self.glint_color, "glint"),
-        ]:
-            for point in points:
-                scaled_point = QPointF(point.x() * self.factor, point.y() * self.factor)
-                if point == self.mouse_state.selected_point and self.current_annotation == annotation_type:
-                    if annotation_type == "pupil":
-                        painter.setPen(QPen(self.pupil_select_color, 3, Qt.SolidLine))
-                    elif annotation_type == "limbus":
-                        painter.setPen(QPen(self.limbus_select_color, 3, Qt.SolidLine))
-                    elif annotation_type == "eyelid_contour":
-                        painter.setPen(QPen(self.eyelid_select_color, 3, Qt.SolidLine))
-                    else:  # glint
-                        painter.setPen(QPen(self.glint_select_color, 3, Qt.SolidLine))
-                else:
-                    painter.setPen(QPen(color, 3, Qt.SolidLine))
-                painter.drawEllipse(scaled_point, 1.5, 1.5)
-
-    def draw_ellipses(self, painter: QPainter) -> None:
-        """Draw fitted ellipses on the image."""
-        if self.pupil_ellipse:
-            painter.setPen(QPen(self.pupil_ellipse_color, 1, Qt.SolidLine))
-            self.draw_single_ellipse(painter, self.pupil_ellipse)
-        if self.limbus_ellipse:
-            painter.setPen(QPen(self.limbus_ellipse_color, 1, Qt.SolidLine))
-            self.draw_single_ellipse(painter, self.limbus_ellipse)
-
-    def draw_single_ellipse(self, painter: QPainter, ellipse: tuple | None) -> None:
-        """Draw a single ellipse on the image."""
-        if ellipse is None:
-            return
-        center, size, angle = ellipse
-        scaled_center = QPointF(center.x() * self.factor, center.y() * self.factor)
-        scaled_size = QSizeF(size.width() * self.factor, size.height() * self.factor)
-        painter.save()
-        painter.translate(scaled_center)
-        painter.rotate(angle)
-        painter.drawEllipse(QPointF(0, 0), scaled_size.width() / 2, scaled_size.height() / 2)
-        painter.restore()
 
     def find_closest_point_and_type(self, pos: QPointF) -> tuple[QPointF | None, str | None]:
         """Find the closest point and its annotation type.
