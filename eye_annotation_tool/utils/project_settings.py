@@ -177,7 +177,5 @@ def _parse_carry_roi(carry_in: object) -> dict:
     if isinstance(values_in, dict):
         for slot in CARRY_ROI_SLOTS:
             v = values_in.get(slot)
-            carry["values"][slot] = (
-                tuple(int(c) for c in v) if isinstance(v, (list, tuple)) and len(v) == 4 else None
-            )
+            carry["values"][slot] = tuple(int(c) for c in v) if isinstance(v, (list, tuple)) and len(v) == 4 else None
     return carry

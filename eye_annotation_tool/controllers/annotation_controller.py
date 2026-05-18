@@ -52,7 +52,7 @@ class AnnotationController:
             if reply == QMessageBox.No:
                 return
         eye_data = self.main_window.image_viewer.get_annotation_data()
-        detections = self.main_window.collect_detections_for_save()
+        detections = self.main_window.detection_controller.collect_detections_for_save()
         save_annotations(
             annotation_path,
             eye_data,
@@ -74,7 +74,7 @@ class AnnotationController:
             divider_x_norm=payload["divider_x_norm"],
         )
         self.main_window.image_viewer.set_annotation_data(payload["eye_data"])
-        self.main_window.apply_loaded_detections(payload["detections"])
+        self.main_window.detection_controller.apply_loaded_detections(payload["detections"])
         self.main_window.set_annotation_modified(False)
 
     def check_unsaved_changes(self) -> bool:

@@ -54,10 +54,18 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "wizard would pick). Mutually exclusive with --project."
         ),
     )
-    parser.add_argument("--pupil", default=None, help="Plugin slug or 'none' for the pupil detector (used by --new-project).")
-    parser.add_argument("--glint", default=None, help="Plugin slug or 'none' for the glint detector (used by --new-project).")
-    parser.add_argument("--limbus", default=None, help="Plugin slug or 'none' for the limbus detector (used by --new-project).")
-    parser.add_argument("--eyelid", default=None, help="Plugin slug or 'none' for the eyelid detector (used by --new-project).")
+    parser.add_argument(
+        "--pupil", default=None, help="Plugin slug or 'none' for the pupil detector (used by --new-project)."
+    )
+    parser.add_argument(
+        "--glint", default=None, help="Plugin slug or 'none' for the glint detector (used by --new-project)."
+    )
+    parser.add_argument(
+        "--limbus", default=None, help="Plugin slug or 'none' for the limbus detector (used by --new-project)."
+    )
+    parser.add_argument(
+        "--eyelid", default=None, help="Plugin slug or 'none' for the eyelid detector (used by --new-project)."
+    )
     parser.add_argument(
         "--autosave",
         action="store_true",

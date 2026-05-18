@@ -73,7 +73,9 @@ class MenuHandler:
         file_menu.addSeparator()
 
         save_defaults_action = QAction("Save Current Settings as Project Defaults", self.main_window)
-        save_defaults_action.triggered.connect(self.main_window.save_current_settings_as_project_defaults)
+        save_defaults_action.triggered.connect(
+            lambda: self.main_window.detection_controller.save_current_settings_as_project_defaults(self.main_window),
+        )
         file_menu.addAction(save_defaults_action)
 
         file_menu.addSeparator()
@@ -96,7 +98,9 @@ class MenuHandler:
             action.setCheckable(True)
             action.setActionGroup(group)
             action.triggered.connect(
-                lambda _checked=False, t=target, name=plugin.name: self.main_window.select_plugin_for_target(t, name),
+                lambda _checked=False, t=target, name=plugin.name: (
+                    self.main_window.detection_controller.select_plugin_for_target(t, name)
+                ),
             )
             submenu.addAction(action)
             actions[plugin.name] = action
@@ -104,7 +108,9 @@ class MenuHandler:
         disabled_action.setCheckable(True)
         disabled_action.setActionGroup(group)
         disabled_action.triggered.connect(
-            lambda _checked=False, t=target: self.main_window.select_plugin_for_target(t, "disabled"),
+            lambda _checked=False, t=target: self.main_window.detection_controller.select_plugin_for_target(
+                t, "disabled"
+            ),
         )
         submenu.addAction(disabled_action)
         actions["disabled"] = disabled_action
@@ -117,7 +123,7 @@ class MenuHandler:
         load, plugin selection, "Save Current Settings as Project Defaults").
         """
         for target, (_group, actions) in self._target_groups.items():
-            current = self.main_window.current_plugin_for_target(target)
+            current = self.main_window.detection_controller.current_plugin_for_target(target)
             for slug, action in actions.items():
                 action.setChecked(slug == current)
 
