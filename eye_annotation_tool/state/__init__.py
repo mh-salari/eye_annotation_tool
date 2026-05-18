@@ -6,6 +6,7 @@ thin coordinators that read and write through these stores instead of
 managing the state themselves.
 """
 
+from .carry_roi_state import CarryRoiStore
 from .per_eye_state import PerEyeStateStore
 
-__all__ = ["PerEyeStateStore"]
+__all__ = ["CarryRoiStore", "PerEyeStateStore"]

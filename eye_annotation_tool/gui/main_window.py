@@ -31,7 +31,7 @@ from ..auto_detectors.orchestrator import DetectorOrchestrator
 from ..auto_detectors.plugin_interface import DetectorPlugin, Target
 from ..controllers.annotation_controller import AnnotationController
 from ..controllers.navigation_controller import NavigationController
-from ..state import PerEyeStateStore
+from ..state import CarryRoiStore, PerEyeStateStore
 from ..utils.project_settings import (
     CARRY_ROI_SLOTS,
     DETECTOR_TARGETS,
@@ -130,20 +130,7 @@ class MainWindow(QMainWindow):
         # Per-image overrides live in ``self.project["images"][path]``.
         self.project_divider_x_norm = float(self.project["divider_x_norm"])
         self.per_eye_state = PerEyeStateStore(DETECTOR_TARGETS)
-        # Carry-over ROI store. Both blocks are per-eye so toggling Carry
-        # for one eye doesn't drag the other along. ``_carry_roi_enabled``
-        # mirrors the active eye's checkbox state; ``_carry_roi_values``
-        # holds the rectangle each (target, eye) carries forward. Both
-        # are populated from the project file in
-        # :meth:`_apply_enabled_plugins` and written back whenever the
-        # checkbox flips or a canvas ROI edit lands while the active
-        # eye's flag is on.
-        self._carry_roi_enabled: dict[Target, dict[str, bool]] = {
-            target: {"left": False, "right": False, "single": False} for target in DETECTOR_TARGETS
-        }
-        self._carry_roi_values: dict[Target, dict[str, tuple | None]] = {
-            target: {"left": None, "right": None, "single": None} for target in DETECTOR_TARGETS
-        }
+        self.carry_roi_state = CarryRoiStore(DETECTOR_TARGETS)
         self.autosave_enabled = False
 
         # Resolved plugin instance per target, kept in sync with the current
@@ -1373,9 +1360,12 @@ class MainWindow(QMainWindow):
             panel = self.annotation_controls.auto_detect_panel(plugin.name)
             if panel is None:
                 continue
-            viewer_rois = {slot: self.image_viewer.get_target_roi(target, eye_slot=slot) for slot in CARRY_ROI_SLOTS}
-            for slot, roi in viewer_rois.items():
-                self._carry_roi_values[target][slot] = roi
+            for slot in CARRY_ROI_SLOTS:
+                self.carry_roi_state.set_value(
+                    target,
+                    slot,
+                    self.image_viewer.get_target_roi(target, eye_slot=slot),
+                )
             # Per-eye params: take each slot's working state from the
             # per-eye mirror; slots the user has never tuned stay null.
             # The ROI lives in carry_roi.values, so strip the duplicate
@@ -1393,10 +1383,7 @@ class MainWindow(QMainWindow):
             detectors[target] = {
                 "plugin": plugin.name,
                 "params": params_by_slot,
-                "carry_roi": {
-                    "enabled": {slot: bool(self._carry_roi_enabled[target][slot]) for slot in CARRY_ROI_SLOTS},
-                    "values": {slot: list(roi) if roi is not None else None for slot, roi in viewer_rois.items()},
-                },
+                "carry_roi": self.carry_roi_state.to_project_block(target),
             }
         self._persist_project()
         self._refresh_carry_checkboxes()
@@ -1542,24 +1529,9 @@ class MainWindow(QMainWindow):
                 panel.detect_requested.connect(
                     lambda name=plugin.name, target_=plugin.target: self._on_panel_detect_requested(name, target_),
                 )
-            # Restore the per-eye carry-over enable flags + rectangle values
-            # from project settings. The checkbox state lives on the panel
-            # and tracks the active eye; the rectangle values live on
-            # MainWindow and only apply to subsequent image loads.
-            carry_block = entry.get("carry_roi") or {}
-            enabled_by_slot_in = carry_block.get("enabled")
-            if not isinstance(enabled_by_slot_in, dict):
-                enabled_by_slot_in = {}
-            for slot in CARRY_ROI_SLOTS:
-                self._carry_roi_enabled[target][slot] = bool(enabled_by_slot_in.get(slot, False))
-            carry_values = carry_block.get("values") or {}
-            for slot in CARRY_ROI_SLOTS:
-                value = carry_values.get(slot)
-                self._carry_roi_values[target][slot] = (
-                    tuple(int(c) for c in value) if isinstance(value, (list, tuple)) and len(value) == 4 else None
-                )
+            self.carry_roi_state.load_from_project_block(target, entry.get("carry_roi") or {})
             if hasattr(panel, "set_carry_roi_enabled"):
-                panel.set_carry_roi_enabled(self._carry_roi_enabled[target][active_slot])
+                panel.set_carry_roi_enabled(self.carry_roi_state.is_enabled(target, active_slot))
             if hasattr(panel, "carry_roi_toggled"):
                 panel.carry_roi_toggled.connect(
                     lambda checked, target_=plugin.target: self._on_carry_roi_toggled(target_, checked),
@@ -1788,8 +1760,8 @@ class MainWindow(QMainWindow):
         if setter is not None:
             setter(roi)
         active_slot = self._active_eye_slot()
-        if roi is not None and self._carry_roi_enabled.get(target, {}).get(active_slot, False):
-            self._carry_roi_enabled[target][active_slot] = False
+        if roi is not None and self.carry_roi_state.is_enabled(target, active_slot):
+            self.carry_roi_state.set_enabled(target, active_slot, False)
             if panel is not None and hasattr(panel, "set_carry_roi_enabled"):
                 panel.set_carry_roi_enabled(False)
             self._persist_carry_roi(target)
@@ -1805,11 +1777,11 @@ class MainWindow(QMainWindow):
         untouched.
         """
         active_slot = self._active_eye_slot()
-        self._carry_roi_enabled[target][active_slot] = bool(enabled)
+        self.carry_roi_state.set_enabled(target, active_slot, enabled)
         if enabled:
             current_roi = self.image_viewer.get_target_roi(target)
             if current_roi is not None:
-                self._carry_roi_values[target][active_slot] = tuple(int(c) for c in current_roi)
+                self.carry_roi_state.set_value(target, active_slot, current_roi)
         self._persist_carry_roi(target)
         self._refresh_carry_checkboxes()
 
@@ -1822,7 +1794,7 @@ class MainWindow(QMainWindow):
         when no carry value is stored for the active eye.
         """
         active_slot = self._active_eye_slot()
-        carry_value = self._carry_roi_values.get(target, {}).get(active_slot)
+        carry_value = self.carry_roi_state.get_value(target, active_slot)
         if carry_value is None:
             return
         plugin = self._enabled_plugins.get(target)
@@ -1839,15 +1811,7 @@ class MainWindow(QMainWindow):
         """Write the per-eye carry-over enable flags + values for ``target`` to the project file."""
         detectors = self.project.setdefault("detectors", {})
         entry = detectors.setdefault(target, {"plugin": "disabled", "params": {}})
-        entry["carry_roi"] = {
-            "enabled": {
-                slot: bool(self._carry_roi_enabled.get(target, {}).get(slot, False)) for slot in CARRY_ROI_SLOTS
-            },
-            "values": {
-                slot: list(value) if value is not None else None
-                for slot, value in self._carry_roi_values[target].items()
-            },
-        }
+        entry["carry_roi"] = self.carry_roi_state.to_project_block(target)
         self._persist_project()
 
     def _refresh_carry_checkboxes(self) -> None:
@@ -1871,22 +1835,10 @@ class MainWindow(QMainWindow):
             if panel is None:
                 continue
             if hasattr(panel, "set_carry_roi_enabled"):
-                panel.set_carry_roi_enabled(self._carry_checkbox_state(target, active_slot))
+                viewer_roi = self.image_viewer.get_target_roi(target, eye_slot=active_slot)
+                panel.set_carry_roi_enabled(self.carry_roi_state.checkbox_state(target, active_slot, viewer_roi))
             if hasattr(panel, "set_override_button_enabled"):
-                has_value = self._carry_roi_values.get(target, {}).get(active_slot) is not None
-                panel.set_override_button_enabled(has_value)
-
-    def _carry_checkbox_state(self, target: Target, slot: str) -> bool:
-        """Return whether the Carry checkbox should display as checked for ``(target, slot)``."""
-        if not self._carry_roi_enabled.get(target, {}).get(slot, False):
-            return False
-        carry_value = self._carry_roi_values.get(target, {}).get(slot)
-        if carry_value is None:
-            return False
-        viewer_roi = self.image_viewer.get_target_roi(target, eye_slot=slot)
-        if viewer_roi is None:
-            return False
-        return tuple(int(c) for c in viewer_roi) == tuple(int(c) for c in carry_value)
+                panel.set_override_button_enabled(self.carry_roi_state.get_value(target, active_slot) is not None)
 
     def _apply_carry_over_rois(self) -> None:
         """Inject the carry-over rectangle into every (target, eye) without a saved ROI.
@@ -1899,18 +1851,15 @@ class MainWindow(QMainWindow):
         active_slot = self._active_eye_slot()
         slots = ("left", "right") if self.binocular_mode else ("single",)
         for target, plugin in self._enabled_plugins.items():
-            enabled_by_slot = self._carry_roi_enabled.get(target, {})
             roi_key = _panel_roi_param_key(target)
-            for slot in slots:
-                if not enabled_by_slot.get(slot, False):
-                    continue
+            already_filled = [
+                slot
+                for slot in slots
+                if (params := self.per_eye_state.get_params(slot, target)) is not None
+                and params.get(roi_key) is not None
+            ]
+            for slot, carry_value in self.carry_roi_state.pending_slots_for_apply(target, slots, already_filled):
                 params = self.per_eye_state.get_params(slot, target)
-                if params is not None:
-                    if params.get(roi_key) is not None:
-                        continue
-                carry_value = self._carry_roi_values[target].get(slot)
-                if carry_value is None:
-                    continue
                 if params is None:
                     self.per_eye_state.set_params(slot, target, {roi_key: list(carry_value)})
                 else:
