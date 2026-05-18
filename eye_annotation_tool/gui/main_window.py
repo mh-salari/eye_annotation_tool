@@ -31,6 +31,7 @@ from ..auto_detectors.orchestrator import DetectorOrchestrator
 from ..auto_detectors.plugin_interface import DetectorPlugin, Target
 from ..controllers.annotation_controller import AnnotationController
 from ..controllers.navigation_controller import NavigationController
+from ..state import PerEyeStateStore
 from ..utils.project_settings import (
     CARRY_ROI_SLOTS,
     DETECTOR_TARGETS,
@@ -94,9 +95,7 @@ class MainWindow(QMainWindow):
         self.plugin_manager = PluginManager()
         self.orchestrator = DetectorOrchestrator(self)
         self._cli_monocular = bool(cli_monocular)
-        self._cli_auto_detectors: set[str] | None = (
-            set(cli_auto_detectors) if cli_auto_detectors is not None else None
-        )
+        self._cli_auto_detectors: set[str] | None = set(cli_auto_detectors) if cli_auto_detectors is not None else None
         # Session policy for CLI flag overrides. ``None`` = undecided
         # (no CLI flags or no project file loaded yet); ``True`` = user
         # accepted the override at startup, so CLI flags win for the
@@ -130,27 +129,7 @@ class MainWindow(QMainWindow):
         # so call sites that read the project-wide default can stay terse.
         # Per-image overrides live in ``self.project["images"][path]``.
         self.project_divider_x_norm = float(self.project["divider_x_norm"])
-        # Per-eye snapshot of every plugin's last result on the current
-        # image. The orchestrator only carries the active eye's results;
-        # this dict carries the OTHER eye's so switching the radio can
-        # restore that side without re-running. Only used in binocular
-        # mode; the "single" key is used for monocular images.
-        self._per_eye_detection_cache: dict[str, dict[Target, dict | None]] = {
-            "left": dict.fromkeys(DETECTOR_TARGETS),
-            "right": dict.fromkeys(DETECTOR_TARGETS),
-            "single": dict.fromkeys(DETECTOR_TARGETS),
-        }
-        # Per-eye snapshot of every plugin's panel params (threshold,
-        # ROI, gate values, ...). Switching the eye radio snapshots
-        # the active eye's live panel state here, then restores the
-        # other eye's state into the panel so each side carries its
-        # own tuning. ``None`` means "no saved state yet — leave the
-        # live panel as-is on restore".
-        self._per_eye_panel_params: dict[str, dict[Target, dict | None]] = {
-            "left": dict.fromkeys(DETECTOR_TARGETS),
-            "right": dict.fromkeys(DETECTOR_TARGETS),
-            "single": dict.fromkeys(DETECTOR_TARGETS),
-        }
+        self.per_eye_state = PerEyeStateStore(DETECTOR_TARGETS)
         # Carry-over ROI store. Both blocks are per-eye so toggling Carry
         # for one eye doesn't drag the other along. ``_carry_roi_enabled``
         # mirrors the active eye's checkbox state; ``_carry_roi_values``
@@ -163,13 +142,6 @@ class MainWindow(QMainWindow):
             target: {"left": False, "right": False, "single": False} for target in DETECTOR_TARGETS
         }
         self._carry_roi_values: dict[Target, dict[str, tuple | None]] = {
-            target: {"left": None, "right": None, "single": None} for target in DETECTOR_TARGETS
-        }
-        # Per-eye project defaults — populated once from the project file
-        # in :meth:`_apply_enabled_plugins`. Used as the panel fallback
-        # when the user switches to an eye that has no per-image override
-        # or in-memory tuning yet.
-        self._project_default_params: dict[Target, dict[str, dict | None]] = {
             target: {"left": None, "right": None, "single": None} for target in DETECTOR_TARGETS
         }
         self.autosave_enabled = False
@@ -574,10 +546,7 @@ class MainWindow(QMainWindow):
     def add_images_from_folder(self, folder: str) -> None:
         """Append every supported image directly inside ``folder`` (non-recursive)."""
         suffixes = self.IMAGE_SUFFIXES
-        found = sorted(
-            str(p) for p in Path(folder).iterdir()
-            if p.is_file() and p.suffix.lower() in suffixes
-        )
+        found = sorted(str(p) for p in Path(folder).iterdir() if p.is_file() and p.suffix.lower() in suffixes)
         if not found:
             QMessageBox.warning(
                 self,
@@ -602,7 +571,8 @@ class MainWindow(QMainWindow):
             return
         current_path = (
             self.image_paths[self.current_image_index]
-            if 0 <= self.current_image_index < len(self.image_paths) else None
+            if 0 <= self.current_image_index < len(self.image_paths)
+            else None
         )
         for path in paths_to_remove:
             self.project["images"].pop(path, None)
@@ -822,65 +792,35 @@ class MainWindow(QMainWindow):
         if not self.binocular_mode:
             return
         old_slot = self._active_eye_slot()
-        self._snapshot_orchestrator_to_per_eye(old_slot)
-        self._snapshot_panel_params_to_per_eye(old_slot)
+        self.per_eye_state.snapshot_orchestrator(old_slot, self.orchestrator)
+        self.per_eye_state.snapshot_panel(old_slot, self._panel_for_target)
         self.image_viewer.switch_eye(eye)
         new_slot = self._active_eye_slot()
-        self._restore_panel_params_from_per_eye(new_slot)
-        self._restore_orchestrator_from_per_eye(new_slot)
+        self.per_eye_state.restore_panel(new_slot, self._panel_for_target, self._plugin_default_params)
+        self.per_eye_state.restore_orchestrator(new_slot, self.orchestrator)
         self._refresh_carry_checkboxes()
         self._refresh_manual_pupil_in_cache()
         self._refresh_live_plugin_results()
         self._refresh_panel_availability()
 
-    def _snapshot_orchestrator_to_per_eye(self, slot: str) -> None:
-        """Copy the orchestrator's per-target results into the per-eye cache slot."""
-        for target in DETECTOR_TARGETS:
-            self._per_eye_detection_cache[slot][target] = self.orchestrator.cached_result(target)
+    def _panel_for_target(self, target: Target) -> QWidget | None:
+        """Look up the live Auto Detect panel for ``target`` (or ``None`` if disabled)."""
+        plugin = self._enabled_plugins.get(target)
+        if plugin is None:
+            return None
+        return self.annotation_controls.auto_detect_panel(plugin.name)
 
-    def _restore_orchestrator_from_per_eye(self, slot: str) -> None:
-        """Push the per-eye cache slot's results back into the orchestrator."""
-        for target in DETECTOR_TARGETS:
-            self.orchestrator.set_cached_result(target, self._per_eye_detection_cache[slot][target])
-
-    def _snapshot_panel_params_to_per_eye(self, slot: str) -> None:
-        """Copy each live plugin panel's current params into the per-eye mirror."""
-        for target, plugin in self._enabled_plugins.items():
-            panel = self.annotation_controls.auto_detect_panel(plugin.name)
-            if panel is None:
-                continue
-            self._per_eye_panel_params[slot][target] = panel.current_params()
-
-    def _restore_panel_params_from_per_eye(self, slot: str) -> None:
-        """Push the per-eye mirror's saved params back into each plugin panel.
-
-        Priority order per (target, slot): per-image mirror →
-        project-file defaults → plugin's ``default_params``. The last
-        fallback keeps the panel snapped to clean defaults on a slot
-        the user has never tuned and that has no project default,
-        rather than letting the previous eye's tuning leak across.
-        """
-        for target, plugin in self._enabled_plugins.items():
-            params = self._per_eye_panel_params[slot].get(target)
-            if params is None:
-                params = self._project_default_params[target].get(slot)
-            if params is None:
-                params = plugin.default_params()
-            panel = self.annotation_controls.auto_detect_panel(plugin.name)
-            if panel is not None:
-                panel.set_params(params)
-
-    def _clear_per_eye_cache(self) -> None:
-        """Wipe every per-eye cache slot (detection + panel params). Called on image change."""
-        for slot in self._per_eye_detection_cache:
-            for target in DETECTOR_TARGETS:
-                self._per_eye_detection_cache[slot][target] = None
-                self._per_eye_panel_params[slot][target] = None
+    def _plugin_default_params(self, target: Target) -> dict:
+        """Return the active plugin's ``default_params`` for ``target`` (or ``{}`` if disabled)."""
+        plugin = self._enabled_plugins.get(target)
+        if plugin is None:
+            return {}
+        return plugin.default_params()
 
     def _on_image_loaded(self) -> None:
         """Drop orchestrator cache + per-eye snapshots when a new image lands."""
         self.orchestrator.clear_cache()
-        self._clear_per_eye_cache()
+        self.per_eye_state.clear_all()
 
     def divider_override_for_current_image(self) -> float | None:
         """Return the per-image divider override for the current image (or ``None``)."""
@@ -1036,17 +976,17 @@ class MainWindow(QMainWindow):
         from a uniform source.
         """
         active_slot = self._active_eye_slot()
-        self._snapshot_orchestrator_to_per_eye(active_slot)
-        self._snapshot_panel_params_to_per_eye(active_slot)
+        self.per_eye_state.snapshot_orchestrator(active_slot, self.orchestrator)
+        self.per_eye_state.snapshot_panel(active_slot, self._panel_for_target)
         out: dict = {}
         for target, plugin in self._enabled_plugins.items():
             if self.binocular_mode:
                 per_eye_block: dict = {}
                 for slot in ("left", "right"):
-                    result = self._per_eye_detection_cache[slot][target]
+                    result = self.per_eye_state.get_result(slot, target)
                     if result is None:
                         continue
-                    params = self._per_eye_panel_params[slot].get(target) or plugin.default_params()
+                    params = self.per_eye_state.get_params(slot, target) or plugin.default_params()
                     per_eye_block[slot] = {
                         "params": params,
                         "result": plugin.serialize(result),
@@ -1054,10 +994,10 @@ class MainWindow(QMainWindow):
                 if per_eye_block:
                     out[plugin.name] = per_eye_block
             else:
-                result = self._per_eye_detection_cache["single"][target]
+                result = self.per_eye_state.get_result("single", target)
                 if result is None:
                     continue
-                params = self._per_eye_panel_params["single"].get(target) or plugin.default_params()
+                params = self.per_eye_state.get_params("single", target) or plugin.default_params()
                 out[plugin.name] = {
                     "params": params,
                     "result": plugin.serialize(result),
@@ -1103,7 +1043,7 @@ class MainWindow(QMainWindow):
                 for slot, params in per_eye_params.items():
                     if params is None:
                         continue
-                    self._per_eye_panel_params[slot][plugin.target] = dict(params)
+                    self.per_eye_state.set_params(slot, plugin.target, dict(params))
                     saved_roi = params.get(_panel_roi_param_key(plugin.target))
                     self.image_viewer.set_target_roi(
                         plugin.target,
@@ -1111,7 +1051,7 @@ class MainWindow(QMainWindow):
                         eye_slot=slot,
                     )
                 for slot, result in per_eye_results.items():
-                    self._per_eye_detection_cache[slot][plugin.target] = result
+                    self.per_eye_state.set_result(slot, plugin.target, result)
                     if result is not None:
                         self.image_viewer.set_detection_overlay(plugin.target, result, eye_slot=slot)
                 active_params = per_eye_params.get(active_slot)
@@ -1127,7 +1067,7 @@ class MainWindow(QMainWindow):
             # params because the per-eye mirror is populated; plugins
             # without per-image data snap back to project defaults
             # instead of inheriting the previous image's panel state.
-            self._restore_panel_params_from_per_eye(active_slot)
+            self.per_eye_state.restore_panel(active_slot, self._panel_for_target, self._plugin_default_params)
             # Carry-over rectangles fill any (target, eye) slot the loaded
             # JSON didn't populate. Run after the JSON restore so saved
             # per-image ROIs always win.
@@ -1427,7 +1367,7 @@ class MainWindow(QMainWindow):
         # Snapshot the active eye's live panel state into the per-eye mirror
         # so the project file captures both eyes at once when the user has
         # been tuning per-eye in the same image.
-        self._snapshot_panel_params_to_per_eye(active_slot)
+        self.per_eye_state.snapshot_panel(active_slot, self._panel_for_target)
         detectors = self.project.setdefault("detectors", {})
         for target, plugin in self._enabled_plugins.items():
             panel = self.annotation_controls.auto_detect_panel(plugin.name)
@@ -1442,21 +1382,19 @@ class MainWindow(QMainWindow):
             # ``<target>_roi`` slot from each per-eye params dict.
             params_by_slot: dict[str, dict | None] = {}
             for slot in CARRY_ROI_SLOTS:
-                per_slot = self._per_eye_panel_params[slot].get(target)
+                per_slot = self.per_eye_state.get_params(slot, target)
                 if per_slot is None:
                     params_by_slot[slot] = None
                     continue
                 cleaned = dict(per_slot)
                 cleaned.pop(_panel_roi_param_key(target), None)
                 params_by_slot[slot] = cleaned
-                self._project_default_params[target][slot] = dict(cleaned)
+                self.per_eye_state.set_project_default(target, slot, dict(cleaned))
             detectors[target] = {
                 "plugin": plugin.name,
                 "params": params_by_slot,
                 "carry_roi": {
-                    "enabled": {
-                        slot: bool(self._carry_roi_enabled[target][slot]) for slot in CARRY_ROI_SLOTS
-                    },
+                    "enabled": {slot: bool(self._carry_roi_enabled[target][slot]) for slot in CARRY_ROI_SLOTS},
                     "values": {slot: list(roi) if roi is not None else None for slot, roi in viewer_rois.items()},
                 },
             }
@@ -1552,14 +1490,14 @@ class MainWindow(QMainWindow):
             params_by_slot = entry.get("params") or {}
             for slot in CARRY_ROI_SLOTS:
                 slot_params = params_by_slot.get(slot) if isinstance(params_by_slot, dict) else None
-                self._project_default_params[target][slot] = (
-                    dict(slot_params) if isinstance(slot_params, dict) else None
+                self.per_eye_state.set_project_default(
+                    target,
+                    slot,
+                    dict(slot_params) if isinstance(slot_params, dict) else None,
                 )
             active_slot = self._active_eye_slot()
             initial_params = (
-                preserved_params.get(target)
-                or self._project_default_params[target].get(active_slot)
-                or {}
+                preserved_params.get(target) or self.per_eye_state.get_project_default(target, active_slot) or {}
             )
             panel.set_params(initial_params)
             panel.params_changed.connect(
@@ -1696,7 +1634,7 @@ class MainWindow(QMainWindow):
             return
         active_slot = self._active_eye_slot()
         self.orchestrator.set_cached_result(target, None)
-        self._per_eye_detection_cache[active_slot][target] = None
+        self.per_eye_state.set_result(active_slot, target, None)
         self.image_viewer.clear_detection_overlay(target, eye_slot=active_slot)
         self.image_viewer.clear_target_mask(target, eye_slot=active_slot)
 
@@ -1730,7 +1668,7 @@ class MainWindow(QMainWindow):
         # their own paths.
         self.image_viewer.set_target_mask(target, result.get("mask"), eye_slot=active_slot)
         self.image_viewer.set_detection_overlay(target, result, eye_slot=active_slot)
-        self._per_eye_detection_cache[active_slot][target] = result
+        self.per_eye_state.set_result(active_slot, target, result)
         self.set_annotation_modified(True)
         self._refresh_panel_availability()
 
@@ -1739,7 +1677,7 @@ class MainWindow(QMainWindow):
         active_slot = self._active_eye_slot()
         self.image_viewer.clear_detection_overlay(target, eye_slot=active_slot)
         self.image_viewer.clear_target_mask(target, eye_slot=active_slot)
-        self._per_eye_detection_cache[active_slot][target] = None
+        self.per_eye_state.set_result(active_slot, target, None)
         self.statusBar().showMessage(f"Auto Detect: {target} failed at current parameters.", 5000)
         self._refresh_panel_availability()
 
@@ -1772,7 +1710,7 @@ class MainWindow(QMainWindow):
             self.image_viewer.clear_detection_overlay(target)
             self.image_viewer.clear_target_mask(target)
             self.image_viewer.clear_target_roi(target)
-        self._clear_per_eye_cache()
+        self.per_eye_state.clear_all()
         # Active drag-edit target was likely tied to one of the panels we
         # just reset; drop it so the canvas isn't waiting on a phantom drag.
         self.image_viewer.set_active_roi_target(None)
@@ -1966,17 +1904,15 @@ class MainWindow(QMainWindow):
             for slot in slots:
                 if not enabled_by_slot.get(slot, False):
                     continue
-                if self._per_eye_panel_params[slot].get(target) is not None:
-                    params = self._per_eye_panel_params[slot][target]
+                params = self.per_eye_state.get_params(slot, target)
+                if params is not None:
                     if params.get(roi_key) is not None:
                         continue
-                else:
-                    params = None
                 carry_value = self._carry_roi_values[target].get(slot)
                 if carry_value is None:
                     continue
                 if params is None:
-                    self._per_eye_panel_params[slot][target] = {roi_key: list(carry_value)}
+                    self.per_eye_state.set_params(slot, target, {roi_key: list(carry_value)})
                 else:
                     params[roi_key] = list(carry_value)
                 self.image_viewer.set_target_roi(target, tuple(carry_value), eye_slot=slot)

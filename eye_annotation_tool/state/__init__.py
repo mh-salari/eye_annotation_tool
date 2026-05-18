@@ -1,0 +1,11 @@
+"""State stores extracted from the GUI widgets.
+
+Each store owns a single piece of domain state previously held as a
+mutable dict on ``MainWindow`` or ``ImageViewer``. The widgets become
+thin coordinators that read and write through these stores instead of
+managing the state themselves.
+"""
+
+from .per_eye_state import PerEyeStateStore
+
+__all__ = ["PerEyeStateStore"]
