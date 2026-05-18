@@ -86,6 +86,22 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--review",
+        type=Path,
+        nargs="+",
+        default=None,
+        help=(
+            "Open --project in read-only mode with this image list instead "
+            "of the project's saved list. Settings (detector plugins, "
+            "params, divider, autosave, binocular flag) are loaded as usual; "
+            "session edits stay in memory and do NOT write back to the "
+            "project file. Per-image annotation JSONs save next to their "
+            "PNGs as always. Useful for re-annotating a small subset of "
+            "images against an existing project's settings without "
+            "mutating that project. Requires --project."
+        ),
+    )
+    parser.add_argument(
         "--auto-detectors",
         type=str,
         default=None,
@@ -100,6 +116,13 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     args = parser.parse_args(argv)
     if args.project is not None and args.new_project is not None:
         parser.error("--project and --new-project are mutually exclusive.")
+    if args.review is not None:
+        if args.project is None:
+            parser.error("--review requires --project.")
+        if args.new_project is not None:
+            parser.error("--review cannot be combined with --new-project.")
+        if args.images is not None or args.folders is not None:
+            parser.error("--review supplies the image list; --images and --folders cannot be used with it.")
     if args.auto_detectors is not None:
         chosen = {t.strip().lower() for t in args.auto_detectors.split(",") if t.strip()}
         invalid = chosen - VALID_AUTO_DETECTOR_TARGETS
@@ -189,6 +212,18 @@ def run_app() -> None:
     if args.new_project is not None:
         _bootstrap_new_project(args)
         main_window.open_project(str(args.new_project))
+    elif args.review is not None:
+        # Read-only session: load --project's settings, override the image
+        # list with --review's paths, suppress writes back to the project
+        # file. The validator above guarantees --project is set and that
+        # --images / --folders are absent.
+        if not args.project.exists():
+            print(f"error: project file does not exist: {args.project}", file=sys.stderr)
+            sys.exit(2)
+        main_window.open_project_for_review(
+            str(args.project),
+            [str(p) for p in args.review],
+        )
     elif args.project is not None:
         if not args.project.exists():
             print(f"error: project file does not exist: {args.project}", file=sys.stderr)

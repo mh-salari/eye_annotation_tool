@@ -116,6 +116,16 @@ class MainWindow(QMainWindow):
         # toggle, ...) writes back to disk immediately.
         self.project: dict = default_project()
         self.project_path: str | None = None
+        # Read-only session flag. When True, the in-memory project is *not*
+        # written back to ``self.project_path`` on any mutation - settings
+        # tweaks, image list edits, divider drags, etc. all stay session-
+        # local. Per-image annotation files (saved next to each image) are
+        # unaffected: they are independent of the project file.
+        #
+        # Useful for opening a small ad-hoc image list with a saved project's
+        # settings without mutating the project's own image list.
+        # Enter the mode via :meth:`open_project_for_review`.
+        self.read_only: bool = False
         # Convenience accessor mirroring ``self.project["divider_x_norm"]``
         # so call sites that read the project-wide default can stay terse.
         # Per-image overrides live in ``self.project["images"][path]``.
@@ -340,10 +350,13 @@ class MainWindow(QMainWindow):
         """Write ``self.project`` back to disk if the project is saved.
 
         No-op when ``self.project_path`` is ``None`` (unsaved in-memory
-        project — the user must Save Project As before mutations persist).
+        project — the user must Save Project As before mutations persist)
+        or when ``self.read_only`` is ``True`` (session-local edits, see
+        :meth:`open_project_for_review`).
         """
-        if self.project_path is not None:
-            save_project(self.project_path, self.project)
+        if self.project_path is None or self.read_only:
+            return
+        save_project(self.project_path, self.project)
 
     def _project_divider_override(self, image_path: str) -> float | None:
         """Per-image divider override stored under ``project["images"][path]``."""
@@ -371,14 +384,17 @@ class MainWindow(QMainWindow):
         """Sync the window title to the current save state.
 
         Treated as saved when autosave is enabled (autosave keeps disk in sync
-        on every image change) or when no edits are pending.
+        on every image change) or when no edits are pending. Read-only
+        sessions are tagged with a ``(read-only)`` suffix so the user can
+        see at a glance that project-level edits won't persist.
         """
         saved = self.autosave_enabled or not self.annotation_modified
+        ro = " (read-only)" if self.read_only else ""
         if 0 <= self.current_image_index < len(self.image_paths):
             name = Path(self.image_paths[self.current_image_index]).name
-            self.setWindowTitle(f"EyE Annotation Tool - {name}{'' if saved else ' *'}")
+            self.setWindowTitle(f"EyE Annotation Tool - {name}{'' if saved else ' *'}{ro}")
         else:
-            self.setWindowTitle("EyE Annotation Tool" + ("" if saved else " *"))
+            self.setWindowTitle(f"EyE Annotation Tool{'' if saved else ' *'}{ro}")
 
     def connect_signals(self) -> None:
         """Connect signals and slots for UI components."""
@@ -436,6 +452,7 @@ class MainWindow(QMainWindow):
             for key, value in initial_project.items():
                 self.project[key] = value
         self.project_path = str(project_path)
+        self.read_only = False
         save_project(self.project_path, self.project)
         self._apply_project_state()
         self.current_image_index = 0 if self.image_paths else -1
@@ -447,21 +464,63 @@ class MainWindow(QMainWindow):
         """Load ``project_path`` from disk and apply it as the active project."""
         self.project = load_project(project_path)
         self.project_path = str(project_path)
+        self.read_only = False
         self._apply_project_state()
         self.current_image_index = 0 if self.image_paths else -1
         self.update_image_list()
         if self.image_paths:
             self.load_current_image()
 
+    def open_project_for_review(self, project_path: str, image_paths: list[str]) -> None:
+        """Open ``project_path`` in read-only mode with a supplied image list.
+
+        The project's settings (binocular flag, divider, detector plugins +
+        params, autosave) are loaded as usual, but the in-memory image list
+        is replaced with ``image_paths``. Every subsequent edit (slider
+        changes, image list edits, divider drags) stays in memory for the
+        session only — :meth:`_persist_project` is a no-op while
+        ``self.read_only`` is set. Per-image annotation files still save
+        next to their PNGs.
+
+        The user can still snapshot the session to a different file via
+        File > Save Project As…; ``save_project_as`` clears the read-only
+        flag (the snapshot becomes the new active project).
+        """
+        self.project = load_project(project_path)
+        self.project_path = str(project_path)
+        self.read_only = True
+        # Replace the image set without touching settings. Missing files
+        # are dropped silently here; ``add_images`` reports them when the
+        # GUI launches via the dialog path instead.
+        valid = [str(Path(p)) for p in image_paths if Path(p).is_file()]
+        self.project["images"] = {p: {} for p in valid}
+        self._apply_project_state()
+        self.current_image_index = 0 if self.image_paths else -1
+        self.update_image_list()
+        if self.image_paths:
+            self.load_current_image()
+        self._refresh_save_state_indicator()
+
     def save_project(self) -> None:
-        """Write ``self.project`` to ``self.project_path``; prompt for path if unsaved."""
-        if self.project_path is None:
+        """Write ``self.project`` to ``self.project_path``; prompt for path if unsaved.
+
+        Refuses to overwrite the active path in read-only mode — re-routes
+        to :meth:`save_project_as` so the user must pick a fresh path. This
+        keeps Save Project's quick-write semantics from silently mutating
+        a project a read-only session was meant to leave alone.
+        """
+        if self.project_path is None or self.read_only:
             self.save_project_as()
             return
         save_project(self.project_path, self.project)
 
     def save_project_as(self) -> None:
-        """Prompt for a save path and persist ``self.project`` there."""
+        """Prompt for a save path and persist ``self.project`` there.
+
+        Snapshotting clears the read-only flag: the chosen path becomes
+        the new active project, and subsequent edits write through to it
+        normally.
+        """
         path, _ = QFileDialog.getSaveFileName(
             self,
             "Save Project As",
@@ -473,7 +532,9 @@ class MainWindow(QMainWindow):
         if not path.endswith(PROJECT_FILE_SUFFIX):
             path = path + PROJECT_FILE_SUFFIX
         self.project_path = path
+        self.read_only = False
         save_project(self.project_path, self.project)
+        self._refresh_save_state_indicator()
 
     def add_images(self, image_paths: list[str]) -> None:
         """Append ``image_paths`` to the project's images dict.
