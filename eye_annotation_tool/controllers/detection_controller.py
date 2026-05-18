@@ -1,6 +1,6 @@
 """Auto-Detect plugin lifecycle, run dispatch, signal wiring."""
 
-from collections.abc import Callable
+from typing import TYPE_CHECKING
 
 import numpy as np
 from PyQt5.QtCore import QObject, QTimer, pyqtSignal
@@ -13,6 +13,9 @@ from ..gui.annotation_controls import AnnotationControlPanel
 from ..gui.image_viewer import ImageViewer
 from ..state import CarryRoiStore, PerEyeStateStore, ProjectStore
 from ..utils.project_settings import CARRY_ROI_SLOTS, DETECTOR_TARGETS
+
+if TYPE_CHECKING:
+    from .binocular_controller import BinocularController
 
 AUTO_DETECT_DEBOUNCE_MS = 100
 
@@ -59,17 +62,14 @@ class DetectionController(QObject):
         project_store: ProjectStore,
         image_viewer: ImageViewer,
         annotation_controls: AnnotationControlPanel,
-        *,
-        active_slot_fn: Callable[[], str],
-        binocular_mode_fn: Callable[[], bool],
-        effective_divider_fn: Callable[[], float],
         parent: QObject | None = None,
     ) -> None:
         """Wire the dependencies and start the debounce timer.
 
-        ``active_slot_fn``, ``binocular_mode_fn``, ``effective_divider_fn``
-        are the active-eye context hooks supplied by MainWindow until
-        the BinocularController owns them in a later step.
+        :class:`BinocularController` is bound after construction via
+        :meth:`bind_binocular_controller`; the two controllers have a
+        mutual dependency that can't be expressed in a single
+        constructor call.
         """
         super().__init__(parent)
         self.plugin_manager = plugin_manager
@@ -79,9 +79,7 @@ class DetectionController(QObject):
         self.project_store = project_store
         self.image_viewer = image_viewer
         self.annotation_controls = annotation_controls
-        self._active_slot_fn = active_slot_fn
-        self._binocular_mode_fn = binocular_mode_fn
-        self._effective_divider_fn = effective_divider_fn
+        self._binocular: BinocularController | None = None
 
         self.enabled_plugins: dict[Target, DetectorPlugin] = {}
         self._pending_run_one: tuple[str, dict] | None = None
@@ -93,6 +91,24 @@ class DetectionController(QObject):
         self.orchestrator.plugin_ready.connect(self._on_plugin_ready)
         self.orchestrator.plugin_failed.connect(self._on_plugin_failed)
         self.image_viewer.target_roi_changed.connect(self._on_target_roi_changed)
+
+    def bind_binocular_controller(self, binocular_controller: "BinocularController") -> None:
+        """Attach the BinocularController after both controllers are constructed.
+
+        The two have a mutual dependency: this controller reads the
+        active eye / divider / binocular flag from ``BinocularController``,
+        and ``BinocularController`` calls back into this one for
+        post-eye-switch refreshes. Two-phase init breaks the cycle
+        without a circular import.
+        """
+        self._binocular = binocular_controller
+
+    @property
+    def binocular(self) -> "BinocularController":
+        """Return the bound :class:`BinocularController`; raises if unbound."""
+        if self._binocular is None:
+            raise RuntimeError("DetectionController.bind_binocular_controller was not called")
+        return self._binocular
 
     # ---------------------------------------------------------------------------
     # Tiny convenience accessors
@@ -168,7 +184,7 @@ class DetectionController(QObject):
                     slot,
                     dict(slot_params) if isinstance(slot_params, dict) else None,
                 )
-            active_slot = self._active_slot_fn()
+            active_slot = self.binocular.active_eye_slot()
             initial_params = (
                 preserved_params.get(target) or self.per_eye_state.get_project_default(target, active_slot) or {}
             )
@@ -324,7 +340,7 @@ class DetectionController(QObject):
         )
         if reply != QMessageBox.Yes:
             return
-        active_slot = self._active_slot_fn()
+        active_slot = self.binocular.active_eye_slot()
         self.per_eye_state.snapshot_panel(active_slot, self.panel_for_target)
         detectors = self.project_store.project.setdefault("detectors", {})
         for target, plugin in self.enabled_plugins.items():
@@ -367,10 +383,10 @@ class DetectionController(QObject):
         Binocular images save nested per eye: ``{plugin_name: {left:
         {params, result}, right: {params, result}}}``.
         """
-        active_slot = self._active_slot_fn()
+        active_slot = self.binocular.active_eye_slot()
         self.per_eye_state.snapshot_orchestrator(active_slot, self.orchestrator)
         self.per_eye_state.snapshot_panel(active_slot, self.panel_for_target)
-        binocular = self._binocular_mode_fn()
+        binocular = self.binocular.is_binocular
         out: dict = {}
         for target, plugin in self.enabled_plugins.items():
             if binocular:
@@ -408,7 +424,7 @@ class DetectionController(QObject):
         """
         self.image_viewer.pause_updates()
         try:
-            active_slot = self._active_slot_fn()
+            active_slot = self.binocular.active_eye_slot()
             for plugin_name, blob in detections.items():
                 plugin = self.plugin_manager.get(plugin_name)
                 if plugin is None:
@@ -591,13 +607,13 @@ class DetectionController(QObject):
 
     def _active_eye_crop_bounds(self) -> tuple[int, int, int, int] | None:
         """Return ``(dx, dy, dw, dh)`` for the active eye's half, or ``None`` (no crop)."""
-        if not self._binocular_mode_fn():
+        if not self.binocular.is_binocular:
             return None
         image = self.image_viewer.get_current_image_grayscale()
         if image is None:
             return None
         full_h, full_w = image.shape[:2]
-        divider_x = round(self._effective_divider_fn() * full_w)
+        divider_x = round(self.binocular.effective_divider_x_norm() * full_w)
         divider_x = max(1, min(full_w - 1, divider_x))
         if self.image_viewer.current_eye == "left":
             return (0, 0, divider_x, full_h)
@@ -679,7 +695,7 @@ class DetectionController(QObject):
             self._pending_run_one = (plugin_name, dict(params))
             self._auto_detect_debounce.start()
             return
-        active_slot = self._active_slot_fn()
+        active_slot = self.binocular.active_eye_slot()
         self.orchestrator.set_cached_result(target, None)
         self.per_eye_state.set_result(active_slot, target, None)
         self.image_viewer.clear_detection_overlay(target, eye_slot=active_slot)
@@ -699,7 +715,7 @@ class DetectionController(QObject):
 
     def _on_plugin_ready(self, target: str, result: dict) -> None:
         """Render the new detection result for the active eye + mark modified."""
-        active_slot = self._active_slot_fn()
+        active_slot = self.binocular.active_eye_slot()
         self.image_viewer.set_target_mask(target, result.get("mask"), eye_slot=active_slot)
         self.image_viewer.set_detection_overlay(target, result, eye_slot=active_slot)
         self.per_eye_state.set_result(active_slot, target, result)
@@ -708,7 +724,7 @@ class DetectionController(QObject):
 
     def _on_plugin_failed(self, target: str) -> None:
         """Clear the active eye's overlay + mask for ``target`` and report in the status bar."""
-        active_slot = self._active_slot_fn()
+        active_slot = self.binocular.active_eye_slot()
         self.image_viewer.clear_detection_overlay(target, eye_slot=active_slot)
         self.image_viewer.clear_target_mask(target, eye_slot=active_slot)
         self.per_eye_state.set_result(active_slot, target, None)
@@ -783,7 +799,7 @@ class DetectionController(QObject):
         setter = getattr(panel, _panel_roi_setter_name(target), None) if panel is not None else None
         if setter is not None:
             setter(roi)
-        active_slot = self._active_slot_fn()
+        active_slot = self.binocular.active_eye_slot()
         if roi is not None and self.carry_roi_state.is_enabled(target, active_slot):
             self.carry_roi_state.set_enabled(target, active_slot, False)
             if panel is not None and hasattr(panel, "set_carry_roi_enabled"):
@@ -796,7 +812,7 @@ class DetectionController(QObject):
 
     def _on_carry_roi_toggled(self, target: Target, enabled: bool) -> None:
         """Persist the active eye's carry-over enable flag for ``target``."""
-        active_slot = self._active_slot_fn()
+        active_slot = self.binocular.active_eye_slot()
         self.carry_roi_state.set_enabled(target, active_slot, enabled)
         if enabled:
             current_roi = self.image_viewer.get_target_roi(target)
@@ -807,7 +823,7 @@ class DetectionController(QObject):
 
     def _on_override_roi_requested(self, target: Target) -> None:
         """Push the stored carry-over rectangle into the active eye's panel + viewer."""
-        active_slot = self._active_slot_fn()
+        active_slot = self.binocular.active_eye_slot()
         carry_value = self.carry_roi_state.get_value(target, active_slot)
         if carry_value is None:
             return
@@ -830,7 +846,7 @@ class DetectionController(QObject):
 
     def refresh_carry_checkboxes(self) -> None:
         """Sync each panel's Carry checkbox + Override button to the active eye's state."""
-        active_slot = self._active_slot_fn()
+        active_slot = self.binocular.active_eye_slot()
         for target, plugin in self.enabled_plugins.items():
             panel = self.annotation_controls.auto_detect_panel(plugin.name)
             if panel is None:
@@ -849,8 +865,8 @@ class DetectionController(QObject):
         the JSON didn't populate. The viewer's per-eye ROI store and
         the active eye's live panel are both updated.
         """
-        active_slot = self._active_slot_fn()
-        slots = ("left", "right") if self._binocular_mode_fn() else ("single",)
+        active_slot = self.binocular.active_eye_slot()
+        slots = ("left", "right") if self.binocular.is_binocular else ("single",)
         for target, plugin in self.enabled_plugins.items():
             roi_key = _panel_roi_param_key(target)
             already_filled = [

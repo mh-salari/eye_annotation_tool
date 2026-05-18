@@ -171,6 +171,7 @@ lint.ignore = [
 # GUI domain objects with many UI handlers — many public methods are intentional.
 "eye_annotation_tool/gui/image_viewer.py" = ["PLR0904"]
 "eye_annotation_tool/gui/main_window.py" = ["PLR0904"]
+"eye_annotation_tool/controllers/detection_controller.py" = ["PLR0904"]
 # Plugin override methods (detect, serialize, deserialize, make_panel) often
 # don't reference ``self`` but must remain instance methods to satisfy the
 # DetectorPlugin contract and to allow subclasses to override.

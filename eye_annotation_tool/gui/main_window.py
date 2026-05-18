@@ -82,9 +82,6 @@ class MainWindow(QMainWindow):
             self.project_store,
             self.image_viewer,
             self.annotation_controls,
-            active_slot_fn=lambda: self.binocular_controller.active_eye_slot(),
-            binocular_mode_fn=lambda: self.binocular_controller.is_binocular,
-            effective_divider_fn=lambda: self.binocular_controller.effective_divider_x_norm(),
             parent=self,
         )
         self.detection_controller.annotation_modified.connect(self.set_annotation_modified)
@@ -103,6 +100,7 @@ class MainWindow(QMainWindow):
             initial_binocular=not self.cli_policy.monocular,
             parent=self,
         )
+        self.detection_controller.bind_binocular_controller(self.binocular_controller)
         self.binocular_controller.apply_mode(not self.cli_policy.monocular)
         self.binocular_controller.annotation_modified.connect(self.set_annotation_modified)
 
