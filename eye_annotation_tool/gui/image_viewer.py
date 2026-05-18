@@ -11,6 +11,7 @@ from PyQt5.QtCore import QEvent, QPoint, QPointF, QSizeF, Qt, pyqtSignal
 from PyQt5.QtGui import QColor, QImage, QKeyEvent, QPainter, QPen, QPixmap
 from PyQt5.QtWidgets import QLabel, QMessageBox, QScrollArea, QVBoxLayout, QWidget
 
+from ..state import EyeDataStore
 from ..utils.image_processing import find_closest_point, fit_ellipse
 
 # Display brightness step factor per Brighter / Darker click, and the
@@ -82,35 +83,7 @@ class ImageViewer(QWidget):
         # the inaugural image; subsequent navigations keep whatever zoom the
         # user has dialed in.
         self._zoom_initialized = False
-        self.current_eye = "left"
-
-        # Store annotations for both eyes separately
-        self.eye_data = {
-            "left": {
-                "pupil_points": [],
-                "limbus_points": [],
-                "eyelid_contour_points": [],
-                "glint_points": [],
-                "pupil_ellipse": None,
-                "limbus_ellipse": None,
-            },
-            "right": {
-                "pupil_points": [],
-                "limbus_points": [],
-                "eyelid_contour_points": [],
-                "glint_points": [],
-                "pupil_ellipse": None,
-                "limbus_ellipse": None,
-            },
-        }
-
-        # Current working data (references to current eye data)
-        self.pupil_points = []
-        self.limbus_points = []
-        self.eyelid_contour_points = []
-        self.glint_points = []
-        self.pupil_ellipse = None
-        self.limbus_ellipse = None
+        self.eye_data_store = EyeDataStore()
 
         self.current_annotation = "pupil"
         self.original_pixmap = None
@@ -272,38 +245,84 @@ class ImageViewer(QWidget):
         self.undo_stack = deque(maxlen=10)
         self.undo_index = -1
 
-    def save_current_eye_data(self) -> None:
-        """Save the current working data back to the eye_data dictionary."""
-        self.eye_data[self.current_eye]["pupil_points"] = self.pupil_points.copy()
-        self.eye_data[self.current_eye]["limbus_points"] = self.limbus_points.copy()
-        self.eye_data[self.current_eye]["eyelid_contour_points"] = self.eyelid_contour_points.copy()
-        self.eye_data[self.current_eye]["glint_points"] = self.glint_points.copy()
-        self.eye_data[self.current_eye]["pupil_ellipse"] = self.pupil_ellipse
-        self.eye_data[self.current_eye]["limbus_ellipse"] = self.limbus_ellipse
+    # ---------------------------------------------------------------------------
+    # Active-eye annotation properties (forward to :class:`EyeDataStore`)
+    # ---------------------------------------------------------------------------
 
-    def load_current_eye_data(self) -> None:
-        """Load the data for the current eye into working variables."""
-        self.pupil_points = self.eye_data[self.current_eye]["pupil_points"].copy()
-        self.limbus_points = self.eye_data[self.current_eye]["limbus_points"].copy()
-        self.eyelid_contour_points = self.eye_data[self.current_eye]["eyelid_contour_points"].copy()
-        self.glint_points = self.eye_data[self.current_eye]["glint_points"].copy()
-        self.pupil_ellipse = self.eye_data[self.current_eye]["pupil_ellipse"]
-        self.limbus_ellipse = self.eye_data[self.current_eye]["limbus_ellipse"]
+    @property
+    def current_eye(self) -> str:
+        """Active eye for canvas edits (``"left"`` or ``"right"``)."""
+        return self.eye_data_store.current_eye
+
+    @property
+    def eye_data(self) -> dict:
+        """Live ``{eye: {field: value}}`` dict (mutate in place)."""
+        return self.eye_data_store.eye_data
+
+    @property
+    def pupil_points(self) -> list:
+        """Live pupil-point list for the active eye."""
+        return self.eye_data_store.get_field("pupil_points")
+
+    @pupil_points.setter
+    def pupil_points(self, value: list) -> None:
+        self.eye_data_store.set_field("pupil_points", value)
+
+    @property
+    def limbus_points(self) -> list:
+        """Live limbus-point list for the active eye."""
+        return self.eye_data_store.get_field("limbus_points")
+
+    @limbus_points.setter
+    def limbus_points(self, value: list) -> None:
+        self.eye_data_store.set_field("limbus_points", value)
+
+    @property
+    def eyelid_contour_points(self) -> list:
+        """Live eyelid-contour-point list for the active eye."""
+        return self.eye_data_store.get_field("eyelid_contour_points")
+
+    @eyelid_contour_points.setter
+    def eyelid_contour_points(self, value: list) -> None:
+        self.eye_data_store.set_field("eyelid_contour_points", value)
+
+    @property
+    def glint_points(self) -> list:
+        """Live glint-point list for the active eye."""
+        return self.eye_data_store.get_field("glint_points")
+
+    @glint_points.setter
+    def glint_points(self, value: list) -> None:
+        self.eye_data_store.set_field("glint_points", value)
+
+    @property
+    def pupil_ellipse(self) -> tuple | None:
+        """Fitted pupil ellipse for the active eye (``None`` when unset)."""
+        return self.eye_data_store.get_field("pupil_ellipse")
+
+    @pupil_ellipse.setter
+    def pupil_ellipse(self, value: tuple | None) -> None:
+        self.eye_data_store.set_field("pupil_ellipse", value)
+
+    @property
+    def limbus_ellipse(self) -> tuple | None:
+        """Fitted limbus ellipse for the active eye (``None`` when unset)."""
+        return self.eye_data_store.get_field("limbus_ellipse")
+
+    @limbus_ellipse.setter
+    def limbus_ellipse(self, value: tuple | None) -> None:
+        self.eye_data_store.set_field("limbus_ellipse", value)
 
     def switch_eye(self, eye: str) -> None:
         """Switch between left and right eye annotations."""
         if eye not in {"left", "right"}:
             return
-
         # In monocular mode the right block is unused; defend against
         # programmatic callers requesting "right" so saves stay in sync
         # with the left-only convention.
         if not self.binocular_mode and eye != "left":
             return
-
-        self.save_current_eye_data()
-        self.current_eye = eye
-        self.load_current_eye_data()
+        self.eye_data_store.switch_eye(eye)
         self.update_image()
         self.annotation_changed.emit()
 
@@ -316,9 +335,7 @@ class ImageViewer(QWidget):
         """
         self.binocular_mode = enabled
         if not enabled and self.current_eye != "left":
-            self.save_current_eye_data()
-            self.current_eye = "left"
-            self.load_current_eye_data()
+            self.eye_data_store.switch_eye("left")
         self.update_image()
 
     def set_divider_x_norm(self, value: float) -> None:
@@ -350,14 +367,11 @@ class ImageViewer(QWidget):
 
     def get_all_eye_data(self) -> dict:
         """Get annotation data for both eyes."""
-        # Save current working data first
-        self.save_current_eye_data()
-        return self.eye_data.copy()
+        return self.eye_data_store.as_dict()
 
     def set_all_eye_data(self, eye_data: dict) -> None:
         """Set annotation data for both eyes."""
-        self.eye_data = eye_data.copy()
-        self.load_current_eye_data()
+        self.eye_data_store.from_dict(eye_data)
         self.update_image()
 
     def reset_undo_stack(self, initial_state: dict | None = None) -> None:
@@ -404,7 +418,6 @@ class ImageViewer(QWidget):
             self.glint_points = state.get("glint_points", []).copy()
             self.pupil_ellipse = state["pupil_ellipse"]
             self.limbus_ellipse = state["limbus_ellipse"]
-            self.save_current_eye_data()
             self.update_image()
             self.annotation_changed.emit()
 
@@ -443,7 +456,6 @@ class ImageViewer(QWidget):
                 points.remove(self.selected_point)
                 self.selected_point = None
                 self.save_state()
-                self.save_current_eye_data()
                 self.annotation_changed.emit()
                 self.update_image()
 
@@ -617,7 +629,6 @@ class ImageViewer(QWidget):
                     self.glint_points.append(image_pos)
 
                 self.save_state()
-                self.save_current_eye_data()
                 self.annotation_changed.emit()
                 self.update_image()
 
@@ -670,7 +681,6 @@ class ImageViewer(QWidget):
 
                 self.selected_point = new_pos
                 self.last_mouse_pos = new_pos
-                self.save_current_eye_data()
                 self.update_image()
 
     def mouseReleaseEvent(self, event: QEvent) -> None:  # noqa: N802
@@ -708,7 +718,6 @@ class ImageViewer(QWidget):
             self.moving_point = False
             if self.selected_point:
                 self.save_state()
-                self.save_current_eye_data()
                 self.annotation_changed.emit()
 
     def wheelEvent(self, event: QEvent) -> None:  # noqa: N802
@@ -893,17 +902,8 @@ class ImageViewer(QWidget):
             "glint": ("glint_points", None),
         }
         points_field, ellipse_field = field_map[annotation]
-        had_data = False
-        for eye in ("left", "right"):
-            if self.eye_data[eye][points_field]:
-                had_data = True
-                self.eye_data[eye][points_field] = []
-            if ellipse_field and self.eye_data[eye][ellipse_field] is not None:
-                had_data = True
-                self.eye_data[eye][ellipse_field] = None
-        if not had_data:
+        if not self.eye_data_store.clear_target_across_eyes(points_field, ellipse_field):
             return
-        self.load_current_eye_data()
         self.save_state()
         self.annotation_changed.emit()
         self.update_image()
@@ -1501,7 +1501,6 @@ class ImageViewer(QWidget):
         self.pupil_points = []
         self.pupil_ellipse = None
         self.save_state()
-        self.save_current_eye_data()
         self.annotation_changed.emit()
         self.update_image()
 
@@ -1510,7 +1509,6 @@ class ImageViewer(QWidget):
         self.limbus_points = []
         self.limbus_ellipse = None
         self.save_state()
-        self.save_current_eye_data()
         self.annotation_changed.emit()
         self.update_image()
 
@@ -1518,7 +1516,6 @@ class ImageViewer(QWidget):
         """Clear the fitted limbus ellipse."""
         self.limbus_ellipse = None
         self.save_state()
-        self.save_current_eye_data()
         self.annotation_changed.emit()
         self.update_image()
 
@@ -1526,7 +1523,6 @@ class ImageViewer(QWidget):
         """Clear the fitted pupil ellipse."""
         self.pupil_ellipse = None
         self.save_state()
-        self.save_current_eye_data()
         self.annotation_changed.emit()
         self.update_image()
 
@@ -1534,7 +1530,6 @@ class ImageViewer(QWidget):
         """Clear all eyelid contour points."""
         self.eyelid_contour_points = []
         self.save_state()
-        self.save_current_eye_data()
         self.annotation_changed.emit()
         self.update_image()
 
@@ -1542,7 +1537,6 @@ class ImageViewer(QWidget):
         """Clear all glint points."""
         self.glint_points = []
         self.save_state()
-        self.save_current_eye_data()
         self.annotation_changed.emit()
         self.update_image()
 
@@ -1577,7 +1571,6 @@ class ImageViewer(QWidget):
             else:
                 self.limbus_ellipse = (center, size, angle)
             self.save_state()
-            self.save_current_eye_data()
             self.annotation_changed.emit()
             self.update_image()
             return True

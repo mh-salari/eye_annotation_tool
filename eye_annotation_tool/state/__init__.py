@@ -7,8 +7,9 @@ managing the state themselves.
 """
 
 from .carry_roi_state import CarryRoiStore
+from .eye_data_store import EyeDataStore
 from .per_eye_state import PerEyeStateStore
 from .project_store import ProjectStore
 from .session_state import SessionState
 
-__all__ = ["CarryRoiStore", "PerEyeStateStore", "ProjectStore", "SessionState"]
+__all__ = ["CarryRoiStore", "EyeDataStore", "PerEyeStateStore", "ProjectStore", "SessionState"]
