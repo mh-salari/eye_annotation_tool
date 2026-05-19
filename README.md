@@ -3,7 +3,7 @@
 [![PyPI](https://img.shields.io/pypi/v/eye_annotation_tool)](https://pypi.org/project/eye_annotation_tool/)
 [![Downloads](https://static.pepy.tech/badge/eye_annotation_tool)](https://pepy.tech/project/eye_annotation_tool)
 [![License](https://img.shields.io/pypi/l/eye_annotation_tool)](https://github.com/mh-salari/eye_annotation_tool/blob/main/LICENSE)
-[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.18723581.svg)](https://doi.org/10.5281/zenodo.18723581)
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.18723470.svg)](https://doi.org/10.5281/zenodo.18723470)
 
 A Qt-based desktop tool for annotating pupil, limbus (iris), eyelid, and glints in eye images. Supports monocular and binocular projects, auto-detector plugins for each annotation type, and per-eye carry-across-frames workflows.
 
