@@ -180,9 +180,7 @@ class CanvasRenderer:
             for point in points:
                 scaled_point = QPointF(point.x() * self.zoom.factor, point.y() * self.zoom.factor)
                 highlighted = (
-                    is_active
-                    and point == geometry.selected_point
-                    and geometry.current_annotation == annotation_type
+                    is_active and point == geometry.selected_point and geometry.current_annotation == annotation_type
                 )
                 pen_color = select_color if highlighted else color
                 painter.setPen(QPen(pen_color, 3, Qt.SolidLine))

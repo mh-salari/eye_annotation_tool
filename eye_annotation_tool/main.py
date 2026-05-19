@@ -14,7 +14,6 @@ from .utils.project_settings import (
     DETECTOR_TARGETS,
     PROJECT_FILE_SUFFIX,
     default_project,
-    load_project,
     save_project,
 )
 
@@ -150,6 +149,7 @@ class StartupChooserDialog(QDialog):
     OPEN = "open"
 
     def __init__(self) -> None:
+        """Lay out the chooser with New / Open / Cancel buttons."""
         super().__init__()
         self.setWindowTitle("EyE Annotation Tool")
         self.setMinimumWidth(360)
@@ -178,6 +178,7 @@ class StartupChooserDialog(QDialog):
 
     @property
     def choice(self) -> str | None:
+        """Selected mode (``NEW`` / ``OPEN``), or ``None`` if the dialog was cancelled."""
         return self._choice
 
 
@@ -188,7 +189,7 @@ def _resolve_new_project_detectors(args: argparse.Namespace) -> dict:
         flag_value = getattr(args, target)
         if flag_value is None:
             plugin = DEFAULT_DETECTOR_PLUGINS[target]
-        elif flag_value.lower() in ("none", "disabled", ""):
+        elif flag_value.lower() in {"none", "disabled", ""}:
             plugin = "disabled"
         else:
             plugin = flag_value

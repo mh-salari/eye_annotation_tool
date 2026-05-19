@@ -42,6 +42,7 @@ class NewProjectDialog(QDialog):
     """
 
     def __init__(self, parent: QWidget | None = None) -> None:
+        """Build the wizard's UI and load the available detector plugins."""
         super().__init__(parent)
         self.setWindowTitle("New Project")
         self.setMinimumWidth(520)
@@ -115,7 +116,7 @@ class NewProjectDialog(QDialog):
         )
         if path:
             if not path.endswith(PROJECT_FILE_SUFFIX):
-                path = path + PROJECT_FILE_SUFFIX
+                path += PROJECT_FILE_SUFFIX
             self._path_edit.setText(path)
 
     def _on_accept(self) -> None:
@@ -143,7 +144,7 @@ class NewProjectDialog(QDialog):
         """Return the wizard's chosen path + the project skeleton to feed ``new_project``."""
         path = self._path_edit.text().strip()
         if path and not path.endswith(PROJECT_FILE_SUFFIX):
-            path = path + PROJECT_FILE_SUFFIX
+            path += PROJECT_FILE_SUFFIX
         project = default_project()
         project["binocular_mode"] = self._binocular_radio.isChecked()
         project["autosave"] = self._autosave_checkbox.isChecked()

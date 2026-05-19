@@ -38,6 +38,7 @@ from .annotation_controls import MODE_AUTO_DETECT, MODE_MANUAL, AnnotationContro
 from .custom_widgets import MaterialButton
 from .image_viewer import ImageViewer
 from .menu_handler import MenuHandler
+from .new_project_dialog import NewProjectDialog
 from .shortcut_handler import ShortcutHandler
 
 
@@ -415,7 +416,7 @@ class MainWindow(QMainWindow):
         if not path:
             return
         if not path.endswith(PROJECT_FILE_SUFFIX):
-            path = path + PROJECT_FILE_SUFFIX
+            path += PROJECT_FILE_SUFFIX
         self.project_store.save_as(path)
         self._refresh_save_state_indicator()
 
@@ -525,8 +526,6 @@ class MainWindow(QMainWindow):
 
     def on_new_project(self) -> None:
         """File > New Project — show the wizard, then create + load the project."""
-        from .new_project_dialog import NewProjectDialog  # local import: GUI-only
-
         dialog = NewProjectDialog(self)
         if dialog.exec_() != QDialog.Accepted:
             return
@@ -733,10 +732,13 @@ class MainWindow(QMainWindow):
             elif self.windowState() == Qt.WindowNoState:
                 # When restored from maximised, set to 75% of the current screen.
                 self.resize_to_percentage(0.75)
-        if obj is self.image_list_widget and event.type() == QEvent.KeyPress:
-            if event.key() in (Qt.Key_Delete, Qt.Key_Backspace):
-                self.remove_selected_images()
-                return True
+        if (
+            obj is self.image_list_widget
+            and event.type() == QEvent.KeyPress
+            and event.key() in {Qt.Key_Delete, Qt.Key_Backspace}
+        ):
+            self.remove_selected_images()
+            return True
         return super().eventFilter(obj, event)
 
     def closeEvent(self, event: QCloseEvent) -> None:  # noqa: N802
