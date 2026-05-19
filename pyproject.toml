@@ -24,7 +24,7 @@ dependencies = [
     "opencv-python>=4.5.0",
     "qtawesome>=1.4.2",
     "scipy>=1.7.0",
-    "lavan",
+    "lavan>=1.0.0",
 ]
 
 [project.urls]
@@ -34,15 +34,6 @@ Issues = "https://github.com/mh-salari/eye_annotation_tool/issues"
 
 [project.scripts]
 eye_annotation_tool = "eye_annotation_tool.main:run_app"
-
-# Local install of lavan during development. lavan has compiled C/C++
-# components (built via scikit-build-core), so editable installs would
-# require putting binaries back into lavan's source tree; instead we
-# build lavan into a wheel and install it normally. When lavan is
-# published to PyPI, this source override can be removed and the public
-# wheel will be used instead.
-[tool.uv.sources]
-lavan = { path = "../lavan", editable = false }
 
 [build-system]
 requires = ["hatchling", "hatch-vcs"]
