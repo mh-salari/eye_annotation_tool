@@ -5,7 +5,7 @@
 [![License](https://img.shields.io/pypi/l/eye_annotation_tool)](https://github.com/mh-salari/eye_annotation_tool/blob/main/LICENSE)
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.18723581.svg)](https://doi.org/10.5281/zenodo.18723581)
 
-EyE Annotation Tool is a tool for annotating pupil, iris and eyelid in eye images. It provides a user-friendly interface for manual annotation and supports auto-detector plugins.
+A Qt-based desktop tool for annotating pupil, limbus (iris), eyelid, and glints in eye images. Supports monocular and binocular projects, auto-detector plugins for each annotation type, and per-eye carry-across-frames workflows.
 
 <p align="center">
 <img src="https://raw.githubusercontent.com/mh-salari/eye_annotation_tool/main/eye_annotation_tool/resources/main_page.png" alt="EyE Annotation Tool Main Page" width="800">
@@ -13,33 +13,62 @@ EyE Annotation Tool is a tool for annotating pupil, iris and eyelid in eye image
 
 ## Features
 
-- Load and navigate through multiple eye images
-- Manual annotation of pupil, iris, eyelid, and glints
-- Auto-detector plugins for pupil, iris, eyelid, and glints
-- Undo functionality for annotations
-- Save and load annotations
-- Extensible plugin system for custom detectors
+- Monocular and binocular projects; per-eye overrides for ROI, carry, and defaults.
+- Manual annotation of pupil ellipse, limbus ellipse, eyelid mask, and glints.
+- Auto-detector plugins per annotation type; live detection re-runs on image load and plugin swap.
+- Built-in auto-detectors backed by [`lavan`](https://github.com/mh-salari/lavan) (pupil, limbus, glint).
+- Project sessions with persistent defaults, undo, brightness/zoom controls, and review mode for revisiting an existing project.
+- Plugin system with three discovery channels (built-in, env-var directories, Python entry-points).
+- CLI flags for batch use: `--images`, `--review`, `--auto-detectors`.
+
+## Built-in auto-detectors
+
+| Annotation | Detector | Backend |
+|---|---|---|
+| Pupil | `pupil_labs_2d` | `lavan.pupil_detector_2d` (Pupil Labs 2D detector) |
+| Pupil | `threshold_pupil` | `lavan.detect` (threshold + ellipse fit) |
+| Limbus | `daugman_limbus` | `lavan.boundary` (Daugman integro-differential / active contour) |
+| Glint | `threshold_glint` | `lavan.detect` (threshold + shape-quality gates) |
+
+See [`auto_detectors/README.md`](eye_annotation_tool/auto_detectors/README.md) for the full plugin contract.
 
 ## Installation
+
+### Requirements
+- Python ≥3.10
+
+### From PyPI
 
 ```bash
 pip install eye_annotation_tool
 ```
 
-For the latest development version:
+### Using [uv](https://docs.astral.sh/uv/)
 
 ```bash
-pip install git+https://github.com/mh-salari/eye_annotation_tool.git
+uv pip install eye_annotation_tool
 ```
 
-### Using uv
+Or, to add it to an existing uv project:
 
-If you prefer [uv](https://docs.astral.sh/uv/):
+```bash
+uv add eye_annotation_tool
+```
+
+### From source (editable / development)
 
 ```bash
 git clone https://github.com/mh-salari/eye_annotation_tool.git
 cd eye_annotation_tool
 uv sync
+```
+
+Or with pip:
+
+```bash
+git clone https://github.com/mh-salari/eye_annotation_tool.git
+cd eye_annotation_tool
+python3 -m pip install -e .
 ```
 
 ## Usage
@@ -48,17 +77,26 @@ uv sync
 eye_annotation_tool
 ```
 
-Or with uv:
-
-```bash
-uv run eye_annotation_tool
-```
-
-Or run it as a module:
+Or as a module:
 
 ```bash
 python -m eye_annotation_tool
 ```
+
+Common CLI flags:
+
+```bash
+# Open a project and load extra images on top
+eye_annotation_tool --project my_project.json --images img1.png img2.png
+
+# Re-annotate a subset of images against an existing project (read-only)
+eye_annotation_tool --project my_project.json --review img1.png img2.png
+
+# Enable only a subset of auto-detectors this session
+eye_annotation_tool --auto-detectors pupil,limbus
+```
+
+See `eye_annotation_tool --help` for the full flag list.
 
 ## Adding Custom Plugins
 
