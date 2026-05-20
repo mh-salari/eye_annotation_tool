@@ -16,7 +16,7 @@ Schema::
       "divider_x_norm": 0.5,
       "autosave": false,
       "detectors": {
-        "pupil":  {"id": "<lavan-id>" | "off" | "manual",
+        "pupil":  {"id": "<cheshm-id>" | "off" | "manual",
                     "params": {"left": {...}|null, "right": {...}|null, "single": {...}|null},
                     "carry_roi": {"enabled": {...}, "values": {...}}},
         "glint":  {...},
@@ -47,7 +47,7 @@ KINDS = ("pupil", "glint", "limbus", "eyelid")
 
 # Sentinel slugs for the detector picker: "off" suppresses the kind
 # entirely; "manual" routes it to manual click-to-place annotation.
-# Anything else is the ``Detector.id`` of a discovered lavan detector.
+# Anything else is the ``Detector.id`` of a discovered cheshm detector.
 DETECTOR_OFF = "off"
 DETECTOR_MANUAL = "manual"
 

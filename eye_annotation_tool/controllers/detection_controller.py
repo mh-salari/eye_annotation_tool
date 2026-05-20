@@ -3,7 +3,7 @@
 from typing import TYPE_CHECKING, Any
 
 import numpy as np
-from lavan.gui.registry import Detector, discover_detectors
+from cheshm.gui.registry import Detector, discover_detectors
 from PyQt5.QtCore import QObject, QTimer, pyqtSignal
 from PyQt5.QtWidgets import QWidget
 
@@ -594,7 +594,7 @@ def _intersect_roi_with_crop(
 def _translate_result(result: dict, dx: int, dy: int) -> dict:
     """Shift every (x, y) field in a detector result by ``(dx, dy)``.
 
-    Handles the lavan-standard fields ``center`` / ``ellipse`` /
+    Handles the cheshm-standard fields ``center`` / ``ellipse`` /
     ``contour`` recursively, plus glints stored under ``glints``.
     Other keys pass through untouched.
     """

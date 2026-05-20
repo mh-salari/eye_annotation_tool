@@ -10,7 +10,7 @@ kind's manual annotation group widget instead.
 
 from typing import Any
 
-from lavan.gui.registry import Detector
+from cheshm.gui.registry import Detector
 from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtGui import QColor, QPalette
 from PyQt5.QtWidgets import (
@@ -59,7 +59,7 @@ MANUAL = "manual"
 
 # Overlay keys the canvas paints for the manual annotation path, per kind.
 # The card exposes the same row of controls (visibility / colour / alpha /
-# thickness or point size) the lavan-style auto detectors get, so the
+# thickness or point size) the cheshm-style auto detectors get, so the
 # canvas reads colour + size for points and ellipses from one place
 # regardless of which mode owns the kind.
 MANUAL_OVERLAYS_BY_KIND: dict[str, tuple[tuple[str, str], ...]] = {
@@ -298,7 +298,7 @@ class _RoiRow(QWidget):
 class DetectorCard(QFrame):
     """Per-kind detector card — single source for dropdown / overlay / settings."""
 
-    # Payload: new selection slug. ``"off"`` / ``"manual"`` / a lavan detector id.
+    # Payload: new selection slug. ``"off"`` / ``"manual"`` / a cheshm detector id.
     selection_changed = pyqtSignal(str)
     # Payload: dict of current setting values for the active detector.
     params_changed = pyqtSignal(dict)
@@ -407,7 +407,7 @@ class DetectorCard(QFrame):
         Off returns ``None``. Manual returns the per-kind manual overlay
         state (keys vary by kind — pupil/limbus carry ``points`` /
         ``ellipse`` / ``center``; eyelid and glint carry only ``points``).
-        Any auto detector returns its lavan overlay state.
+        Any auto detector returns its cheshm overlay state.
         """
         if self._active_id == MANUAL:
             return self._manual_overlay_state

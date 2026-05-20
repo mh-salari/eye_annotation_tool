@@ -364,10 +364,8 @@ class CanvasRenderer:
             color = self._with_alpha(entry["color"], float(entry.get("alpha", 1.0)))
             thickness = int(entry.get("thickness", 1) or 1)
             if elem_type == "fill":
-                # "mask" overlays are painted as the result's contour
-                # filled (or the limbus polygon filled) — matches the
-                # lavan reference GUI rather than blitting the binary
-                # mask ndarray.
+                # "mask" overlays paint the result's contour filled (or
+                # the limbus polygon filled), not the binary mask ndarray.
                 if key == "mask" and result.get("contour") is not None:
                     self._draw_fill_polygon(painter, result["contour"], color)
                 elif key == "mask" and "R_theta" in result and result.get("center") is not None:

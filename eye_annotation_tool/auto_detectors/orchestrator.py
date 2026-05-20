@@ -1,9 +1,9 @@
-"""Run lavan detector functions in dependency order; cache results per image.
+"""Run cheshm detector functions in dependency order; cache results per image.
 
 The orchestrator sits between the GUI side (the per-kind detector
-cards) and lavan's detector functions:
+cards) and cheshm's detector functions:
 
-  - The controller registers one :class:`lavan.gui.registry.Detector`
+  - The controller registers one :class:`cheshm.gui.registry.Detector`
     per kind via :meth:`set_enabled_detectors`. ``None`` means the kind
     is not run (Off or Manual).
   - On image change, the caller invokes :meth:`clear_cache`.
@@ -11,7 +11,7 @@ cards) and lavan's detector functions:
     runs each one. :meth:`run_one` re-runs a single kind reusing
     whichever upstream results are cached.
 
-Upstream wiring is implicit, matching the contract every lavan detector
+Upstream wiring is implicit, matching the contract every cheshm detector
 already satisfies:
 
   - Glint detectors take ``pupil_center`` and ``pupil_radius`` as
@@ -19,7 +19,7 @@ already satisfies:
     and injects the cached pupil's centre + max-axis radius.
   - Limbus / eyelid detectors take the pupil centre (and optionally the
     pupil ellipse) as positional args after ``img``. The orchestrator
-    passes them positionally regardless of the parameter name lavan
+    passes them positionally regardless of the parameter name cheshm
     used in its own signature.
 
 Two signals carry outcomes outward:
@@ -32,7 +32,7 @@ Two signals carry outcomes outward:
 from collections.abc import Callable
 
 import numpy as np
-from lavan.gui.registry import Detector
+from cheshm.gui.registry import Detector
 from PyQt5.QtCore import QObject, pyqtSignal
 
 PostProcess = Callable[[dict], dict]
@@ -41,7 +41,7 @@ KINDS = ("pupil", "glint", "limbus", "eyelid")
 
 
 class DetectorOrchestrator(QObject):
-    """Dependency-aware runner + per-image result cache for lavan detectors."""
+    """Dependency-aware runner + per-image result cache for cheshm detectors."""
 
     detector_ready = pyqtSignal(str, dict)
     detector_failed = pyqtSignal(str)
@@ -174,7 +174,7 @@ class DetectorOrchestrator(QObject):
 
         Every limbus detector takes the pupil centre as its 2nd
         positional, and any detector with a 3rd positional gets the
-        pupil ellipse there. The parameter names in the lavan signature
+        pupil ellipse there. The parameter names in the cheshm signature
         (``seed_center``, ``pupil_ellipse``, etc.) are irrelevant — we
         match by position against ``det.wired_inputs``.
         """

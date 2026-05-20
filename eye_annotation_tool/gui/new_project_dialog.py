@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-from lavan.gui.registry import discover_detectors
+from cheshm.gui.registry import discover_detectors
 from PyQt5.QtWidgets import (
     QButtonGroup,
     QCheckBox,

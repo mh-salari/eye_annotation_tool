@@ -2,12 +2,12 @@
 
 Hosts the eye selector at the top and one :class:`DetectorCard` per
 detector kind underneath. Each card owns its own picker (Off / Manual /
-lavan detector id), the active detector's settings, the overlay row,
+cheshm detector id), the active detector's settings, the overlay row,
 and (for Manual) the per-kind manual annotation group widget. Clear
 All sits at the bottom and dispatches to the image viewer.
 """
 
-from lavan.gui.registry import Detector
+from cheshm.gui.registry import Detector
 from PyQt5.QtCore import pyqtSignal
 from PyQt5.QtWidgets import (
     QButtonGroup,

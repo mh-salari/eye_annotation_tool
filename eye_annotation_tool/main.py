@@ -56,16 +56,16 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         ),
     )
     parser.add_argument(
-        "--pupil", default=None, help="Detector slug ('off' / 'manual' / lavan id) for pupil (used by --new-project)."
+        "--pupil", default=None, help="Detector slug ('off' / 'manual' / cheshm id) for pupil (used by --new-project)."
     )
     parser.add_argument(
-        "--glint", default=None, help="Detector slug ('off' / 'manual' / lavan id) for glint (used by --new-project)."
+        "--glint", default=None, help="Detector slug ('off' / 'manual' / cheshm id) for glint (used by --new-project)."
     )
     parser.add_argument(
-        "--limbus", default=None, help="Detector slug ('off' / 'manual' / lavan id) for limbus (used by --new-project)."
+        "--limbus", default=None, help="Detector slug ('off' / 'manual' / cheshm id) for limbus (used by --new-project)."
     )
     parser.add_argument(
-        "--eyelid", default=None, help="Detector slug ('off' / 'manual' / lavan id) for eyelid (used by --new-project)."
+        "--eyelid", default=None, help="Detector slug ('off' / 'manual' / cheshm id) for eyelid (used by --new-project)."
     )
     parser.add_argument(
         "--autosave",

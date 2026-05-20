@@ -1,13 +1,13 @@
-"""Qt widget builder for lavan ``Setting`` descriptors.
+"""Qt widget builder for cheshm ``Setting`` descriptors.
 
-One widget kind per :attr:`lavan.gui.registry.Setting.type` tag. The
+One widget kind per :attr:`cheshm.gui.registry.Setting.type` tag. The
 card chrome in :mod:`detector_card` consumes only :class:`SettingsBlock`.
 """
 
 from collections.abc import Callable
 from typing import Any
 
-from lavan.gui.registry import Setting
+from cheshm.gui.registry import Setting
 from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import (
     QAbstractSpinBox,
