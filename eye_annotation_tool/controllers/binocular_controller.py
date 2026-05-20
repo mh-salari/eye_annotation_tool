@@ -131,22 +131,9 @@ class BinocularController(QObject):
         self.annotation_modified.emit(True)
 
     def apply_loaded_image_meta(self, *, binocular_mode: bool, divider_x_norm: float | None) -> None:
-        """Apply binocular + divider metadata for a freshly loaded image.
-
-        Called right after the image's annotation JSON has been parsed.
-        The per-image divider override (or ``None`` to inherit the
-        project default) is stashed for save round-trip, and the image
-        viewer's divider position + binocular flag are updated so the
-        canvas renders the correct geometry.
-
-        The per-image binocular flag goes through
-        :meth:`CliOverridePolicy.session_binocular` so the active CLI
-        override policy is the only gate.
-        """
+        """Apply per-image divider metadata; ``binocular_mode`` is ignored."""
+        del binocular_mode
         image_path = self._current_image_path_fn()
         if image_path is not None:
             self.project_store.set_divider_override(image_path, divider_x_norm)
-        effective_binocular = self.cli_policy.session_binocular(binocular_mode)
-        if effective_binocular != self._binocular:
-            self.apply_mode(effective_binocular)
         self.image_viewer.set_divider_x_norm(self.effective_divider_x_norm())

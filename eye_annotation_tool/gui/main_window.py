@@ -24,7 +24,7 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
-from lavan.gui.registry import discover_detectors
+from cheshm.gui.registry import discover_detectors
 
 from ..auto_detectors.orchestrator import DetectorOrchestrator
 from ..controllers.annotation_controller import AnnotationController
@@ -44,6 +44,7 @@ from .custom_widgets import MaterialButton
 from .image_viewer import ImageViewer
 from .menu_handler import MenuHandler
 from .new_project_dialog import NewProjectDialog
+from .project_settings_dialog import ProjectSettingsDialog
 from .shortcut_handler import ShortcutHandler
 
 # Slider ticks map onto the zoom / brightness controller's clamp range via a
@@ -107,7 +108,7 @@ class MainWindow(QMainWindow):
         self.session = SessionState(self)
         self.session.modified_changed.connect(self._refresh_save_state_indicator)
 
-        # Group lavan detectors by kind so the side-panel cards have
+        # Group cheshm detectors by kind so the side-panel cards have
         # the right options in their dropdowns.
         self._detectors_by_kind: dict[str, list] = {t: [] for t in KINDS}
         for det in discover_detectors():
@@ -584,6 +585,23 @@ class MainWindow(QMainWindow):
         )
         if path:
             self.open_project(path)
+
+    def on_project_settings(self) -> None:
+        """File > Project Settings… — edit project-wide settings live."""
+        if self.project_store.path is None:
+            QMessageBox.information(
+                self,
+                "No project loaded",
+                "Open or create a project before editing its settings.",
+            )
+            return
+        dialog = ProjectSettingsDialog(self.project_store.project, self)
+        if dialog.exec_() != QDialog.Accepted:
+            return
+        updates = dialog.result_payload()
+        self.project_store.project.update(updates)
+        self.project_store.persist()
+        self._apply_project_state()
 
     def on_load_images_clicked(self) -> None:
         """Left-panel "Load Images" button — file picker, appends to project."""

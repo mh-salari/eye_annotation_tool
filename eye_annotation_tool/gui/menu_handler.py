@@ -1,6 +1,6 @@
 """Application menu bar setup: File + Help.
 
-Detector picking lives in the side-panel cards (Off / Manual / lavan
+Detector picking lives in the side-panel cards (Off / Manual / cheshm
 detector id…) — the menu only carries project lifecycle and help.
 """
 
@@ -43,6 +43,12 @@ class MenuHandler:
         save_as_action.setShortcut("Ctrl+Shift+S")
         save_as_action.triggered.connect(self.main_window.save_project_as)
         file_menu.addAction(save_as_action)
+
+        file_menu.addSeparator()
+
+        settings_action = QAction("Project Settings…", self.main_window)
+        settings_action.triggered.connect(self.main_window.on_project_settings)
+        file_menu.addAction(settings_action)
 
         file_menu.addSeparator()
 
