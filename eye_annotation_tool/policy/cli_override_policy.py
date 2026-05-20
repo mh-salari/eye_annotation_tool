@@ -11,7 +11,7 @@ provides the conflict list and the override calculations so the GUI
 side only owns the Qt-specific bits.
 """
 
-from ..utils.project_settings import DETECTOR_TARGETS
+from ..utils.project_settings import DETECTOR_OFF, KINDS
 
 
 class CliOverridePolicy:
@@ -87,8 +87,8 @@ class CliOverridePolicy:
         """Apply the session policy to a raw detectors dict.
 
         When ``--auto-detectors`` is locked, returns a dict with only
-        the CLI-listed targets enabled (the others forced to
-        ``"disabled"``); otherwise returns ``source_value`` unchanged.
+        the CLI-listed kinds enabled (the others forced to ``"off"``);
+        otherwise returns ``source_value`` unchanged.
         """
         if self.auto_detectors_locked():
             return self.override_detectors_from_cli(source_value)
@@ -110,9 +110,9 @@ class CliOverridePolicy:
             out.append("Binocular mode: project file = binocular, CLI = monocular.")
         if self.auto_detectors is not None:
             current = {
-                target
-                for target, block in project_settings.get("detectors", {}).items()
-                if block.get("plugin", "disabled") != "disabled"
+                kind
+                for kind, block in project_settings.get("detectors", {}).items()
+                if block.get("id", DETECTOR_OFF) not in {DETECTOR_OFF, "manual"}
             }
             if current != self.auto_detectors:
                 out.append(
@@ -124,32 +124,29 @@ class CliOverridePolicy:
     def override_detectors_from_cli(self, project_detectors: dict) -> dict:
         """Return a detectors dict honouring ``--auto-detectors`` for this session.
 
-        Targets in :attr:`auto_detectors` keep the project file's plugin
-        choice (and any tuned params) untouched; every other target is
-        forced to ``"disabled"``. The original ``project_detectors`` is
-        not mutated.
+        Kinds in :attr:`auto_detectors` keep the project file's detector
+        id (and any tuned params) untouched; every other kind is forced
+        to ``"off"``. The original ``project_detectors`` is not mutated.
 
-        Raises ``SystemExit`` when a CLI-enabled target is set to
-        ``"disabled"`` in the project file — that combination is a
-        user-side conflict and silently substituting a default plugin
-        would surprise the user.
+        Raises ``SystemExit`` when a CLI-enabled kind is set to ``"off"``
+        in the project file — that combination is a user-side conflict
+        and silently substituting a default would surprise the user.
         """
         if self.auto_detectors is None:
             return project_detectors
         overridden: dict = {}
-        for target in DETECTOR_TARGETS:
-            existing = project_detectors.get(target, {})
-            if target in self.auto_detectors:
-                plugin_slug = existing.get("plugin", "disabled")
-                if plugin_slug == "disabled":
+        for kind in KINDS:
+            existing = project_detectors.get(kind, {})
+            if kind in self.auto_detectors:
+                slug = existing.get("id", DETECTOR_OFF)
+                if slug == DETECTOR_OFF:
                     raise SystemExit(
-                        f"--auto-detectors includes {target!r} but the project "
-                        f"settings file has {target!r} set to 'disabled'. Enable "
-                        f"a plugin for {target!r} via the Auto Detectors menu "
-                        f"(or hand-edit the settings file) and re-run, or drop "
-                        f"{target!r} from --auto-detectors.",
+                        f"--auto-detectors includes {kind!r} but the project "
+                        f"settings file has {kind!r} set to 'off'. Pick a detector "
+                        f"for {kind!r} via the side panel (or hand-edit the settings "
+                        f"file) and re-run, or drop {kind!r} from --auto-detectors.",
                     )
-                overridden[target] = {"plugin": plugin_slug, "params": dict(existing.get("params", {}))}
+                overridden[kind] = {"id": slug, "params": dict(existing.get("params", {}))}
             else:
-                overridden[target] = {"plugin": "disabled", "params": {}}
+                overridden[kind] = {"id": DETECTOR_OFF, "params": {}}
         return overridden

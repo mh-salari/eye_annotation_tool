@@ -23,6 +23,7 @@ dependencies = [
     "numpy>=1.20.0",
     "opencv-python>=4.5.0",
     "qtawesome>=1.4.2",
+    "pyqtdarktheme>=2.1",
     "scipy>=1.7.0",
     "lavan>=1.0.0",
 ]
@@ -31,6 +32,10 @@ dependencies = [
 Homepage = "https://github.com/mh-salari/eye_annotation_tool"
 Repository = "https://github.com/mh-salari/eye_annotation_tool"
 Issues = "https://github.com/mh-salari/eye_annotation_tool/issues"
+
+[tool.uv.sources]
+# Local dev only — remove before publishing.
+lavan = { path = "/tmp/lavan-for-eat", editable = true }
 
 [project.scripts]
 eye_annotation_tool = "eye_annotation_tool.main:run_app"
@@ -163,7 +168,3 @@ lint.ignore = [
 "eye_annotation_tool/gui/image_viewer.py" = ["PLR0904"]
 "eye_annotation_tool/gui/main_window.py" = ["PLR0904"]
 "eye_annotation_tool/controllers/detection_controller.py" = ["PLR0904"]
-# Plugin override methods (detect, serialize, deserialize, make_panel) often
-# don't reference ``self`` but must remain instance methods to satisfy the
-# DetectorPlugin contract and to allow subclasses to override.
-"eye_annotation_tool/auto_detectors/plugins/**/*.py" = ["PLR6301"]

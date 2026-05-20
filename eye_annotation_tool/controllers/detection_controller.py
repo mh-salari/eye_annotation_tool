@@ -1,61 +1,54 @@
-"""Auto-Detect plugin lifecycle, run dispatch, signal wiring."""
+"""Detector lifecycle: wire DetectorCards to the orchestrator + persistence."""
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
+from lavan.gui.registry import Detector, discover_detectors
 from PyQt5.QtCore import QObject, QTimer, pyqtSignal
-from PyQt5.QtWidgets import QMessageBox, QWidget
+from PyQt5.QtWidgets import QWidget
 
-from ..auto_detectors import PluginManager
 from ..auto_detectors.orchestrator import DetectorOrchestrator
-from ..auto_detectors.plugin_interface import DetectorPlugin, Target
 from ..gui.annotation_controls import AnnotationControlPanel
+from ..gui.detector_card import MANUAL, OFF, DetectorCard
 from ..gui.image_viewer import ImageViewer
 from ..state import CarryRoiStore, PerEyeStateStore, ProjectStore
-from ..utils.project_settings import CARRY_ROI_SLOTS, DETECTOR_TARGETS
+from ..utils.project_settings import (
+    CARRY_ROI_SLOTS,
+    DETECTOR_OFF,
+    KINDS,
+)
 
 if TYPE_CHECKING:
     from .binocular_controller import BinocularController
 
-AUTO_DETECT_DEBOUNCE_MS = 100
-
-_PANEL_ROI_SETTER = "set_{target}_roi"
+AUTO_DETECT_DEBOUNCE_MS = 0
 
 
-def _panel_roi_setter_name(target: str) -> str:
-    """Return the panel-method name that pushes a new ROI for ``target``."""
-    return _PANEL_ROI_SETTER.format(target=target)
+def _roi_setting_name(detector: Detector) -> str | None:
+    """Return the name of the detector's ROI-typed setting (or ``None``)."""
+    for s in detector.settings:
+        if s.type == "roi":
+            return s.name
+    return None
 
 
-def _panel_roi_param_key(target: str) -> str:
-    """Return the params-dict key plugin panels use for their ``target`` ROI."""
-    return f"{target}_roi"
+def _strip_roi(params: dict, roi_setting_name: str | None) -> dict:
+    """Return a copy of ``params`` with the ROI key dropped (used when persisting defaults)."""
+    if roi_setting_name is None or roi_setting_name not in params:
+        return dict(params)
+    cleaned = dict(params)
+    cleaned.pop(roi_setting_name)
+    return cleaned
 
 
 class DetectionController(QObject):
-    """Owns Auto-Detect plugin state, panel signal wiring, and the run pipeline.
-
-    Holds the resolved-plugin dict, the debounce timer, and the
-    last-manual-pupil signature; routes panel signals to the
-    orchestrator; mediates project-file load/save of detection blocks;
-    and handles the carry-ROI lifecycle for live tuning.
-
-    Cross-cutting events the controller emits as signals (consumed by
-    MainWindow):
-
-    * :attr:`annotation_modified` — toggle the dirty flag.
-    * :attr:`status_message` — show a transient status-bar message.
-    * :attr:`detectors_changed` — fired after the project's detectors
-      dict is mutated by a plugin selection so menus can refresh.
-    """
+    """Bridge between the per-kind :class:`DetectorCard` widgets and the orchestrator."""
 
     annotation_modified = pyqtSignal(bool)
     status_message = pyqtSignal(str, int)
-    detectors_changed = pyqtSignal()
 
     def __init__(
         self,
-        plugin_manager: PluginManager,
         orchestrator: DetectorOrchestrator,
         per_eye_state: PerEyeStateStore,
         carry_roi_state: CarryRoiStore,
@@ -64,15 +57,7 @@ class DetectionController(QObject):
         annotation_controls: AnnotationControlPanel,
         parent: QObject | None = None,
     ) -> None:
-        """Wire the dependencies and start the debounce timer.
-
-        :class:`BinocularController` is bound after construction via
-        :meth:`bind_binocular_controller`; the two controllers have a
-        mutual dependency that can't be expressed in a single
-        constructor call.
-        """
         super().__init__(parent)
-        self.plugin_manager = plugin_manager
         self.orchestrator = orchestrator
         self.per_eye_state = per_eye_state
         self.carry_roi_state = carry_roi_state
@@ -81,536 +66,261 @@ class DetectionController(QObject):
         self.annotation_controls = annotation_controls
         self._binocular: BinocularController | None = None
 
-        self.enabled_plugins: dict[Target, DetectorPlugin] = {}
+        self._detectors_by_kind_id: dict[tuple[str, str], Detector] = {
+            (d.kind, d.id): d for d in discover_detectors()
+        }
+
         self._pending_run_one: tuple[str, dict] | None = None
-        self._last_manual_pupil_signature: tuple | None = None
         self._auto_detect_debounce = QTimer(self)
         self._auto_detect_debounce.setSingleShot(True)
         self._auto_detect_debounce.setInterval(AUTO_DETECT_DEBOUNCE_MS)
         self._auto_detect_debounce.timeout.connect(self._on_auto_detect_debounce_fired)
-        self.orchestrator.plugin_ready.connect(self._on_plugin_ready)
-        self.orchestrator.plugin_failed.connect(self._on_plugin_failed)
-        self.image_viewer.target_roi_changed.connect(self._on_target_roi_changed)
+
+        self.orchestrator.detector_ready.connect(self._on_detector_ready)
+        self.orchestrator.detector_failed.connect(self._on_detector_failed)
+
+        self._wire_card_signals()
 
     def bind_binocular_controller(self, binocular_controller: "BinocularController") -> None:
-        """Attach the BinocularController after both controllers are constructed.
-
-        The two have a mutual dependency: this controller reads the
-        active eye / divider / binocular flag from ``BinocularController``,
-        and ``BinocularController`` calls back into this one for
-        post-eye-switch refreshes. Two-phase init breaks the cycle
-        without a circular import.
-        """
         self._binocular = binocular_controller
 
     @property
     def binocular(self) -> "BinocularController":
-        """Return the bound :class:`BinocularController`; raises if unbound."""
         if self._binocular is None:
             raise RuntimeError("DetectionController.bind_binocular_controller was not called")
         return self._binocular
 
     # ---------------------------------------------------------------------------
-    # Tiny convenience accessors
+    # Public callable surface used by image_viewer + tests
     # ---------------------------------------------------------------------------
 
-    def panel_for_target(self, target: Target) -> QWidget | None:
-        """Look up the live Auto Detect panel for ``target`` (or ``None`` if disabled).
-
-        Suitable as the ``panel_lookup_fn`` argument to
-        :meth:`PerEyeStateStore.snapshot_panel` /
-        :meth:`PerEyeStateStore.restore_panel`.
-        """
-        plugin = self.enabled_plugins.get(target)
-        if plugin is None:
+    def overlay_state_lookup(self, kind: str) -> dict[str, dict] | None:
+        """Return the active detector's overlay state for ``kind`` (None when off / manual)."""
+        card = self.annotation_controls.card(kind)
+        if card is None:
             return None
-        return self.annotation_controls.auto_detect_panel(plugin.name)
+        return card.overlay_state()
 
-    def plugin_default_params(self, target: Target) -> dict:
-        """Return the active plugin's ``default_params`` for ``target`` (or ``{}`` if disabled)."""
-        plugin = self.enabled_plugins.get(target)
-        if plugin is None:
+    def enabled_detector(self, kind: str) -> Detector | None:
+        card = self.annotation_controls.card(kind)
+        return card.active_detector() if card is not None else None
+
+    def panel_for_kind(self, kind: str) -> QWidget | None:
+        return self.annotation_controls.card(kind)
+
+    def detector_default_params(self, kind: str) -> dict:
+        det = self.enabled_detector(kind)
+        if det is None:
             return {}
-        return plugin.default_params()
+        return {s.name: s.default for s in det.settings}
 
     # ---------------------------------------------------------------------------
-    # Plugin resolution + panel rebuild
+    # Card signal wiring
     # ---------------------------------------------------------------------------
 
-    def apply_enabled_plugins(
-        self,
-        detectors_settings: dict,
-        preserved_params: dict | None = None,
-    ) -> None:
-        """Resolve enabled plugins from project settings and (re)build the Auto Detect stack.
-
-        ``detectors_settings`` is the ``"detectors"`` block:
-        ``{target: {"plugin": name, "params": {...}}, ...}``. Targets
-        whose plugin is ``"disabled"`` are skipped. Unknown plugin names
-        raise ``RuntimeError`` — silent skipping would hide typos.
-
-        ``preserved_params`` lets a caller override the project-file
-        params for specific targets, used by :meth:`select_plugin_for_target`
-        to keep the in-memory slider state of unchanged targets when
-        the user toggles one detector via the menu.
-        """
-        preserved_params = preserved_params or {}
-        self.enabled_plugins = {}
-        panels: list[tuple[str, QWidget]] = []
-        for target in DETECTOR_TARGETS:
-            entry = detectors_settings.get(target) or {}
-            plugin_name = entry.get("plugin", "disabled")
-            if plugin_name == "disabled":
-                self.image_viewer.clear_active_plugin(target)
+    def _wire_card_signals(self) -> None:
+        for kind in KINDS:
+            card = self.annotation_controls.card(kind)
+            if card is None:
                 continue
-            plugin = self.plugin_manager.get(plugin_name)
-            if plugin is None:
-                raise RuntimeError(
-                    f"project settings reference unknown plugin {plugin_name!r} for target {target!r}; "
-                    f"available: {sorted(self.plugin_manager.all())}",
-                )
-            if plugin.target != target:
-                raise RuntimeError(
-                    f"plugin {plugin_name!r} targets {plugin.target!r} but is configured for {target!r}",
-                )
-            self.enabled_plugins[target] = plugin
-            self.image_viewer.set_active_plugin(target, plugin)
-            panel = plugin.make_panel(None)
+            card.selection_changed.connect(
+                lambda slug, k=kind: self._on_card_selection_changed(k, slug),
+            )
+            card.params_changed.connect(
+                lambda params, k=kind: self._on_card_params_changed(k, params),
+            )
+            card.overlay_changed.connect(self._on_overlay_changed)
+            card.reset_requested.connect(
+                lambda k=kind: self._on_card_reset(k),
+            )
+            card.save_default_requested.connect(
+                lambda k=kind: self._on_card_save_default(k),
+            )
+            card.roi_edit_requested.connect(
+                lambda active, k=kind: self._on_roi_edit_requested(k, active),
+            )
+            card.clear_roi_requested.connect(
+                lambda k=kind: self._on_clear_roi_requested(k),
+            )
+            card.carry_roi_toggled.connect(
+                lambda enabled, k=kind: self._on_carry_roi_toggled(k, enabled),
+            )
+            card.override_roi_requested.connect(
+                lambda k=kind: self._on_override_roi_requested(k),
+            )
+            card.detect_requested.connect(
+                lambda k=kind: self._kick_live_run_for_kind(k),
+            )
+
+    # ---------------------------------------------------------------------------
+    # Project load / apply
+    # ---------------------------------------------------------------------------
+
+    def apply_project_settings(self, detectors_block: dict) -> None:
+        """Push the project's detectors block into the cards + orchestrator."""
+        for kind in KINDS:
+            entry = detectors_block.get(kind) or {}
+            slug = entry.get("id", DETECTOR_OFF)
             params_by_slot = entry.get("params") or {}
-            for slot in CARRY_ROI_SLOTS:
-                slot_params = params_by_slot.get(slot) if isinstance(params_by_slot, dict) else None
-                self.per_eye_state.set_project_default(
-                    target,
-                    slot,
-                    dict(slot_params) if isinstance(slot_params, dict) else None,
-                )
-            active_slot = self.binocular.active_eye_slot()
-            initial_params = (
-                preserved_params.get(target) or self.per_eye_state.get_project_default(target, active_slot) or {}
-            )
-            panel.set_params(initial_params)
-            panel.params_changed.connect(
-                lambda params, name=plugin.name, target_=plugin.target: self._on_plugin_params_changed(
-                    name,
-                    target_,
-                    params,
-                ),
-            )
-            if hasattr(panel, "roi_edit_requested"):
-                panel.roi_edit_requested.connect(
-                    lambda checked, target_=plugin.target: self._on_panel_roi_edit_requested(target_, checked),
-                )
-            if hasattr(panel, "clear_roi_requested"):
-                panel.clear_roi_requested.connect(
-                    lambda target_=plugin.target: self._on_panel_clear_roi_requested(target_),
-                )
-            if hasattr(panel, "show_mask_toggled"):
-                panel.show_mask_toggled.connect(
-                    lambda on, target_=plugin.target: self._on_panel_show_mask_toggled(target_, on),
-                )
-            if hasattr(panel, "show_ellipse_toggled"):
-                panel.show_ellipse_toggled.connect(
-                    lambda on, plugin_=plugin: self._on_panel_show_ellipse_toggled(plugin_, on),
-                )
-                # Plugin instances outlive their panels; sync the persistent
-                # render flag to the freshly built checkbox state so a
-                # disable / re-enable cycle does not leave the plugin showing
-                # an outline the new panel claims is off.
-                if hasattr(plugin, "set_show_ellipse") and hasattr(panel, "show_ellipse_check"):
-                    plugin.set_show_ellipse(panel.show_ellipse_check.isChecked())
-            if hasattr(panel, "detect_requested"):
-                panel.detect_requested.connect(
-                    lambda name=plugin.name, target_=plugin.target: self._on_panel_detect_requested(name, target_),
-                )
-            self.carry_roi_state.load_from_project_block(target, entry.get("carry_roi") or {})
-            if hasattr(panel, "set_carry_roi_enabled"):
-                panel.set_carry_roi_enabled(self.carry_roi_state.is_enabled(target, active_slot))
-            if hasattr(panel, "carry_roi_toggled"):
-                panel.carry_roi_toggled.connect(
-                    lambda checked, target_=plugin.target: self._on_carry_roi_toggled(target_, checked),
-                )
-            if hasattr(panel, "override_roi_requested"):
-                panel.override_roi_requested.connect(
-                    lambda target_=plugin.target: self._on_override_roi_requested(target_),
-                )
-            panels.append((plugin.name, panel))
-        self.annotation_controls.set_auto_detect_panels(panels)
-        self.orchestrator.set_enabled_plugins(dict(self.enabled_plugins))
-        self.sync_manual_for_auto_targets()
-        self._last_manual_pupil_signature = self._manual_pupil_signature()
-        self.refresh_manual_pupil_in_cache()
-        self.refresh_panel_availability()
+            card = self.annotation_controls.card(kind)
+            if card is None:
+                continue
+            card.set_selection(slug, emit=False)
+            det = card.active_detector()
+            if det is not None:
+                self._restore_card_params(kind, det, params_by_slot)
+            self.carry_roi_state.load_from_project_block(kind, entry.get("carry_roi") or {})
+        self._refresh_orchestrator_enabled()
+        self._refresh_auto_managed_kinds()
+        self._kick_live_run_for_all_enabled()
 
-    def sync_manual_for_auto_targets(self) -> None:
-        """Mirror per-target detector ownership into the Manual panel + viewer.
-
-        For each target with an enabled auto detector the matching
-        Manual-panel row is hidden entirely; the viewer is told to
-        suppress that target's manual painting and click-add. If the
-        currently selected Manual row just got hidden, selection jumps
-        to the first still-visible row so canvas clicks don't fall
-        through to an invisible target.
-        """
-        target_rows = (
-            ("pupil", self.annotation_controls.pupil_group, "pupil"),
-            ("limbus", self.annotation_controls.limbus_group, "limbus"),
-            ("eyelid", self.annotation_controls.eyelid_group, "eyelid_contour"),
-            ("glint", self.annotation_controls.glint_group, "glint"),
-        )
-        auto_targets: set[str] = set()
-        first_visible: tuple[object, str] | None = None
-        selected_hidden = False
-        for plugin_target, group, annotation in target_rows:
-            has_auto = plugin_target in self.enabled_plugins
-            group.setVisible(not has_auto)
-            if has_auto:
-                auto_targets.add(plugin_target)
-                if group.is_checked():
-                    selected_hidden = True
-            elif first_visible is None:
-                first_visible = (group, annotation)
-        self.image_viewer.set_auto_managed_targets(auto_targets)
-        if selected_hidden and first_visible is not None:
-            group, annotation = first_visible
-            group.set_checked(True)
-            self.image_viewer.set_current_annotation(annotation)
-
-    # ---------------------------------------------------------------------------
-    # Auto Detectors menu actions
-    # ---------------------------------------------------------------------------
-
-    def current_plugin_for_target(self, target: Target) -> str:
-        """Return the slug of the plugin currently chosen for ``target`` (or ``"disabled"``)."""
-        return self.project_store.project.get("detectors", {}).get(target, {}).get("plugin", "disabled")
-
-    def select_plugin_for_target(self, target: Target, plugin_name: str) -> None:
-        """Set ``target``'s plugin to ``plugin_name`` and rebuild the Auto Detect panels.
-
-        Switching plugins resets the saved params for that target to the
-        new plugin's :meth:`~DetectorPlugin.default_params`. Switching
-        to the same plugin is a no-op.
-        """
-        detectors = self.project_store.project.setdefault("detectors", {})
-        current = detectors.get(target, {}).get("plugin", "disabled")
-        if current == plugin_name:
+    def _restore_card_params(self, kind: str, det: Detector, params_by_slot: dict) -> None:
+        active_slot = self._active_slot()
+        for slot in CARRY_ROI_SLOTS:
+            slot_params = params_by_slot.get(slot) if isinstance(params_by_slot, dict) else None
+            if isinstance(slot_params, dict):
+                self.per_eye_state.set_project_default(kind, slot, dict(slot_params))
+        defaults = self.per_eye_state.get_project_default(kind, active_slot)
+        card = self.annotation_controls.card(kind)
+        if card is None:
             return
-        if plugin_name == "disabled":
-            detectors[target] = {"plugin": "disabled", "params": {}}
+        if defaults:
+            card.set_params(defaults)
         else:
-            plugin = self.plugin_manager.get(plugin_name)
-            if plugin is None or plugin.target != target:
-                return
-            detectors[target] = {"plugin": plugin_name, "params": plugin.default_params()}
-        self.project_store.persist()
-        self.image_viewer.clear_detection_overlay(target)
-        self.image_viewer.clear_target_roi(target)
-        self.image_viewer.clear_target_mask(target)
-        if plugin_name != "disabled":
-            self.image_viewer.clear_manual_for_target(target)
-        preserved: dict[Target, dict] = {}
-        for t, plugin in self.enabled_plugins.items():
-            if t == target:
-                continue
-            panel = self.annotation_controls.auto_detect_panel(plugin.name)
-            if panel is not None:
-                preserved[t] = panel.current_params()
-        self.apply_enabled_plugins(detectors, preserved_params=preserved)
-        self.detectors_changed.emit()
-        self.refresh_live_plugins_all_eyes()
+            card.set_params({s.name: s.default for s in det.settings})
 
-    def save_current_settings_as_project_defaults(self, parent_widget: QWidget) -> None:
-        """Snapshot every enabled plugin's current panel params into project defaults.
+    # ---------------------------------------------------------------------------
+    # Card signal handlers
+    # ---------------------------------------------------------------------------
 
-        ``parent_widget`` parents the confirmation dialog (passed in so
-        the controller stays unaware of MainWindow).
-        """
-        if not self.enabled_plugins:
-            QMessageBox.information(
-                parent_widget,
-                "No Detectors Enabled",
-                "Enable at least one detector via the Auto Detectors menu before saving project defaults.",
-            )
+    def _on_card_selection_changed(self, kind: str, slug: str) -> None:
+        self._persist_kind_id(kind, slug)
+        self._refresh_orchestrator_enabled()
+        self._refresh_auto_managed_kinds()
+        # Switching the kind's detector invalidates whatever overlay /
+        # ROI / cached result was being shown for it.
+        self.image_viewer.clear_detection_overlay(kind)
+        self.image_viewer.clear_target_roi(kind)
+        self.orchestrator.set_cached_result(kind, None)
+        self.annotation_modified.emit(True)
+        self._kick_live_run(kind)
+
+    def _on_card_params_changed(self, kind: str, params: dict) -> None:
+        self.annotation_modified.emit(True)
+        self.per_eye_state.set_params(self._active_slot(), kind, dict(params))
+        # Single-shot 0 ms timer coalesces multiple slider events from
+        # the same event-loop tick into one detection pass.
+        self._pending_run_one = None
+        self._auto_detect_debounce.start()
+
+    def _on_card_reset(self, kind: str) -> None:
+        card = self.annotation_controls.card(kind)
+        if card is None or card.active_detector() is None:
             return
-        reply = QMessageBox.question(
-            parent_widget,
-            "Save Project Defaults?",
-            "Replace this project's saved detector defaults with the current Auto Detect panel values?",
-            QMessageBox.Yes | QMessageBox.No,
-            QMessageBox.No,
+        self.image_viewer.clear_detection_overlay(kind)
+        self.image_viewer.clear_target_roi(kind)
+        self.orchestrator.set_cached_result(kind, None)
+        self._kick_live_run(kind)
+
+    def _on_card_save_default(self, kind: str) -> None:
+        card = self.annotation_controls.card(kind)
+        det = card.active_detector() if card is not None else None
+        if card is None or det is None:
+            return
+        roi_name = _roi_setting_name(det)
+        cleaned = _strip_roi(card.current_params(), roi_name)
+        for slot in CARRY_ROI_SLOTS:
+            self.per_eye_state.set_project_default(kind, slot, dict(cleaned))
+        detectors_block = self.project_store.project.setdefault("detectors", {})
+        kind_block = detectors_block.setdefault(kind, {})
+        kind_block["id"] = card.active_id()
+        kind_block.setdefault("params", {})
+        for slot in CARRY_ROI_SLOTS:
+            kind_block["params"][slot] = dict(cleaned)
+        kind_block["carry_roi"] = self.carry_roi_state.to_project_block(kind)
+        self.project_store.persist()
+        self.status_message.emit(f"{kind.capitalize()} defaults saved.", 3000)
+
+    def _on_overlay_changed(self, _key: str, _field: str, _value: Any) -> None:
+        # The card already mutated its overlay state before emitting;
+        # the canvas reads through the same lookup, so a repaint is enough.
+        self.image_viewer.update_image()
+
+    # ---------------------------------------------------------------------------
+    # Run dispatch
+    # ---------------------------------------------------------------------------
+
+    def _on_auto_detect_debounce_fired(self) -> None:
+        self._pending_run_one = None
+        self._kick_live_run_for_all_enabled()
+
+    def _kick_live_run(self, _kind: str) -> None:
+        """Re-run every enabled detector top-down."""
+        self._kick_live_run_for_all_enabled()
+
+    def _kick_live_run_for_kind(self, kind: str) -> None:
+        """Re-run just ``kind``'s detector against the cached upstream results."""
+        card = self.annotation_controls.card(kind)
+        if card is None or card.active_detector() is None:
+            return
+        image = self.image_viewer.get_current_image_grayscale()
+        if image is None:
+            return
+        if kind == "pupil":
+            self._run_pupil_with_crop(image, card.current_params())
+            return
+        self.orchestrator.run_one(kind, image, card.current_params())
+
+    def _kick_live_run_for_all_enabled(self) -> None:
+        image = self.image_viewer.get_current_image_grayscale()
+        if image is None:
+            return
+        pupil_card = self.annotation_controls.card("pupil")
+        if pupil_card is not None and pupil_card.active_detector() is not None:
+            self._run_pupil_with_crop(image, pupil_card.current_params())
+        else:
+            self.orchestrator.set_cached_result("pupil", None)
+        # Glint / limbus / eyelid run on the full image; pupil coords
+        # cached above are already in full-image space so downstream
+        # search regions hit the right eye.
+        for kind in ("glint", "limbus", "eyelid"):
+            card = self.annotation_controls.card(kind)
+            if card is not None and card.active_detector() is not None:
+                self.orchestrator.run_one(kind, image, card.current_params())
+
+    def refresh_all_detections(self) -> None:
+        """Public hook: re-run every enabled detector top-down on the current image."""
+        self._kick_live_run_for_all_enabled()
+
+    # ---------------------------------------------------------------------------
+    # Binocular pupil crop
+    # ---------------------------------------------------------------------------
+
+    def _run_pupil_with_crop(self, image: np.ndarray, params: dict) -> None:
+        """Run the pupil detector on the active eye's half in binocular mode.
+
+        Without cropping the threshold detector sees both eyes and can
+        latch onto a contour that straddles the divider line.
+        """
+        bounds = self._active_eye_crop_bounds(image)
+        if bounds is None:
+            self.orchestrator.run_one("pupil", image, params)
+            return
+        dx, dy, dw, dh = bounds
+        cropped = image[dy : dy + dh, dx : dx + dw]
+        cropped_params = dict(params)
+        if "pupil_roi" in cropped_params:
+            cropped_params["pupil_roi"] = _intersect_roi_with_crop(cropped_params["pupil_roi"], bounds)
+        self.orchestrator.run_one(
+            "pupil",
+            cropped,
+            cropped_params,
+            post_process=lambda r: _translate_result(r, dx, dy),
         )
-        if reply != QMessageBox.Yes:
-            return
-        active_slot = self.binocular.active_eye_slot()
-        self.per_eye_state.snapshot_panel(active_slot, self.panel_for_target)
-        detectors = self.project_store.project.setdefault("detectors", {})
-        for target, plugin in self.enabled_plugins.items():
-            panel = self.annotation_controls.auto_detect_panel(plugin.name)
-            if panel is None:
-                continue
-            for slot in CARRY_ROI_SLOTS:
-                self.carry_roi_state.set_value(
-                    target,
-                    slot,
-                    self.image_viewer.get_target_roi(target, eye_slot=slot),
-                )
-            params_by_slot: dict[str, dict | None] = {}
-            for slot in CARRY_ROI_SLOTS:
-                per_slot = self.per_eye_state.get_params(slot, target)
-                if per_slot is None:
-                    params_by_slot[slot] = None
-                    continue
-                cleaned = dict(per_slot)
-                cleaned.pop(_panel_roi_param_key(target), None)
-                params_by_slot[slot] = cleaned
-                self.per_eye_state.set_project_default(target, slot, dict(cleaned))
-            detectors[target] = {
-                "plugin": plugin.name,
-                "params": params_by_slot,
-                "carry_roi": self.carry_roi_state.to_project_block(target),
-            }
-        self.project_store.persist()
-        self.refresh_carry_checkboxes()
-        self.status_message.emit("Project defaults saved.", 3000)
 
-    # ---------------------------------------------------------------------------
-    # Per-image detection block round-trip
-    # ---------------------------------------------------------------------------
-
-    def collect_detections_for_save(self) -> dict:
-        """Walk every enabled plugin and build the per-image ``detections`` dict.
-
-        Monocular images save flat: ``{plugin_name: {params, result}}``.
-        Binocular images save nested per eye: ``{plugin_name: {left:
-        {params, result}, right: {params, result}}}``.
-        """
-        active_slot = self.binocular.active_eye_slot()
-        self.per_eye_state.snapshot_orchestrator(active_slot, self.orchestrator)
-        self.per_eye_state.snapshot_panel(active_slot, self.panel_for_target)
-        binocular = self.binocular.is_binocular
-        out: dict = {}
-        for target, plugin in self.enabled_plugins.items():
-            if binocular:
-                per_eye_block: dict = {}
-                for slot in ("left", "right"):
-                    result = self.per_eye_state.get_result(slot, target)
-                    if result is None:
-                        continue
-                    params = self.per_eye_state.get_params(slot, target) or plugin.default_params()
-                    per_eye_block[slot] = {
-                        "params": params,
-                        "result": plugin.serialize(result),
-                    }
-                if per_eye_block:
-                    out[plugin.name] = per_eye_block
-            else:
-                result = self.per_eye_state.get_result("single", target)
-                if result is None:
-                    continue
-                params = self.per_eye_state.get_params("single", target) or plugin.default_params()
-                out[plugin.name] = {
-                    "params": params,
-                    "result": plugin.serialize(result),
-                }
-        return out
-
-    def apply_loaded_detections(self, detections: dict) -> None:
-        """Restore per-image detection blocks from a loaded annotation file.
-
-        Two on-disk shapes are accepted: monocular files carry a flat
-        ``{params, result}`` per plugin; binocular files carry a nested
-        ``{left: {...}, right: {...}}`` per plugin. Saved per-image
-        ROIs win over carry-over rectangles; the carry-over only fills
-        slots the JSON didn't populate.
-        """
-        self.image_viewer.pause_updates()
-        try:
-            active_slot = self.binocular.active_eye_slot()
-            for plugin_name, blob in detections.items():
-                plugin = self.plugin_manager.get(plugin_name)
-                if plugin is None:
-                    continue
-                if self.enabled_plugins.get(plugin.target) is not plugin:
-                    continue
-                per_eye_params, per_eye_results = self._extract_loaded_plugin_blob(blob, plugin)
-                for slot, params in per_eye_params.items():
-                    if params is None:
-                        continue
-                    self.per_eye_state.set_params(slot, plugin.target, dict(params))
-                    saved_roi = params.get(_panel_roi_param_key(plugin.target))
-                    self.image_viewer.set_target_roi(
-                        plugin.target,
-                        tuple(saved_roi) if saved_roi is not None else None,
-                        eye_slot=slot,
-                    )
-                for slot, result in per_eye_results.items():
-                    self.per_eye_state.set_result(slot, plugin.target, result)
-                    if result is not None:
-                        self.image_viewer.set_detection_overlay(plugin.target, result, eye_slot=slot)
-                active_params = per_eye_params.get(active_slot)
-                active_result = per_eye_results.get(active_slot)
-                panel = self.annotation_controls.auto_detect_panel(plugin.name)
-                if panel is not None and active_params is not None:
-                    panel.set_params(active_params)
-                if active_result is not None:
-                    self.orchestrator.set_cached_result(plugin.target, active_result)
-            self.per_eye_state.restore_panel(active_slot, self.panel_for_target, self.plugin_default_params)
-            self.apply_carry_over_rois()
-            self.refresh_carry_checkboxes()
-            self._last_manual_pupil_signature = self._manual_pupil_signature()
-            self.refresh_manual_pupil_in_cache()
-            self.refresh_live_plugins_all_eyes()
-            self.refresh_panel_availability()
-        finally:
-            self.image_viewer.resume_updates()
-
-    @staticmethod
-    def _extract_loaded_plugin_blob(
-        blob: dict,
-        plugin: DetectorPlugin,
-    ) -> tuple[dict[str, dict | None], dict[str, dict | None]]:
-        """Normalise an on-disk plugin block to per-eye ``(params, results)`` maps."""
-        if "params" in blob or "result" in blob:
-            params = blob.get("params") or None
-            result_blob = blob.get("result")
-            result = plugin.deserialize(result_blob) if result_blob else None
-            return {"single": params}, {"single": result}
-        per_eye_params: dict[str, dict | None] = {}
-        per_eye_results: dict[str, dict | None] = {}
-        for slot in ("left", "right"):
-            entry = blob.get(slot)
-            if not isinstance(entry, dict):
-                continue
-            per_eye_params[slot] = entry.get("params") or None
-            result_blob = entry.get("result")
-            per_eye_results[slot] = plugin.deserialize(result_blob) if result_blob else None
-        return per_eye_params, per_eye_results
-
-    # ---------------------------------------------------------------------------
-    # Manual-pupil bridge: synthetic pupil result for downstream auto plugins
-    # ---------------------------------------------------------------------------
-
-    def _manual_pupil_signature(self) -> tuple | None:
-        """Hashable identity of the current eye's manual pupil ellipse."""
-        pupil_ellipse = self.image_viewer.pupil_ellipse
-        if pupil_ellipse is None:
-            return None
-        center, size, angle = pupil_ellipse
-        return (center.x(), center.y(), size.width(), size.height(), angle)
-
-    def _build_synthetic_pupil_from_manual(self) -> dict | None:
-        """Build a pupil-plugin-shaped result from the current manual pupil ellipse, or None."""
-        pupil_ellipse = self.image_viewer.pupil_ellipse
-        if pupil_ellipse is None:
-            return None
-        center, size, angle = pupil_ellipse
-        cx, cy = float(center.x()), float(center.y())
-        return {
-            "center": [cx, cy],
-            "ellipse": {
-                "center": [cx, cy],
-                "size": [float(size.width()), float(size.height())],
-                "angle": float(angle),
-            },
-        }
-
-    def refresh_manual_pupil_in_cache(self) -> None:
-        """Mirror the current manual pupil ellipse into the orchestrator cache.
-
-        Lets glint / limbus auto detectors consume a manually fitted pupil
-        through the same ``shared_results["pupil"]`` path they use for an
-        auto pupil result. No-op when an auto pupil plugin is enabled —
-        that plugin owns the cache slot.
-        """
-        if "pupil" in self.enabled_plugins:
-            return
-        self.orchestrator.set_cached_result("pupil", self._build_synthetic_pupil_from_manual())
-
-    def on_manual_annotation_changed(self) -> bool:
-        """React to a manual-annotation edit; return True if downstream plugins re-ran.
-
-        The MainWindow's annotation-changed signal handler calls this
-        after marking the project dirty. When pupil ownership lies on
-        the manual side and the ellipse identity changed, the
-        synthetic pupil is republished and live downstream plugins
-        re-run so their overlay tracks the new pupil immediately.
-        """
-        if "pupil" in self.enabled_plugins:
-            return False
-        new_sig = self._manual_pupil_signature()
-        if new_sig == self._last_manual_pupil_signature:
-            return False
-        self._last_manual_pupil_signature = new_sig
-        self.refresh_manual_pupil_in_cache()
-        self.refresh_live_plugin_results()
-        self.refresh_panel_availability()
-        return True
-
-    # ---------------------------------------------------------------------------
-    # Refresh helpers
-    # ---------------------------------------------------------------------------
-
-    def refresh_panel_availability(self) -> None:
-        """Disable each Auto Detect panel whose ``requires`` are unmet."""
-        for plugin in self.enabled_plugins.values():
-            panel = self.annotation_controls.auto_detect_panel(plugin.name)
-            if panel is None:
-                continue
-            deps_met = all(self.orchestrator.cached_result(dep) is not None for dep in plugin.requires)
-            panel.setEnabled(deps_met)
-
-    def refresh_live_plugin_results(self) -> None:
-        """Re-run every enabled live plugin on the active eye, in dep order."""
-        image = self.image_viewer.get_current_image_grayscale()
-        if image is None:
-            return
-        for target in DETECTOR_TARGETS:
-            plugin = self.enabled_plugins.get(target)
-            if plugin is None or not plugin.live:
-                continue
-            panel = self.annotation_controls.auto_detect_panel(plugin.name)
-            if panel is None:
-                continue
-            self._run_plugin_for_active_eye(plugin, panel.current_params())
-
-    def refresh_live_plugins_all_eyes(self) -> None:
-        """Run live plugins for the active eye only.
-
-        The non-active eye is intentionally skipped — programmatically
-        running live plugins on a slot the user never visited would
-        populate that slot's detection cache with default-params output
-        and then autosave would persist those defaults to disk, looking
-        like the user tuned that eye when they hadn't. Switching the
-        active eye (via the radio) triggers the live run for the new
-        side, so both eyes are still covered with one user click each.
-        """
-        self.refresh_live_plugin_results()
-
-    def cancel_active_roi_edit(self) -> None:
-        """Drop the active ROI drag-edit state on the canvas and untoggle every panel button.
-
-        Used when leaving Auto Detect mode so the canvas stops treating
-        clicks as ROI edits and so the panel button doesn't stay stuck
-        in its checked state when the user comes back.
-        """
-        self.image_viewer.set_active_roi_target(None)
-        for plugin in self.enabled_plugins.values():
-            panel = self.annotation_controls.auto_detect_panel(plugin.name)
-            button = getattr(panel, "roi_button", None) if panel is not None else None
-            if button is not None and button.isChecked():
-                button.blockSignals(True)
-                button.setChecked(False)
-                button.blockSignals(False)
-
-    # ---------------------------------------------------------------------------
-    # Run pipeline + binocular crop helpers
-    # ---------------------------------------------------------------------------
-
-    def _active_eye_crop_bounds(self) -> tuple[int, int, int, int] | None:
-        """Return ``(dx, dy, dw, dh)`` for the active eye's half, or ``None`` (no crop)."""
-        if not self.binocular.is_binocular:
-            return None
-        image = self.image_viewer.get_current_image_grayscale()
-        if image is None:
+    def _active_eye_crop_bounds(self, image: np.ndarray) -> tuple[int, int, int, int] | None:
+        """Return ``(dx, dy, dw, dh)`` for the active eye's half, or ``None`` in monocular."""
+        if self._binocular is None or not self.binocular.is_binocular:
             return None
         full_h, full_w = image.shape[:2]
         divider_x = round(self.binocular.effective_divider_x_norm() * full_w)
@@ -619,271 +329,308 @@ class DetectionController(QObject):
             return (0, 0, divider_x, full_h)
         return (divider_x, 0, full_w - divider_x, full_h)
 
-    @staticmethod
-    def _intersect_roi_with_crop(
-        roi: tuple | None,
-        crop: tuple[int, int, int, int],
-    ) -> tuple[int, int, int, int] | None:
-        """Translate a full-image ROI into crop coords, or return None if no overlap."""
-        if roi is None:
-            return None
-        rx, ry, rw, rh = roi
-        cx, cy, cw, ch = crop
-        ix = max(rx, cx)
-        iy = max(ry, cy)
-        ex = min(rx + rw, cx + cw)
-        ey = min(ry + rh, cy + ch)
-        iw = ex - ix
-        ih = ey - iy
-        if iw <= 0 or ih <= 0:
-            return None
-        return (int(ix - cx), int(iy - cy), int(iw), int(ih))
+    def _on_detector_ready(self, kind: str, result: dict) -> None:
+        active_slot = self._active_slot()
+        self.image_viewer.set_detection_overlay(kind, result, eye_slot=active_slot)
+        self.per_eye_state.set_result(active_slot, kind, result)
 
-    @staticmethod
-    def _embed_mask(mask: np.ndarray, dx: int, dy: int, full_shape: tuple) -> np.ndarray:
-        """Paste a crop-sized mask into a full-image-sized zeros array at ``(dx, dy)``."""
-        full_h, full_w = full_shape[:2]
-        embedded = np.zeros((full_h, full_w), dtype=mask.dtype)
-        mh, mw = mask.shape[:2]
-        embedded[dy : dy + mh, dx : dx + mw] = mask
-        return embedded
-
-    def _run_plugin_for_active_eye(self, plugin: DetectorPlugin, params: dict) -> None:
-        """Dispatch a plugin run, cropping to the active eye half for pupil plugins in binocular mode."""
-        image = self.image_viewer.get_current_image_grayscale()
-        if image is None:
-            return
-        bounds = self._active_eye_crop_bounds() if plugin.target == "pupil" else None
-        if bounds is None:
-            self.orchestrator.run_one(plugin.target, image, params)
-            return
-        dx, dy, dw, dh = bounds
-        cropped = image[dy : dy + dh, dx : dx + dw]
-        translated_params = dict(params)
-        roi_key = _panel_roi_param_key(plugin.target)
-        if roi_key in translated_params:
-            translated_params[roi_key] = self._intersect_roi_with_crop(translated_params.get(roi_key), bounds)
-        full_shape = image.shape
-
-        def post_process(result: dict) -> dict:
-            translated = plugin.translate_for_crop(result, dx, dy)
-            mask = translated.get("mask")
-            if mask is not None:
-                translated["mask"] = self._embed_mask(mask, dx, dy, full_shape)
-            return translated
-
-        self.orchestrator.run_one(plugin.target, cropped, translated_params, post_process=post_process)
+    def _on_detector_failed(self, kind: str) -> None:
+        active_slot = self._active_slot()
+        self.image_viewer.clear_detection_overlay(kind, eye_slot=active_slot)
+        self.per_eye_state.set_result(active_slot, kind, None)
+        self.status_message.emit(f"Auto Detect: {kind} failed at current parameters.", 5000)
 
     # ---------------------------------------------------------------------------
-    # Panel signal handlers
+    # ROI affordance handlers
     # ---------------------------------------------------------------------------
 
-    def _on_plugin_params_changed(self, plugin_name: str, target: Target, params: dict) -> None:
-        """Route a panel parameter change by the plugin's ``live`` flag.
+    def _on_roi_edit_requested(self, kind: str, active: bool) -> None:
+        self.image_viewer.set_active_roi_target(kind if active else None)
 
-        Live plugins re-run via the debounce path so slider drags collapse
-        to a single ``run_one`` call. Non-live plugins (e.g. Daugman
-        limbus) drop their cached result + overlay + mask immediately
-        so the user is never looking at a stale visualisation; the next
-        detection only happens when the user clicks Detect.
-        """
-        self.annotation_modified.emit(True)
-        plugin = self.plugin_manager.get(plugin_name)
-        if plugin is None:
+    def _on_clear_roi_requested(self, kind: str) -> None:
+        self.image_viewer.set_target_roi(kind, None)
+        card = self.annotation_controls.card(kind)
+        det = card.active_detector() if card is not None else None
+        if card is None or det is None:
             return
-        if plugin.live:
-            self._pending_run_one = (plugin_name, dict(params))
-            self._auto_detect_debounce.start()
+        roi_name = _roi_setting_name(det)
+        if roi_name is not None:
+            params = card.current_params()
+            params[roi_name] = None
+            card.set_params({roi_name: None})
+            self._on_card_params_changed(kind, params)
+
+    def _on_carry_roi_toggled(self, kind: str, enabled: bool) -> None:
+        active_slot = self._active_slot()
+        self.carry_roi_state.set_enabled(kind, active_slot, enabled)
+        if enabled:
+            current_roi = self.image_viewer.get_target_roi(kind)
+            if current_roi is not None:
+                self.carry_roi_state.set_value(kind, active_slot, current_roi)
+        self._persist_carry_roi(kind)
+        self._refresh_carry_state_for(kind)
+
+    def _on_override_roi_requested(self, kind: str) -> None:
+        active_slot = self._active_slot()
+        carry_value = self.carry_roi_state.get_value(kind, active_slot)
+        if carry_value is None:
             return
-        active_slot = self.binocular.active_eye_slot()
-        self.orchestrator.set_cached_result(target, None)
-        self.per_eye_state.set_result(active_slot, target, None)
-        self.image_viewer.clear_detection_overlay(target, eye_slot=active_slot)
-        self.image_viewer.clear_target_mask(target, eye_slot=active_slot)
-
-    def _on_auto_detect_debounce_fired(self) -> None:
-        """Dispatch the buffered run to the active-eye-aware run helper."""
-        pending = self._pending_run_one
-        self._pending_run_one = None
-        if pending is None:
+        card = self.annotation_controls.card(kind)
+        det = card.active_detector() if card is not None else None
+        if card is None or det is None:
             return
-        plugin_name, params = pending
-        plugin = self.plugin_manager.get(plugin_name)
-        if plugin is None or self.enabled_plugins.get(plugin.target) is not plugin:
-            return
-        self._run_plugin_for_active_eye(plugin, params)
+        self.image_viewer.set_target_roi(kind, tuple(carry_value), eye_slot=active_slot)
+        roi_name = _roi_setting_name(det)
+        if roi_name is not None:
+            card.set_params({roi_name: tuple(carry_value)})
+            self._on_card_params_changed(kind, card.current_params())
+        self._refresh_carry_state_for(kind)
 
-    def _on_plugin_ready(self, target: str, result: dict) -> None:
-        """Render the new detection result for the active eye + mark modified."""
-        active_slot = self.binocular.active_eye_slot()
-        self.image_viewer.set_target_mask(target, result.get("mask"), eye_slot=active_slot)
-        self.image_viewer.set_detection_overlay(target, result, eye_slot=active_slot)
-        self.per_eye_state.set_result(active_slot, target, result)
-        self.annotation_modified.emit(True)
-        self.refresh_panel_availability()
+    # ---------------------------------------------------------------------------
+    # Per-image detection block round-trip
+    # ---------------------------------------------------------------------------
 
-    def _on_plugin_failed(self, target: str) -> None:
-        """Clear the active eye's overlay + mask for ``target`` and report in the status bar."""
-        active_slot = self.binocular.active_eye_slot()
-        self.image_viewer.clear_detection_overlay(target, eye_slot=active_slot)
-        self.image_viewer.clear_target_mask(target, eye_slot=active_slot)
-        self.per_eye_state.set_result(active_slot, target, None)
-        self.status_message.emit(f"Auto Detect: {target} failed at current parameters.", 5000)
-        self.refresh_panel_availability()
+    def collect_detections_for_save(self) -> dict:
+        """Build the per-image ``detections`` dict from cached per-eye results."""
+        active_slot = self._active_slot()
+        self.per_eye_state.snapshot_orchestrator(active_slot, self.orchestrator)
+        self.per_eye_state.snapshot_panel(active_slot, self.panel_for_kind)
+        binocular = self.binocular.is_binocular
+        out: dict = {}
+        for kind in KINDS:
+            det = self.enabled_detector(kind)
+            if det is None:
+                continue
+            if binocular:
+                per_eye_block: dict = {}
+                for slot in ("left", "right"):
+                    result = self.per_eye_state.get_result(slot, kind)
+                    if result is None:
+                        continue
+                    params = self.per_eye_state.get_params(slot, kind) or {s.name: s.default for s in det.settings}
+                    per_eye_block[slot] = {
+                        "params": params,
+                        "result": _serialize_result(result),
+                    }
+                if per_eye_block:
+                    out[kind] = {"id": det.id, **per_eye_block}
+            else:
+                result = self.per_eye_state.get_result("single", kind)
+                if result is None:
+                    continue
+                params = self.per_eye_state.get_params("single", kind) or {s.name: s.default for s in det.settings}
+                out[kind] = {
+                    "id": det.id,
+                    "params": params,
+                    "result": _serialize_result(result),
+                }
+        return out
 
-    def clear_all_auto_detect(self) -> None:
-        """Reset every Auto Detect plugin panel + orchestrator + per-eye cache + viewer state."""
+    def apply_loaded_detections(self, detections: dict) -> None:
+        """Restore per-image detection blocks from a loaded annotation file."""
+        self.image_viewer.pause_updates()
+        try:
+            active_slot = self._active_slot()
+            for kind, block in detections.items():
+                det = self.enabled_detector(kind)
+                if det is None or not isinstance(block, dict):
+                    continue
+                per_eye_params, per_eye_results = _extract_loaded_blob(block)
+                for slot, params in per_eye_params.items():
+                    if params is None:
+                        continue
+                    self.per_eye_state.set_params(slot, kind, dict(params))
+                for slot, result in per_eye_results.items():
+                    self.per_eye_state.set_result(slot, kind, result)
+                    if result is not None:
+                        self.image_viewer.set_detection_overlay(kind, result, eye_slot=slot)
+                active_params = per_eye_params.get(active_slot)
+                if active_params is not None:
+                    card = self.annotation_controls.card(kind)
+                    if card is not None:
+                        card.set_params(active_params)
+                active_result = per_eye_results.get(active_slot)
+                if active_result is not None:
+                    self.orchestrator.set_cached_result(kind, active_result)
+            self.per_eye_state.restore_panel(active_slot, self.panel_for_kind, self.detector_default_params)
+        finally:
+            self.image_viewer.resume_updates()
+
+    # ---------------------------------------------------------------------------
+    # Eye-switch hooks (called by BinocularController)
+    # ---------------------------------------------------------------------------
+
+    def on_active_eye_changed(self) -> None:
+        """Re-apply per-eye saved params + repaint after the active eye switches."""
+        active_slot = self._active_slot()
+        self.per_eye_state.restore_panel(active_slot, self.panel_for_kind, self.detector_default_params)
+        for kind in KINDS:
+            self._refresh_carry_state_for(kind)
+        self._kick_live_run_for_all_enabled()
+
+    def cancel_active_roi_edit(self) -> None:
+        """Drop any in-progress ROI drag-edit toggle (called when leaving a context)."""
+        self.image_viewer.set_active_roi_target(None)
+        for kind in KINDS:
+            card = self.annotation_controls.card(kind)
+            if card is not None:
+                card.set_roi_button_checked(False)
+
+    def clear_all(self) -> None:
+        """Drop every detection result + every kind's ROI on the current image."""
         self._auto_detect_debounce.stop()
         self._pending_run_one = None
-        for target, plugin in self.enabled_plugins.items():
-            panel = self.annotation_controls.auto_detect_panel(plugin.name)
-            if panel is None:
-                continue
-            panel.set_params(plugin.default_params())
-            self.orchestrator.set_cached_result(target, None)
-            self.image_viewer.clear_detection_overlay(target)
-            self.image_viewer.clear_target_mask(target)
-            self.image_viewer.clear_target_roi(target)
+        for kind in KINDS:
+            self.orchestrator.set_cached_result(kind, None)
+            self.image_viewer.clear_detection_overlay(kind)
+            self.image_viewer.clear_target_roi(kind)
         self.per_eye_state.clear_all()
         self.image_viewer.set_active_roi_target(None)
         self.annotation_modified.emit(True)
 
-    def _on_panel_detect_requested(self, plugin_name: str, target: Target) -> None:
-        """Run a non-live plugin once on the active eye."""
-        plugin = self.enabled_plugins.get(target)
-        if plugin is None or plugin.name != plugin_name:
-            return
-        panel = self.annotation_controls.auto_detect_panel(plugin_name)
-        if panel is None:
-            return
-        self._run_plugin_for_active_eye(plugin, panel.current_params())
-
-    def _on_panel_show_mask_toggled(self, target: str, on: bool) -> None:
-        """Forward the panel's "Show mask" toggle to the viewer."""
-        self.image_viewer.set_show_target_mask(target, on)
-
-    def _on_panel_show_ellipse_toggled(self, plugin: object, on: bool) -> None:
-        """Flip the plugin's fitted-ellipse render flag and repaint the canvas."""
-        setter = getattr(plugin, "set_show_ellipse", None)
-        if setter is None:
-            return
-        setter(on)
-        self.image_viewer.update_image()
-
-    def _on_panel_roi_edit_requested(self, target: str, active: bool) -> None:
-        """Enter (or leave) drag-edit mode for ``target``'s ROI on the canvas."""
-        self.image_viewer.set_active_roi_target(target if active else None)
-
-    def _on_panel_clear_roi_requested(self, target: str) -> None:
-        """Drop ``target``'s ROI everywhere: viewer store, panel params, plus re-run."""
-        self.image_viewer.set_target_roi(target, None)
-        plugin = self.enabled_plugins.get(target)
-        if plugin is None:
-            return
-        panel = self.annotation_controls.auto_detect_panel(plugin.name)
-        setter = getattr(panel, _panel_roi_setter_name(target), None) if panel is not None else None
-        if setter is not None:
-            setter(None)
-
-    def _on_target_roi_changed(self, target: str, roi: tuple | None) -> None:
-        """Push a canvas-edited ROI back into the panel; disable Carry on edit.
-
-        A canvas edit means the user is tuning THIS image's ROI
-        specifically, so Carry auto-disables for the active eye when a
-        non-empty rectangle lands. The other eye's carry stays untouched.
-        """
-        plugin = self.enabled_plugins.get(target)
-        if plugin is None:
-            return
-        panel = self.annotation_controls.auto_detect_panel(plugin.name)
-        setter = getattr(panel, _panel_roi_setter_name(target), None) if panel is not None else None
-        if setter is not None:
-            setter(roi)
-        active_slot = self.binocular.active_eye_slot()
-        if roi is not None and self.carry_roi_state.is_enabled(target, active_slot):
-            self.carry_roi_state.set_enabled(target, active_slot, False)
-            if panel is not None and hasattr(panel, "set_carry_roi_enabled"):
-                panel.set_carry_roi_enabled(False)
-            self._persist_carry_roi(target)
-
     # ---------------------------------------------------------------------------
-    # Carry-over ROI handlers
+    # Internals
     # ---------------------------------------------------------------------------
 
-    def _on_carry_roi_toggled(self, target: Target, enabled: bool) -> None:
-        """Persist the active eye's carry-over enable flag for ``target``."""
-        active_slot = self.binocular.active_eye_slot()
-        self.carry_roi_state.set_enabled(target, active_slot, enabled)
-        if enabled:
-            current_roi = self.image_viewer.get_target_roi(target)
-            if current_roi is not None:
-                self.carry_roi_state.set_value(target, active_slot, current_roi)
-        self._persist_carry_roi(target)
-        self.refresh_carry_checkboxes()
+    def _refresh_orchestrator_enabled(self) -> None:
+        per_kind: dict[str, Detector | None] = {kind: self.enabled_detector(kind) for kind in KINDS}
+        self.orchestrator.set_enabled_detectors(per_kind)
 
-    def _on_override_roi_requested(self, target: Target) -> None:
-        """Push the stored carry-over rectangle into the active eye's panel + viewer."""
-        active_slot = self.binocular.active_eye_slot()
-        carry_value = self.carry_roi_state.get_value(target, active_slot)
-        if carry_value is None:
-            return
-        plugin = self.enabled_plugins.get(target)
-        if plugin is None:
-            return
-        panel = self.annotation_controls.auto_detect_panel(plugin.name)
-        setter = getattr(panel, _panel_roi_setter_name(target), None) if panel is not None else None
-        if setter is not None:
-            setter(tuple(carry_value))
-        self.image_viewer.set_target_roi(target, tuple(carry_value), eye_slot=active_slot)
-        self.refresh_carry_checkboxes()
+    def _refresh_auto_managed_kinds(self) -> None:
+        auto_kinds: set[str] = set()
+        for kind in KINDS:
+            card = self.annotation_controls.card(kind)
+            if card is None:
+                continue
+            if card.active_id() not in (OFF, MANUAL):
+                auto_kinds.add(kind)
+        self.image_viewer.set_auto_managed_targets(auto_kinds)
 
-    def _persist_carry_roi(self, target: Target) -> None:
-        """Write the per-eye carry-over enable flags + values for ``target`` to the project file."""
-        detectors = self.project_store.project.setdefault("detectors", {})
-        entry = detectors.setdefault(target, {"plugin": "disabled", "params": {}})
-        entry["carry_roi"] = self.carry_roi_state.to_project_block(target)
+    def _persist_kind_id(self, kind: str, slug: str) -> None:
+        detectors_block = self.project_store.project.setdefault("detectors", {})
+        kind_block = detectors_block.setdefault(kind, {})
+        kind_block["id"] = slug
+        kind_block.setdefault("params", {})
+        kind_block.setdefault("carry_roi", self.carry_roi_state.to_project_block(kind))
         self.project_store.persist()
 
-    def refresh_carry_checkboxes(self) -> None:
-        """Sync each panel's Carry checkbox + Override button to the active eye's state."""
-        active_slot = self.binocular.active_eye_slot()
-        for target, plugin in self.enabled_plugins.items():
-            panel = self.annotation_controls.auto_detect_panel(plugin.name)
-            if panel is None:
+    def _persist_carry_roi(self, kind: str) -> None:
+        detectors_block = self.project_store.project.setdefault("detectors", {})
+        kind_block = detectors_block.setdefault(kind, {})
+        kind_block["carry_roi"] = self.carry_roi_state.to_project_block(kind)
+        self.project_store.persist()
+
+    def _refresh_carry_state_for(self, kind: str) -> None:
+        card = self.annotation_controls.card(kind)
+        if card is None:
+            return
+        active_slot = self._active_slot()
+        carry_enabled = self.carry_roi_state.is_enabled(kind, active_slot)
+        carry_value = self.carry_roi_state.get_value(kind, active_slot)
+        card.set_carry_state(carry_enabled, carry_value is not None)
+
+    def _active_slot(self) -> str:
+        if self._binocular is None:
+            return "single"
+        return self.binocular.active_eye_slot()
+
+
+# ---------------------------------------------------------------------------
+# Generic serialisation helpers
+# ---------------------------------------------------------------------------
+
+
+def _serialize_result(result: object):
+    """Recursively convert numpy / tuples / contours into JSON-friendly types.
+
+    Mask arrays (any 2-D uint8 ndarray) are dropped — they are transient
+    visualisation data and should not bloat the per-image annotation.
+    """
+    import numpy as np
+
+    if isinstance(result, dict):
+        out: dict = {}
+        for k, v in result.items():
+            if k == "mask":
                 continue
-            if hasattr(panel, "set_carry_roi_enabled"):
-                viewer_roi = self.image_viewer.get_target_roi(target, eye_slot=active_slot)
-                panel.set_carry_roi_enabled(self.carry_roi_state.checkbox_state(target, active_slot, viewer_roi))
-            if hasattr(panel, "set_override_button_enabled"):
-                panel.set_override_button_enabled(self.carry_roi_state.get_value(target, active_slot) is not None)
+            out[k] = _serialize_result(v)
+        return out
+    if isinstance(result, list):
+        return [_serialize_result(v) for v in result]
+    if isinstance(result, tuple):
+        return [_serialize_result(v) for v in result]
+    if isinstance(result, np.ndarray):
+        if result.ndim == 2 and result.dtype == np.uint8:
+            # 2-D uint8 = mask; drop.
+            return None
+        return result.tolist()
+    if isinstance(result, np.integer):
+        return int(result)
+    if isinstance(result, np.floating):
+        return float(result)
+    return result
 
-    def apply_carry_over_rois(self) -> None:
-        """Inject the carry-over rectangle into every (target, eye) without a saved ROI.
 
-        Called from :meth:`apply_loaded_detections` so saved per-image
-        ROIs take precedence — the carry-over only fills the slots that
-        the JSON didn't populate. The viewer's per-eye ROI store and
-        the active eye's live panel are both updated.
-        """
-        active_slot = self.binocular.active_eye_slot()
-        slots = ("left", "right") if self.binocular.is_binocular else ("single",)
-        for target, plugin in self.enabled_plugins.items():
-            roi_key = _panel_roi_param_key(target)
-            already_filled = [
-                slot
-                for slot in slots
-                if (params := self.per_eye_state.get_params(slot, target)) is not None
-                and params.get(roi_key) is not None
-            ]
-            for slot, carry_value in self.carry_roi_state.pending_slots_for_apply(target, slots, already_filled):
-                params = self.per_eye_state.get_params(slot, target)
-                if params is None:
-                    self.per_eye_state.set_params(slot, target, {roi_key: list(carry_value)})
-                else:
-                    params[roi_key] = list(carry_value)
-                self.image_viewer.set_target_roi(target, tuple(carry_value), eye_slot=slot)
-                if slot == active_slot:
-                    panel = self.annotation_controls.auto_detect_panel(plugin.name)
-                    panel_setter = getattr(panel, _panel_roi_setter_name(target), None) if panel is not None else None
-                    if panel_setter is not None:
-                        panel_setter(tuple(carry_value))
+def _intersect_roi_with_crop(
+    roi: tuple | list | None,
+    crop: tuple[int, int, int, int],
+) -> tuple[int, int, int, int] | None:
+    """Translate a full-image ROI into crop coords, or ``None`` if it falls outside."""
+    if roi is None:
+        return None
+    rx, ry, rw, rh = roi
+    cx, cy, cw, ch = crop
+    ix = max(rx, cx)
+    iy = max(ry, cy)
+    ex = min(rx + rw, cx + cw)
+    ey = min(ry + rh, cy + ch)
+    iw = ex - ix
+    ih = ey - iy
+    if iw <= 0 or ih <= 0:
+        return None
+    return (int(ix - cx), int(iy - cy), int(iw), int(ih))
+
+
+def _translate_result(result: dict, dx: int, dy: int) -> dict:
+    """Shift every (x, y) field in a detector result by ``(dx, dy)``.
+
+    Handles the lavan-standard fields ``center`` / ``ellipse`` /
+    ``contour`` recursively, plus glints stored under ``glints``.
+    Other keys pass through untouched.
+    """
+    if dx == 0 and dy == 0:
+        return result
+    out: dict = {}
+    for key, value in result.items():
+        if key == "center" and value is not None:
+            out[key] = (float(value[0]) + dx, float(value[1]) + dy)
+        elif key == "ellipse" and value is not None:
+            (ecx, ecy), (ew, eh), angle = value
+            out[key] = ((float(ecx) + dx, float(ecy) + dy), (ew, eh), angle)
+        elif key == "contour" and isinstance(value, np.ndarray):
+            shifted = value.copy()
+            shifted[..., 0] += int(dx)
+            shifted[..., 1] += int(dy)
+            out[key] = shifted
+        elif key == "glints" and isinstance(value, list):
+            out[key] = [_translate_result(g, dx, dy) for g in value]
+        else:
+            out[key] = value
+    return out
+
+
+def _extract_loaded_blob(blob: dict) -> tuple[dict[str, dict | None], dict[str, dict | None]]:
+    """Normalise an on-disk per-kind detection block to per-eye ``(params, results)`` maps."""
+    if "params" in blob or "result" in blob:
+        params = blob.get("params") or None
+        result = blob.get("result") or None
+        return {"single": params}, {"single": result}
+    per_eye_params: dict[str, dict | None] = {}
+    per_eye_results: dict[str, dict | None] = {}
+    for slot in ("left", "right"):
+        entry = blob.get(slot)
+        if not isinstance(entry, dict):
+            continue
+        per_eye_params[slot] = entry.get("params") or None
+        per_eye_results[slot] = entry.get("result") or None
+    return per_eye_params, per_eye_results

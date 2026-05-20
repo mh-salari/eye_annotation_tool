@@ -2,6 +2,7 @@
 
 from pathlib import Path
 
+from lavan.gui.registry import discover_detectors
 from PyQt5.QtWidgets import (
     QButtonGroup,
     QCheckBox,
@@ -20,37 +21,36 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
-from ..auto_detectors.plugin_manager import PluginManager
 from ..utils.project_settings import (
-    DEFAULT_DETECTOR_PLUGINS,
-    DETECTOR_TARGETS,
+    DEFAULT_ID_BY_KIND,
+    DETECTOR_MANUAL,
+    DETECTOR_OFF,
+    KINDS,
     PROJECT_FILE_SUFFIX,
     default_project,
 )
-
-DISABLED_LABEL = "disabled"
 
 
 class NewProjectDialog(QDialog):
     """Modal wizard for creating a new project.
 
-    Collects the save path + mode (binocular/monocular) + per-target
-    detector plugin choice + autosave flag, then surfaces the result
-    via :meth:`result_payload`. The host main window calls
+    Collects the save path + mode (binocular/monocular) + per-kind
+    detector choice + autosave flag, then surfaces the result via
+    :meth:`result_payload`. The host main window calls
     :func:`main_window.new_project` with that payload to write the
     project file on disk and load it into the session.
     """
 
     def __init__(self, parent: QWidget | None = None) -> None:
-        """Build the wizard's UI and load the available detector plugins."""
         super().__init__(parent)
         self.setWindowTitle("New Project")
         self.setMinimumWidth(520)
-        self._plugins = PluginManager()
+        self._detectors_by_kind: dict[str, list] = {t: [] for t in KINDS}
+        for det in discover_detectors():
+            self._detectors_by_kind.setdefault(det.kind, []).append(det)
         self._build_ui()
 
     def _build_ui(self) -> None:
-        """Lay out the wizard fields."""
         layout = QVBoxLayout(self)
         intro = QLabel(
             "Pick a save path for the project file and the initial annotation\n"
@@ -61,6 +61,9 @@ class NewProjectDialog(QDialog):
         path_row = QHBoxLayout()
         self._path_edit = QLineEdit()
         self._path_edit.setPlaceholderText(f"e.g. ~/projects/my_session{PROJECT_FILE_SUFFIX}")
+        # Pre-fill with a sensible default so the user can save without
+        # picking a folder first.
+        self._path_edit.setText(str(Path.home() / "Desktop" / f"untitled{PROJECT_FILE_SUFFIX}"))
         browse_button = QPushButton("Browse…")
         browse_button.clicked.connect(self._on_browse)
         path_row.addWidget(QLabel("Project file:"))
@@ -84,17 +87,18 @@ class NewProjectDialog(QDialog):
         detectors_form = QFormLayout()
         detectors_form.setSpacing(6)
         self._detector_combos: dict[str, QComboBox] = {}
-        for target in DETECTOR_TARGETS:
+        for kind in KINDS:
             combo = QComboBox()
-            combo.addItem(DISABLED_LABEL, "disabled")
-            for plugin in self._plugins.for_target(target):
-                combo.addItem(plugin.name, plugin.name)
-            default_slug = DEFAULT_DETECTOR_PLUGINS[target]
+            combo.addItem("Off", DETECTOR_OFF)
+            combo.addItem("Manual", DETECTOR_MANUAL)
+            for det in self._detectors_by_kind.get(kind, []):
+                combo.addItem(det.id, det.id)
+            default_slug = DEFAULT_ID_BY_KIND[kind]
             default_idx = combo.findData(default_slug)
             if default_idx >= 0:
                 combo.setCurrentIndex(default_idx)
-            self._detector_combos[target] = combo
-            detectors_form.addRow(QLabel(f"{target.capitalize()} detector:"), combo)
+            self._detector_combos[kind] = combo
+            detectors_form.addRow(QLabel(f"{kind.capitalize()} detector:"), combo)
         layout.addLayout(detectors_form)
 
         self._autosave_checkbox = QCheckBox("Autosave on image change")
@@ -107,11 +111,10 @@ class NewProjectDialog(QDialog):
         layout.addWidget(buttons)
 
     def _on_browse(self) -> None:
-        """Open a file-save dialog and write the chosen path into the line edit."""
         path, _ = QFileDialog.getSaveFileName(
             self,
             "Project file",
-            "",
+            str(Path.home() / "Desktop" / f"untitled{PROJECT_FILE_SUFFIX}"),
             f"Project Files (*{PROJECT_FILE_SUFFIX})",
         )
         if path:
@@ -120,7 +123,6 @@ class NewProjectDialog(QDialog):
             self._path_edit.setText(path)
 
     def _on_accept(self) -> None:
-        """Validate the path before closing; reject with an explanation if missing."""
         path = self._path_edit.text().strip()
         if not path:
             QMessageBox.warning(
@@ -141,7 +143,6 @@ class NewProjectDialog(QDialog):
         self.accept()
 
     def result_payload(self) -> dict:
-        """Return the wizard's chosen path + the project skeleton to feed ``new_project``."""
         path = self._path_edit.text().strip()
         if path and not path.endswith(PROJECT_FILE_SUFFIX):
             path += PROJECT_FILE_SUFFIX
@@ -149,12 +150,9 @@ class NewProjectDialog(QDialog):
         project["binocular_mode"] = self._binocular_radio.isChecked()
         project["autosave"] = self._autosave_checkbox.isChecked()
         detectors = project["detectors"]
-        for target, combo in self._detector_combos.items():
-            plugin_slug = combo.currentData()
-            block = detectors[target]
-            block["plugin"] = plugin_slug
-            if plugin_slug != "disabled":
-                plugin = self._plugins.get(plugin_slug)
-                if plugin is not None:
-                    block["params"] = {slot: plugin.default_params() for slot in ("left", "right", "single")}
+        for kind, combo in self._detector_combos.items():
+            slug = combo.currentData()
+            block = detectors[kind]
+            block["id"] = slug
+            block["params"] = {slot: None for slot in ("left", "right", "single")}
         return {"path": path, "project": project}

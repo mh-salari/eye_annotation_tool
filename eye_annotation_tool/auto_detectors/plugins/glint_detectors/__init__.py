@@ -1,1 +1,0 @@
-"""Glint detector plugins."""

@@ -9,15 +9,17 @@ from PyQt5.QtWidgets import QApplication, QDialog, QDialogButtonBox, QHBoxLayout
 
 from .gui import MainWindow
 from .gui.new_project_dialog import NewProjectDialog
+from .gui.theme import apply_theme
 from .utils.project_settings import (
-    DEFAULT_DETECTOR_PLUGINS,
-    DETECTOR_TARGETS,
+    DEFAULT_ID_BY_KIND,
+    DETECTOR_OFF,
+    KINDS,
     PROJECT_FILE_SUFFIX,
     default_project,
     save_project,
 )
 
-VALID_AUTO_DETECTOR_TARGETS = set(DETECTOR_TARGETS)
+VALID_AUTO_KINDS = set(KINDS)
 
 
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -47,23 +49,23 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         type=Path,
         default=None,
         help=(
-            "Create a new project file at this path with the per-target "
+            "Create a new project file at this path with the per-kind "
             "detector choices given via --pupil / --glint / --limbus / "
             "--eyelid (each defaulting to the same plugin the New Project "
             "wizard would pick). Mutually exclusive with --project."
         ),
     )
     parser.add_argument(
-        "--pupil", default=None, help="Plugin slug or 'none' for the pupil detector (used by --new-project)."
+        "--pupil", default=None, help="Detector slug ('off' / 'manual' / lavan id) for pupil (used by --new-project)."
     )
     parser.add_argument(
-        "--glint", default=None, help="Plugin slug or 'none' for the glint detector (used by --new-project)."
+        "--glint", default=None, help="Detector slug ('off' / 'manual' / lavan id) for glint (used by --new-project)."
     )
     parser.add_argument(
-        "--limbus", default=None, help="Plugin slug or 'none' for the limbus detector (used by --new-project)."
+        "--limbus", default=None, help="Detector slug ('off' / 'manual' / lavan id) for limbus (used by --new-project)."
     )
     parser.add_argument(
-        "--eyelid", default=None, help="Plugin slug or 'none' for the eyelid detector (used by --new-project)."
+        "--eyelid", default=None, help="Detector slug ('off' / 'manual' / lavan id) for eyelid (used by --new-project)."
     )
     parser.add_argument(
         "--autosave",
@@ -114,7 +116,7 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=None,
         help=(
             "Comma-separated subset of {pupil, glint, limbus, eyelid} to "
-            "enable for this session; targets not listed are forced to "
+            "enable for this session; kinds not listed are forced to "
             "'disabled'. Overrides the per-project detector choices. "
             "Example: --auto-detectors pupil keeps only the pupil auto "
             "detector active."
@@ -132,11 +134,11 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             parser.error("--review supplies the image list; --images and --folders cannot be used with it.")
     if args.auto_detectors is not None:
         chosen = {t.strip().lower() for t in args.auto_detectors.split(",") if t.strip()}
-        invalid = chosen - VALID_AUTO_DETECTOR_TARGETS
+        invalid = chosen - VALID_AUTO_KINDS
         if invalid:
             parser.error(
-                f"unknown --auto-detectors target(s): {sorted(invalid)} "
-                f"(choices: {sorted(VALID_AUTO_DETECTOR_TARGETS)})",
+                f"unknown --auto-detectors kind(s): {sorted(invalid)} "
+                f"(choices: {sorted(VALID_AUTO_KINDS)})",
             )
         args.auto_detectors = chosen
     return args
@@ -183,17 +185,17 @@ class StartupChooserDialog(QDialog):
 
 
 def _resolve_new_project_detectors(args: argparse.Namespace) -> dict:
-    """Build the detectors block for a CLI-driven --new-project, honouring per-target flags."""
+    """Build the detectors block for a CLI-driven --new-project, honouring per-kind flags."""
     detectors: dict = {}
-    for target in DETECTOR_TARGETS:
-        flag_value = getattr(args, target)
+    for kind in KINDS:
+        flag_value = getattr(args, kind)
         if flag_value is None:
-            plugin = DEFAULT_DETECTOR_PLUGINS[target]
-        elif flag_value.lower() in {"none", "disabled", ""}:
-            plugin = "disabled"
+            slug = DEFAULT_ID_BY_KIND[kind]
+        elif flag_value.lower() in {"none", "off", "disabled", ""}:
+            slug = DETECTOR_OFF
         else:
-            plugin = flag_value
-        detectors[target] = {"plugin": plugin, "params": {"left": None, "right": None, "single": None}}
+            slug = flag_value
+        detectors[kind] = {"id": slug, "params": {"left": None, "right": None, "single": None}}
     return detectors
 
 
@@ -211,6 +213,8 @@ def run_app() -> None:
     args = _parse_args(sys.argv[1:])
 
     app = QApplication(sys.argv[:1])
+
+    apply_theme(app)
 
     icon_path = str(Path(__file__).parent / "resources" / "app_icon.ico")
     app.setWindowIcon(QIcon(icon_path))

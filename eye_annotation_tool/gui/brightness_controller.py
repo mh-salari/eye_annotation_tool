@@ -44,7 +44,11 @@ class BrightnessController:
 
     def reset(self) -> bool:
         """Restore the factor to 1.0; returns whether the factor changed."""
-        return self._set_factor(1.0)
+        return self.set_factor(1.0)
+
+    def set_factor(self, factor: float) -> bool:
+        """Set the brightness factor directly (clamped); returns whether the value changed."""
+        return self._set_factor(factor)
 
     def rebuild(self, original_pixmap: QPixmap | None, grayscale: np.ndarray | None) -> None:
         """Recompute the cached pixmap from ``grayscale`` (or use ``original_pixmap`` at identity).

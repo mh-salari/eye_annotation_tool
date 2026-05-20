@@ -154,16 +154,6 @@ class ProjectStore:
         self.persist()
 
     @property
-    def current_mode(self) -> str:
-        """Persisted UI mode (``"manual"`` or ``"auto_detect"``)."""
-        return str(self.project.get("current_mode", "manual"))
-
-    @current_mode.setter
-    def current_mode(self, value: str) -> None:
-        self.project["current_mode"] = value
-        self.persist()
-
-    @property
     def autosave(self) -> bool:
         """Autosave-on-image-change flag."""
         return bool(self.project.get("autosave", False))

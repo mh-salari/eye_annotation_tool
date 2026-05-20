@@ -97,33 +97,14 @@ class BinocularController(QObject):
         self.project_store.binocular_mode = enabled
 
     def _on_eye_changed(self, eye: str) -> None:
-        """Switch the active eye and swap the per-eye panel + orchestrator state.
-
-        The viewer keeps each eye's detection overlay / mask / ROI in
-        its own slot so both halves' work stays visible across the
-        switch — only the panel state and the orchestrator's dep cache
-        (which only ever holds the active eye) get swapped here. Live
-        plugins re-run against the new eye so the active half's
-        overlay tracks the new panel values without waiting for slider
-        drags.
-        """
+        """Switch the active eye and swap the per-eye panel + orchestrator state."""
         if not self._binocular:
             return
         old_slot = self.active_eye_slot()
         self.per_eye_state.snapshot_orchestrator(old_slot, self._orchestrator)
-        self.per_eye_state.snapshot_panel(old_slot, self.detection_controller.panel_for_target)
+        self.per_eye_state.snapshot_panel(old_slot, self.detection_controller.panel_for_kind)
         self.image_viewer.switch_eye(eye)
-        new_slot = self.active_eye_slot()
-        self.per_eye_state.restore_panel(
-            new_slot,
-            self.detection_controller.panel_for_target,
-            self.detection_controller.plugin_default_params,
-        )
-        self.per_eye_state.restore_orchestrator(new_slot, self._orchestrator)
-        self.detection_controller.refresh_carry_checkboxes()
-        self.detection_controller.refresh_manual_pupil_in_cache()
-        self.detection_controller.refresh_live_plugin_results()
-        self.detection_controller.refresh_panel_availability()
+        self.detection_controller.on_active_eye_changed()
 
     # ---------------------------------------------------------------------------
     # Divider geometry

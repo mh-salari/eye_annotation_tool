@@ -17,48 +17,11 @@ from PyQt5.QtWidgets import (
 
 
 class MaterialButton(QPushButton):
-    """Custom styled button with material design appearance.
+    """Project's standard push button. ``compact`` is preserved for API compatibility."""
 
-    ``compact=True`` shrinks the font size and padding so several
-    buttons fit in a single panel row without truncating their labels.
-    """
-
-    def __init__(self, text: str, parent: QWidget | None = None, *, compact: bool = False) -> None:
+    def __init__(self, text: str, parent: QWidget | None = None, *, compact: bool = False) -> None:  # noqa: ARG002
         """Initialize the MaterialButton."""
         super().__init__(text, parent)
-        font_size = "11px" if compact else "14px"
-        padding = "5px 10px" if compact else "10px 20px"
-        self.setStyleSheet(
-            f"""
-            QPushButton {{
-                background-color: #3a3a3a;
-                border: 1px solid #555;
-                color: #e0e0e0;
-                padding: {padding};
-                text-align: center;
-                text-decoration: none;
-                font-size: {font_size};
-                margin: 4px 2px;
-                border-radius: 4px;
-            }}
-            QPushButton:hover {{
-                background-color: #d9534f;
-                border: 1px solid #c9302c;
-            }}
-            QPushButton:pressed {{
-                background-color: #ac2925;
-            }}
-            QPushButton:checked {{
-                background-color: #4caf50;
-                border: 1px solid #388e3c;
-                color: white;
-            }}
-            QPushButton:disabled {{
-                color: #777;
-                border: 1px solid #444;
-            }}
-            """
-        )
 
 
 class IconButton(QPushButton):
@@ -68,61 +31,25 @@ class IconButton(QPushButton):
         """Initialize the IconButton."""
         super().__init__(icon, parent)
         self.setToolTip(tooltip)
-        self.setFixedHeight(28)
-        self.setStyleSheet(
-            """
-            QPushButton {
-                background-color: #3a3a3a;
-                border: 1px solid #555;
-                color: #e0e0e0;
-                font-size: 11px;
-                border-radius: 4px;
-                padding: 4px 8px;
-            }
-            QPushButton:hover {
-                background-color: #007f76;
-                border: 1px solid #009688;
-            }
-            QPushButton:pressed {
-                background-color: #005f56;
-            }
-        """
-        )
 
 
 class ClearIconButton(QPushButton):
-    """Clear icon button with destructive styling."""
+    """Clear button."""
 
     def __init__(self, parent: QWidget | None = None) -> None:
         """Initialize the ClearIconButton."""
         super().__init__("x", parent)
         self.setToolTip("Clear")
-        self.setFixedHeight(28)
-        self.setFixedWidth(32)
-        self.setStyleSheet(
-            """
-            QPushButton {
-                background-color: #3a3a3a;
-                border: 1px solid #555;
-                color: #d9534f;
-                font-size: 12px;
-                font-weight: bold;
-                border-radius: 4px;
-            }
-            QPushButton:hover {
-                background-color: #d9534f;
-                border: 1px solid #c9302c;
-                color: white;
-            }
-            QPushButton:pressed {
-                background-color: #ac2925;
-            }
-        """
-        )
 
 
-class AnnotationGroup(QGroupBox):
-    """Grouped card widget for an annotation type in Manual mode."""
+class AnnotationGroup(QWidget):
+    """Manual-mode controls for one annotation kind.
+
+    Embedded inside a :class:`DetectorCard` when the card is in Manual,
+    so the surrounding card already shows the kind title. The widget
+    here only carries the click-active radio and the Fit / Clear
+    buttons.
+    """
 
     selected = pyqtSignal()
     fit_requested = pyqtSignal()
@@ -130,57 +57,24 @@ class AnnotationGroup(QGroupBox):
 
     def __init__(
         self,
-        title: str,
+        title: str,  # noqa: ARG002 - kept for API compatibility; the card owns the title
         has_fit: bool = True,
         parent: QWidget | None = None,
     ) -> None:
-        """Initialise the AnnotationGroup."""
+        """Build the click-active radio + Fit / Clear button row."""
         super().__init__(parent)
         self.has_fit = has_fit
-        self.setup_ui(title)
+        self.setup_ui()
 
-    def setup_ui(self, title: str) -> None:
-        """Set up the user interface for the annotation group."""
-        self.setStyleSheet(
-            """
-            QGroupBox {
-                border: 1px solid #555;
-                border-radius: 6px;
-                margin-top: 12px;
-                padding-top: 10px;
-                background-color: #2b2b2b;
-            }
-            QGroupBox::title {
-                subcontrol-origin: margin;
-                left: 10px;
-                padding: 0 5px;
-                color: #00bcd4;
-                font-weight: bold;
-            }
-            QRadioButton {
-                color: #e0e0e0;
-                spacing: 5px;
-            }
-            QRadioButton::indicator {
-                width: 16px;
-                height: 16px;
-            }
-            QRadioButton::indicator:unchecked {
-                border: 2px solid #555;
-                background: #3a3a3a;
-                border-radius: 8px;
-            }
-            QRadioButton::indicator:checked {
-                border: 2px solid #00bcd4;
-                background: #00bcd4;
-                border-radius: 8px;
-            }
-        """
-        )
-
+    def setup_ui(self) -> None:
+        """Set up the radio + button row."""
         layout = QVBoxLayout()
+        layout.setContentsMargins(0, 0, 0, 0)
 
-        self.radio = QRadioButton(title)
+        # The radio decides which kind canvas clicks go to. The card
+        # title already names the kind; the label here just says what
+        # the toggle does.
+        self.radio = QRadioButton("Active for clicks")
         self.radio.clicked.connect(self.selected.emit)
         layout.addWidget(self.radio)
 
@@ -202,11 +96,11 @@ class AnnotationGroup(QGroupBox):
         self.setLayout(layout)
 
     def is_checked(self) -> bool:
-        """Check if the annotation type is selected."""
+        """Return whether this kind is currently the click target."""
         return self.radio.isChecked()
 
     def set_checked(self, checked: bool) -> None:
-        """Set the checked state of the annotation type."""
+        """Set whether this kind is the click target."""
         self.radio.setChecked(checked)
 
 
@@ -236,51 +130,6 @@ class EyeSelector(QGroupBox):
 
     def setup_ui(self) -> None:
         """Set up the user interface for the eye selector."""
-        self.setStyleSheet(
-            """
-            QGroupBox {
-                border: 1px solid #555;
-                border-radius: 6px;
-                margin-top: 12px;
-                padding-top: 10px;
-                background-color: #2b2b2b;
-            }
-            QGroupBox::title {
-                subcontrol-origin: margin;
-                left: 10px;
-                padding: 0 5px;
-                color: #00bcd4;
-                font-weight: bold;
-            }
-            QCheckBox, QRadioButton {
-                color: #e0e0e0;
-                spacing: 5px;
-                padding: 5px;
-            }
-            QCheckBox:disabled, QRadioButton:disabled {
-                color: #666;
-            }
-            QRadioButton::indicator {
-                width: 16px;
-                height: 16px;
-            }
-            QRadioButton::indicator:unchecked {
-                border: 2px solid #555;
-                background: #3a3a3a;
-                border-radius: 8px;
-            }
-            QRadioButton::indicator:checked {
-                border: 2px solid #00bcd4;
-                background: #00bcd4;
-                border-radius: 8px;
-            }
-            QRadioButton::indicator:disabled {
-                border: 2px solid #3a3a3a;
-                background: #2b2b2b;
-            }
-            """
-        )
-
         layout = QVBoxLayout()
         layout.setSpacing(4)
 

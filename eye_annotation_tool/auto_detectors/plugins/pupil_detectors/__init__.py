@@ -1,1 +1,0 @@
-"""Pupil detector plugins."""

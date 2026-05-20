@@ -1,41 +1,40 @@
 """Right-side control panel.
 
-Top section is a two-button mode switcher (Manual / Auto Detect). The
-remaining panel content is a QStackedWidget whose pages correspond to
-the two modes:
-
-  - **Manual** — pure click-to-place annotation. Annotation type radios
-    (Pupil / Limbus / Eyelid / Glint), Fit / Clear actions per type, eye
-    selector. No detector controls.
-  - **Auto Detect** — placeholder in this refactor step; the next step
-    wires the enabled plugins' panels into this page.
-
-Clear All sits at the bottom and dispatches to the image viewer.
+Hosts the eye selector at the top and one :class:`DetectorCard` per
+detector kind underneath. Each card owns its own picker (Off / Manual /
+lavan detector id), the active detector's settings, the overlay row,
+and (for Manual) the per-kind manual annotation group widget. Clear
+All sits at the bottom and dispatches to the image viewer.
 """
 
+from lavan.gui.registry import Detector
 from PyQt5.QtCore import pyqtSignal
 from PyQt5.QtWidgets import (
     QButtonGroup,
-    QHBoxLayout,
-    QLabel,
-    QStackedWidget,
     QVBoxLayout,
     QWidget,
 )
 
+from ..utils.project_settings import KINDS
 from .custom_widgets import AnnotationGroup, EyeSelector, MaterialButton
+from .detector_card import DetectorCard, build_detector_cards
 
-MODE_MANUAL = "manual"
-MODE_AUTO_DETECT = "auto_detect"
+
+# Annotation slug per detector kind — the canvas uses these names for the
+# manual point / ellipse types it draws.
+_MANUAL_ANNOTATION_BY_KIND = {
+    "pupil": "pupil",
+    "limbus": "limbus",
+    "eyelid": "eyelid_contour",
+    "glint": "glint",
+}
 
 
 class AnnotationControlPanel(QWidget):
-    """Right-panel widget hosting the mode switcher and per-mode pages."""
+    """Right-panel widget hosting the eye selector and per-kind detector cards."""
 
     annotation_changed = pyqtSignal(str)
     eye_changed = pyqtSignal(str)
-    # Emitted when the user flips the Binocular checkbox. Payload is the
-    # new checkbox state (True = binocular, False = monocular).
     binocular_toggled = pyqtSignal(bool)
     fit_annotation_requested = pyqtSignal()
     clear_pupil_requested = pyqtSignal()
@@ -44,88 +43,24 @@ class AnnotationControlPanel(QWidget):
     clear_glint_points_requested = pyqtSignal()
     clear_all_requested = pyqtSignal()
     clear_selected_annotation_requested = pyqtSignal()
-    # Emitted when the top mode switcher flips. Carries one of the MODE_* slugs.
-    mode_changed = pyqtSignal(str)
 
-    def __init__(self, parent: QWidget | None = None) -> None:
-        """Initialise the AnnotationControlPanel."""
+    def __init__(
+        self,
+        detectors_by_kind: dict[str, list[Detector]],
+        parent: QWidget | None = None,
+    ) -> None:
         super().__init__(parent)
-        # Fixed width keeps the window stable when the mode switcher swaps
-        # pages with different intrinsic widths.
-        self.setFixedWidth(340)
+        self.setFixedWidth(360)
+        self._detectors_by_kind = detectors_by_kind
         self.setup_ui()
 
     def setup_ui(self) -> None:
-        """Build the eye selector, mode switcher, page stack, and Clear All."""
         layout = QVBoxLayout()
 
         self.eye_selector = EyeSelector()
         self.eye_selector.eye_changed.connect(self.eye_changed.emit)
         self.eye_selector.binocular_toggled.connect(self.binocular_toggled.emit)
         layout.addWidget(self.eye_selector)
-
-        # Mode switcher: two exclusive checkable buttons act as a segmented
-        # control. Manual is the default at startup.
-        self.mode_manual_button = MaterialButton("Manual")
-        self.mode_manual_button.setCheckable(True)
-        self.mode_manual_button.setChecked(True)
-        self.mode_auto_detect_button = MaterialButton("Auto Detect")
-        self.mode_auto_detect_button.setCheckable(True)
-        self.mode_button_group = QButtonGroup(self)
-        self.mode_button_group.setExclusive(True)
-        self.mode_button_group.addButton(self.mode_manual_button)
-        self.mode_button_group.addButton(self.mode_auto_detect_button)
-        self.mode_manual_button.toggled.connect(
-            lambda checked: checked and self._apply_mode(MODE_MANUAL, emit=True),
-        )
-        self.mode_auto_detect_button.toggled.connect(
-            lambda checked: checked and self._apply_mode(MODE_AUTO_DETECT, emit=True),
-        )
-        mode_row = QHBoxLayout()
-        mode_row.addWidget(self.mode_manual_button)
-        mode_row.addWidget(self.mode_auto_detect_button)
-        layout.addLayout(mode_row)
-
-        # Mode-specific pages live in a QStackedWidget so swapping pages
-        # doesn't change the panel's total height and Clear All stays put.
-        self.mode_stack = QStackedWidget()
-        self.mode_stack.addWidget(self._build_manual_page())
-        self.auto_detect_page = self._build_auto_detect_page()
-        self.mode_stack.addWidget(self.auto_detect_page)
-        layout.addWidget(self.mode_stack)
-
-        layout.addStretch(1)
-
-        # Clear All is created here so its signal wiring stays with the
-        # rest of the panel, but it's NOT added to ``layout`` — MainWindow
-        # pins it outside the scrollable area so it remains visible in
-        # both modes regardless of how tall the plugin-panel stack grows.
-        self.clear_all_button = MaterialButton("Clear All")
-        self.clear_all_button.clicked.connect(self.clear_all_requested.emit)
-
-        self.setLayout(layout)
-
-        self._current_mode = MODE_MANUAL
-        self._apply_mode(MODE_MANUAL, emit=False)
-
-    def _build_manual_page(self) -> QWidget:
-        """Build the Manual-mode page: annotation type radios + per-type actions."""
-        page = QWidget()
-        layout = QVBoxLayout()
-        layout.setContentsMargins(0, 0, 0, 0)
-
-        self.annotation_types_title = QLabel("Annotation Types")
-        self.annotation_types_title.setStyleSheet(
-            """
-            QLabel {
-                font-size: 16px;
-                font-weight: bold;
-                color: #00bcd4;
-                padding: 10px 0;
-            }
-            """,
-        )
-        layout.addWidget(self.annotation_types_title)
 
         self.pupil_group = AnnotationGroup("Pupil", has_fit=True)
         self.pupil_group.selected.connect(lambda: self.annotation_changed.emit("pupil"))
@@ -146,82 +81,47 @@ class AnnotationControlPanel(QWidget):
         self.glint_group.selected.connect(lambda: self.annotation_changed.emit("glint"))
         self.glint_group.clear_requested.connect(self.clear_glint_points_requested.emit)
 
-        self.button_group = QButtonGroup()
-        self.button_group.addButton(self.pupil_group.radio)
-        self.button_group.addButton(self.limbus_group.radio)
-        self.button_group.addButton(self.eyelid_group.radio)
-        self.button_group.addButton(self.glint_group.radio)
+        # Radio-button group ties the per-card AnnotationGroup radios
+        # together so only one annotation type is the click target at a time.
+        self._radio_group = QButtonGroup(self)
+        for group in (self.pupil_group, self.limbus_group, self.eyelid_group, self.glint_group):
+            self._radio_group.addButton(group.radio)
 
-        layout.addWidget(self.pupil_group)
-        layout.addWidget(self.limbus_group)
-        layout.addWidget(self.eyelid_group)
-        layout.addWidget(self.glint_group)
-        layout.addStretch(1)
-        page.setLayout(layout)
-        return page
+        self._manual_group_by_kind: dict[str, AnnotationGroup] = {
+            "pupil": self.pupil_group,
+            "limbus": self.limbus_group,
+            "eyelid": self.eyelid_group,
+            "glint": self.glint_group,
+        }
 
-    def _build_auto_detect_page(self) -> QWidget:
-        """Build the Auto Detect page: a dynamic stack of plugin panels.
-
-        The stack starts empty; ``set_auto_detect_panels`` is called by
-        MainWindow on every project-settings change to install the panels
-        for the currently enabled plugins. Cheap plugins re-run live on
-        slider drag via their ``params_changed`` signal; expensive
-        plugins (e.g. Daugman limbus, once it lands) provide their own
-        per-plugin Detect button inside their panel. There is no global
-        "Run Auto Detect" button.
-        """
-        page = QWidget()
-        layout = QVBoxLayout()
-        layout.setContentsMargins(0, 0, 0, 0)
-
-        # Container that holds one plugin panel per enabled target. Replaced
-        # wholesale by set_auto_detect_panels — old widgets are deleted so
-        # their signal connections drop with them.
-        self._auto_detect_panels_container = QVBoxLayout()
-        self._auto_detect_panels_container.setContentsMargins(0, 0, 0, 0)
-        layout.addLayout(self._auto_detect_panels_container)
-
-        # Empty-state notice; hidden once any panel is mounted.
-        self._auto_detect_empty_label = QLabel(
-            "No Auto Detect plugin is enabled for this project.",
+        self.cards: dict[str, DetectorCard] = build_detector_cards(
+            self._detectors_by_kind,
+            list(KINDS),
         )
-        self._auto_detect_empty_label.setWordWrap(True)
-        self._auto_detect_empty_label.setStyleSheet("QLabel { color: #888888; padding: 12px; }")
-        layout.addWidget(self._auto_detect_empty_label)
+        for kind in KINDS:
+            card = self.cards[kind]
+            manual_widget = self._manual_group_by_kind.get(kind)
+            if manual_widget is not None:
+                card.set_manual_host(manual_widget)
+            layout.addWidget(card)
 
         layout.addStretch(1)
 
-        page.setLayout(layout)
-        self._auto_detect_panels: dict[str, QWidget] = {}
-        return page
+        self.clear_all_button = MaterialButton("Clear All")
+        self.clear_all_button.clicked.connect(self.clear_all_requested.emit)
 
-    def set_auto_detect_panels(self, panels: list[tuple[str, QWidget]]) -> None:
-        """Replace the Auto Detect page's plugin-panel stack.
+        self.setLayout(layout)
 
-        ``panels`` is a list of ``(plugin_name, panel_widget)`` pairs in the
-        order they should be displayed top-to-bottom. Previously installed
-        panel widgets are removed from the layout and scheduled for
-        deletion via ``deleteLater`` so their signal connections drop.
-        """
-        while self._auto_detect_panels_container.count():
-            item = self._auto_detect_panels_container.takeAt(0)
-            widget = item.widget()
-            if widget is not None:
-                widget.deleteLater()
-        self._auto_detect_panels.clear()
-        for name, widget in panels:
-            self._auto_detect_panels_container.addWidget(widget)
-            self._auto_detect_panels[name] = widget
-        self._auto_detect_empty_label.setVisible(not panels)
+    # ----- accessors used by the controllers + main window -----
 
-    def auto_detect_panel(self, plugin_name: str) -> QWidget | None:
-        """Return the currently mounted Auto Detect panel for ``plugin_name``, or None."""
-        return self._auto_detect_panels.get(plugin_name)
+    def card(self, kind: str) -> DetectorCard | None:
+        return self.cards.get(kind)
 
-    def auto_detect_plugin_names(self) -> list[str]:
-        """Return the slugs of every currently mounted Auto Detect plugin."""
-        return list(self._auto_detect_panels.keys())
+    def manual_annotation_for_kind(self, kind: str) -> str | None:
+        return _MANUAL_ANNOTATION_BY_KIND.get(kind)
+
+    def manual_group_for_kind(self, kind: str) -> AnnotationGroup | None:
+        return self._manual_group_by_kind.get(kind)
 
     def set_current_annotation(self, annotation_type: str) -> None:
         """Tick the radio for ``annotation_type`` (pupil/limbus/eyelid_contour/glint)."""
@@ -245,33 +145,13 @@ class AnnotationControlPanel(QWidget):
         return "glint"
 
     def get_current_eye(self) -> str:
-        """Return the currently selected eye (``"left"`` / ``"right"``).
-
-        The value is only meaningful when the image is binocular; in
-        monocular mode the canvas holds a single flat annotation set
-        and the value should be ignored by callers.
-        """
         return self.eye_selector.get_current_eye()
 
     def set_current_eye(self, eye: str) -> None:
-        """Set the currently selected eye (silent — does not emit ``eye_changed``)."""
         self.eye_selector.set_current_eye(eye)
 
     def is_binocular(self) -> bool:
-        """Return ``True`` when the user marked the image as binocular."""
         return self.eye_selector.is_binocular()
 
     def set_binocular(self, enabled: bool) -> None:
-        """Reflect binocular mode in the eye selector (silent)."""
         self.eye_selector.set_binocular(enabled)
-
-    def current_mode(self) -> str:
-        """Return the current mode slug (one of MODE_MANUAL / MODE_AUTO_DETECT)."""
-        return self._current_mode
-
-    def _apply_mode(self, mode: str, *, emit: bool) -> None:
-        """Swap the stacked page for ``mode``; emit ``mode_changed`` when ``emit`` is True."""
-        self._current_mode = mode
-        self.mode_stack.setCurrentIndex(0 if mode == MODE_MANUAL else 1)
-        if emit:
-            self.mode_changed.emit(mode)

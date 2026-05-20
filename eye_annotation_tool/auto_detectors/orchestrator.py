@@ -1,220 +1,206 @@
-"""Run detector plugins in dependency order; cache results per image.
+"""Run lavan detector functions in dependency order; cache results per image.
 
-The orchestrator sits between the GUI (mode switcher + plugin panels) and
-the plugins themselves:
+The orchestrator sits between the GUI side (the per-kind detector
+cards) and lavan's detector functions:
 
-  - Project settings name one plugin per target (or ``"disabled"``); the
-    orchestrator holds the resolved instances via
-    :meth:`set_enabled_plugins`.
+  - The controller registers one :class:`lavan.gui.registry.Detector`
+    per kind via :meth:`set_enabled_detectors`. ``None`` means the kind
+    is not run (Off or Manual).
   - On image change, the caller invokes :meth:`clear_cache`.
-  - The "Run Auto Detect" button calls :meth:`run_all`, which walks the
-    dependency graph by Kahn's algorithm on ``requires`` and runs each
-    enabled, runnable plugin once. A plugin whose ``requires`` references
-    a disabled target is skipped — never invoked — and ``plugin_failed``
-    is emitted for it instead.
-  - Live plugins re-run on debounced slider changes via :meth:`run_one`,
-    which reuses whichever dependency results are currently cached.
+  - :meth:`run_all` walks the enabled detectors in dependency order and
+    runs each one. :meth:`run_one` re-runs a single kind reusing
+    whichever upstream results are cached.
 
-The orchestrator is unaware of binocular cropping. When MainWindow needs
-to run a plugin on a cropped image (e.g. the active half of a binocular
-image) it passes the already-cropped numpy array to :meth:`run_one` plus
-a ``post_process`` callable that translates the plugin's crop-coord
-result back into full-image coordinates. The post-processed result is
-what gets stored in :pyattr:`_results` and emitted via ``plugin_ready``,
-so downstream plugins (which read the cache) always see full-image
-coords regardless of whether the upstream plugin was cropped.
+Upstream wiring is implicit, matching the contract every lavan detector
+already satisfies:
+
+  - Glint detectors take ``pupil_center`` and ``pupil_radius`` as
+    hidden keyword args. The orchestrator pops any user-supplied values
+    and injects the cached pupil's centre + max-axis radius.
+  - Limbus / eyelid detectors take the pupil centre (and optionally the
+    pupil ellipse) as positional args after ``img``. The orchestrator
+    passes them positionally regardless of the parameter name lavan
+    used in its own signature.
 
 Two signals carry outcomes outward:
 
-  - ``plugin_ready(target, result)`` after a successful ``detect`` call.
-    Listeners: the plugin panel (for UI feedback) and the image viewer
-    (for overlay rendering).
-  - ``plugin_failed(target)`` when ``detect`` returned ``None``, when a
-    required dependency is disabled, or when a required dependency
-    itself failed in this run. The cache entry for that target is set
-    to ``None`` before the signal fires.
+  - ``detector_ready(kind, result)`` after a successful call.
+  - ``detector_failed(kind)`` when the call returned ``None`` or a
+    required upstream result is missing.
 """
 
 from collections.abc import Callable
-from typing import cast
 
 import numpy as np
+from lavan.gui.registry import Detector
 from PyQt5.QtCore import QObject, pyqtSignal
 
-from .plugin_interface import DetectorPlugin, Target
+PostProcess = Callable[[dict], dict]
 
-TARGETS: tuple[Target, ...] = ("pupil", "glint", "limbus", "eyelid")
+KINDS = ("pupil", "glint", "limbus", "eyelid")
 
 
 class DetectorOrchestrator(QObject):
-    """Dependency-aware runner + per-image result cache for detector plugins."""
+    """Dependency-aware runner + per-image result cache for lavan detectors."""
 
-    # Payload: (target_name, result_dict). ``result_dict`` matches the shape
-    # the plugin's ``serialize`` consumes.
-    plugin_ready = pyqtSignal(str, dict)
-
-    # Payload: target_name. Emitted when the plugin returned None, was
-    # skipped because a required target is disabled, or a required
-    # target's plugin failed in the same run.
-    plugin_failed = pyqtSignal(str)
+    detector_ready = pyqtSignal(str, dict)
+    detector_failed = pyqtSignal(str)
 
     def __init__(self, parent: QObject | None = None) -> None:
-        """Initialise with no plugins enabled and an empty cache."""
         super().__init__(parent)
-        self._enabled: dict[Target, DetectorPlugin | None] = dict.fromkeys(TARGETS, None)
-        self._results: dict[Target, dict | None] = dict.fromkeys(TARGETS, None)
+        self._enabled: dict[str, Detector | None] = dict.fromkeys(KINDS, None)
+        self._results: dict[str, dict | None] = dict.fromkeys(KINDS, None)
 
     # ----- configuration -----
 
-    def set_enabled_plugins(self, per_target: dict[Target, DetectorPlugin | None]) -> None:
-        """Replace the active plugin set.
+    def set_enabled_detectors(self, per_kind: dict[str, Detector | None]) -> None:
+        """Replace the active detector set; wipe the cache for kinds that changed."""
+        for kind in KINDS:
+            new_det = per_kind.get(kind)
+            if self._enabled[kind] is not new_det:
+                self._enabled[kind] = new_det
+                self._results[kind] = None
 
-        Only the cache entries whose plugin instance actually changed are
-        wiped. Targets whose enabled plugin is unchanged keep their
-        cached result so toggling one detector via the menu does not
-        silently drop another detector's already-computed output (in
-        particular the lazy plugins, which won't auto-run to refill it).
-        """
-        for target in TARGETS:
-            new_plugin = per_target.get(target)
-            if self._enabled[target] is not new_plugin:
-                self._enabled[target] = new_plugin
-                self._results[target] = None
-
-    def enabled_plugin(self, target: Target) -> DetectorPlugin | None:
-        """Return the plugin currently enabled for ``target`` (or ``None``)."""
-        return self._enabled.get(target)
+    def enabled_detector(self, kind: str) -> Detector | None:
+        return self._enabled.get(kind)
 
     # ----- cache -----
 
-    def cached_result(self, target: Target) -> dict | None:
-        """Return the last successful result cached for ``target`` on this image."""
-        return self._results.get(target)
+    def cached_result(self, kind: str) -> dict | None:
+        return self._results.get(kind)
 
-    def set_cached_result(self, target: Target, result: dict | None) -> None:
-        """Inject a result into the cache without running a plugin.
-
-        Used by the per-image restore path: when an annotation file already
-        carries a previously saved detection, we deserialise it back into
-        the cache so downstream plugins can read it via ``shared_results``
-        and the viewer can render the overlay without re-running ``detect``.
-        """
-        if target not in self._results:
-            raise ValueError(f"unknown target {target!r}")
-        self._results[target] = result
+    def set_cached_result(self, kind: str, result: dict | None) -> None:
+        if kind not in self._results:
+            raise ValueError(f"unknown kind {kind!r}")
+        self._results[kind] = result
 
     def clear_cache(self) -> None:
-        """Forget every cached result. Call on image change."""
-        for target in TARGETS:
-            self._results[target] = None
+        for kind in KINDS:
+            self._results[kind] = None
 
     # ----- run paths -----
 
-    def run_all(self, image: np.ndarray, per_target_params: dict[Target, dict]) -> None:
-        """Run every enabled plugin on ``image`` in dependency order.
+    def run_all(
+        self,
+        image: np.ndarray,
+        params_by_kind: dict[str, dict],
+        post_process_by_kind: dict[str, PostProcess] | None = None,
+    ) -> None:
+        """Run every enabled detector on ``image`` in dependency order.
 
-        ``per_target_params`` supplies the current panel values for each
-        target. Missing entries fall back to the plugin's
-        :meth:`~DetectorPlugin.default_params`.
+        ``post_process_by_kind[kind]`` runs against ``kind``'s result
+        before the cache write, used by callers that need to translate
+        cropped results back into full-image coordinates.
         """
         self.clear_cache()
-        active: dict[Target, DetectorPlugin] = {t: p for t, p in self._enabled.items() if p is not None}
-        runnable_order = self._topological_runnable_order(active)
-        runnable_targets = {p.target for p in runnable_order}
-        for plugin in runnable_order:
-            params = per_target_params.get(plugin.target, plugin.default_params())
-            self._run_plugin(plugin, image, params)
-        # Enabled plugins whose ``requires`` references a disabled target
-        # cannot run at all this pass — surface the failure once.
-        for target, plugin in active.items():
-            if plugin.target not in runnable_targets:
-                self._results[target] = None
-                self.plugin_failed.emit(cast("str", target))
+        post = post_process_by_kind or {}
+        for kind in self._dependency_order():
+            det = self._enabled[kind]
+            if det is None:
+                continue
+            params = params_by_kind.get(kind) or self._default_params(det)
+            self._run(kind, det, image, params, post_process=post.get(kind))
 
     def run_one(
         self,
-        target: Target,
+        kind: str,
         image: np.ndarray,
         params: dict,
-        *,
-        post_process: Callable[[dict], dict] | None = None,
+        post_process: PostProcess | None = None,
     ) -> None:
-        """Re-run the plugin enabled for ``target`` with ``params``.
-
-        Reuses whichever dependency results are currently cached. No-op
-        if no plugin is enabled for ``target``. If any required
-        target's cache is empty (dep disabled or its run failed),
-        ``plugin_failed`` is emitted and the cache for ``target`` is
-        cleared.
-
-        ``post_process`` is an optional callable invoked on the raw
-        result before it lands in the cache + signal. Used by
-        MainWindow to translate a binocular-crop result back into full-
-        image coordinates (and embed the crop-sized mask into a full-
-        image-sized array). When omitted the result flows through
-        unchanged.
-        """
-        plugin = self._enabled.get(target)
-        if plugin is None:
+        """Re-run the detector enabled for ``kind`` with ``params``."""
+        det = self._enabled.get(kind)
+        if det is None:
             return
-        self._run_plugin(plugin, image, params, post_process=post_process)
+        self._run(kind, det, image, params, post_process=post_process)
 
     # ----- internals -----
 
-    def _run_plugin(
+    def _run(
         self,
-        plugin: DetectorPlugin,
+        kind: str,
+        det: Detector,
         image: np.ndarray,
         params: dict,
-        *,
-        post_process: Callable[[dict], dict] | None = None,
+        post_process: PostProcess | None = None,
     ) -> None:
-        """Invoke a plugin's ``detect`` with its cached deps, update cache, emit signal."""
-        shared: dict[str, dict] = {}
-        for dep in plugin.requires:
-            cached = self._results.get(dep)
-            if cached is None:
-                self._results[plugin.target] = None
-                self.plugin_failed.emit(cast("str", plugin.target))
+        kwargs = dict(params)
+        wired_args: list = []
+        if det.kind == "glint":
+            self._inject_pupil_kwargs_for_glint(kwargs)
+        elif det.kind in ("limbus", "eyelid"):
+            wired_args = self._positional_pupil_for_limbus(det)
+            if wired_args is None:
+                self._results[kind] = None
+                self.detector_failed.emit(kind)
                 return
-            shared[dep] = cached
-        result = plugin.detect(image, params, shared)
+        try:
+            result = det.function(image, *wired_args, **kwargs)
+        except Exception:  # noqa: BLE001 - surface every detector failure to the status bar
+            self._results[kind] = None
+            self.detector_failed.emit(kind)
+            return
         if result is None:
-            self._results[plugin.target] = None
-            self.plugin_failed.emit(cast("str", plugin.target))
+            self._results[kind] = None
+            self.detector_failed.emit(kind)
             return
         if post_process is not None:
             result = post_process(result)
-        self._results[plugin.target] = result
-        self.plugin_ready.emit(cast("str", plugin.target), result)
+        self._results[kind] = result
+        self.detector_ready.emit(kind, result)
+
+    def _inject_pupil_kwargs_for_glint(self, kwargs: dict) -> None:
+        """Replace any user-supplied ``pupil_center`` / ``pupil_radius`` with cached values.
+
+        Glint detectors take both as hidden settings with ``None``
+        defaults. When pupil is cached we override; otherwise we leave
+        the kwargs unset and let the detector fall back to whole-image
+        search.
+        """
+        kwargs.pop("pupil_center", None)
+        kwargs.pop("pupil_radius", None)
+        pupil = self._results.get("pupil")
+        if not pupil:
+            return
+        ellipse = pupil.get("ellipse")
+        if ellipse is None:
+            return
+        (_cx, _cy), (w, h), _angle = ellipse
+        kwargs["pupil_center"] = pupil["center"]
+        kwargs["pupil_radius"] = max(float(w), float(h)) / 2.0
+
+    def _positional_pupil_for_limbus(self, det: Detector) -> list | None:
+        """Return the positional args limbus/eyelid detectors expect after ``img``.
+
+        Every limbus detector takes the pupil centre as its 2nd
+        positional, and any detector with a 3rd positional gets the
+        pupil ellipse there. The parameter names in the lavan signature
+        (``seed_center``, ``pupil_ellipse``, etc.) are irrelevant — we
+        match by position against ``det.wired_inputs``.
+        """
+        pupil = self._results.get("pupil")
+        if not pupil:
+            return None
+        center = pupil.get("center")
+        if center is None:
+            return None
+        positional: list = [center]
+        # ``wired_inputs`` includes the image as element 0; any further
+        # entries are upstream positionals.
+        if len(det.wired_inputs) >= 3:
+            ellipse = pupil.get("ellipse")
+            if ellipse is None:
+                return None
+            positional.append(ellipse)
+        return positional
 
     @staticmethod
-    def _topological_runnable_order(
-        active: dict[Target, DetectorPlugin],
-    ) -> list[DetectorPlugin]:
-        """Order active plugins so each runs after every target it requires.
+    def _default_params(det: Detector) -> dict:
+        return {s.name: s.default for s in det.settings}
 
-        Plugins whose ``requires`` references a disabled target are
-        excluded — they cannot run. A dependency cycle among runnable
-        plugins raises ``RuntimeError``.
-        """
-        runnable: dict[Target, DetectorPlugin] = {
-            t: p for t, p in active.items() if all(dep in active for dep in p.requires)
-        }
-        unmet: dict[Target, set[Target]] = {t: set(p.requires) for t, p in runnable.items()}
-        ready: list[Target] = sorted(t for t, deps in unmet.items() if not deps)
-        ordered: list[DetectorPlugin] = []
-        while ready:
-            t = ready.pop(0)
-            ordered.append(runnable[t])
-            del unmet[t]
-            for other_t, deps in unmet.items():
-                if t in deps:
-                    deps.remove(t)
-                    if not deps:
-                        ready.append(other_t)
-            ready.sort()
-        if unmet:
-            cycle = ", ".join(sorted(unmet))
-            raise RuntimeError(f"detector plugin dependency cycle among targets: {cycle}")
-        return ordered
+    def _dependency_order(self) -> list[str]:
+        """Order enabled kinds so each runs after every kind it would consume."""
+        return [k for k in KINDS if self._enabled.get(k) is not None]
+
+
+__all__ = ["KINDS", "DetectorOrchestrator"]

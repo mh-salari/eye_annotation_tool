@@ -8,7 +8,7 @@ from PyQt5.QtCore import QEvent, QPoint, QPointF, QSizeF, Qt, pyqtSignal
 from PyQt5.QtGui import QKeyEvent, QPixmap
 from PyQt5.QtWidgets import QLabel, QMessageBox, QScrollArea, QVBoxLayout, QWidget
 
-from ..state import EyeDataStore, OverlayStore, TargetMaskStore, TargetRoiStore, UndoStack
+from ..state import EyeDataStore, OverlayStore, TargetRoiStore, UndoStack
 from ..state.eye_data_store import FIELDS_BY_ANNOTATION
 from ..utils.image_processing import find_closest_point, fit_ellipse
 from .brightness_controller import BrightnessController
@@ -20,9 +20,9 @@ from .zoom_controller import ZoomController
 class ImageViewer(QWidget):
     """Widget for viewing and annotating eye images with pupil, limbus, eyelid, and glint markers."""
 
-    # Maps a plugin target slug (used by the project settings file and the
-    # auto-detector orchestrator) to the matching manual annotation slug
-    # (used by ``current_annotation`` and the eye_data dict fields).
+    # Detector kind slug (in project settings + the orchestrator) to
+    # the manual annotation slug (used by ``current_annotation`` and the
+    # eye_data dict fields).
     _PLUGIN_TARGET_TO_ANNOTATION: ClassVar[dict[str, str]] = {
         "pupil": "pupil",
         "limbus": "limbus",
@@ -36,7 +36,7 @@ class ImageViewer(QWidget):
     # its per-image detection cache.
     image_loaded = pyqtSignal()
     # Emitted on drag-end when the user has drawn, moved, or resized a
-    # per-target Auto Detect ROI on the canvas. Payload is the target slug
+    # per-kind Auto Detect ROI on the canvas. Payload is the kind slug
     # ("pupil", ...) and the new ``(x, y, w, h)`` tuple or ``None``.
     target_roi_changed = pyqtSignal(str, object)
     # Emitted when the user finishes dragging the binocular divider line.
@@ -51,13 +51,13 @@ class ImageViewer(QWidget):
         self.setup_variables()
         self.setup_undo_system()
         self.colors = AnnotationColors.default()
+        self._overlay_state_lookup = lambda _target: None
         self.renderer = CanvasRenderer(
             self.colors,
             self.eye_data_store,
             self.detection_overlays,
             self.target_rois,
-            self.target_masks,
-            self._active_plugins,
+            self._overlay_state_lookup,
             self.brightness,
             self.zoom_state,
         )
@@ -132,8 +132,8 @@ class ImageViewer(QWidget):
         # from disk.
         self.image_grayscale: np.ndarray | None = None
 
-        # Per-eye, per-target Auto Detect overlay results. Outer key is
-        # the anatomical target ("pupil" / "glint" / "limbus" / "eyelid"),
+        # Per-eye, per-kind Auto Detect overlay results. Outer key is
+        # the anatomical kind ("pupil" / "glint" / "limbus" / "eyelid"),
         # inner key the eye slot ("left" / "right" / "single"). Both
         # eyes' overlays paint at the same time so the user can see at
         # a glance which halves they've already processed; the dim wash
@@ -142,40 +142,17 @@ class ImageViewer(QWidget):
         # corresponding plugin's serialise/deserialise contract.
         self.detection_overlays = OverlayStore()
 
-        # Plugin instance currently owning each target. Populated by
-        # MainWindow when panels are mounted (and cleared when a target's
-        # plugin is set to "disabled"). The viewer reads each plugin's
-        # ``draw_overlay`` method + ``roi_color`` / ``mask_color`` attrs
-        # so adding a new plugin needs no edits here.
-        self._active_plugins: dict[str, object] = {}
-
-        # Plugin targets currently owned by an auto detector. Manual
-        # painting and click-to-place for these targets is suppressed so
-        # each target has a single source of truth (auto OR manual,
-        # never both). Carries plugin-target slugs ("pupil"/"glint"/
-        # "limbus"/"eyelid"); the painter and click paths translate to
-        # the annotation-slug naming via ``_PLUGIN_TARGET_TO_ANNOTATION``.
+        # Detector kinds currently owned by an auto detector. Manual
+        # painting and click-to-place for these kinds is suppressed so
+        # each kind has a single source of truth (auto OR manual).
         self._auto_managed_targets: set[str] = set()
         self._auto_managed_annotations: set[str] = set()
 
-        # Gate for manual click-to-place and click-to-edit on the
-        # canvas. True only in Manual mode — Auto Detect mode keeps
-        # manual annotations visible but blocks adding / dragging them
-        # so the user has to switch back to Manual before touching them.
-        # MainWindow flips this on mode change.
-        self._manual_edit_enabled = True
-
-        # Per-eye, per-target Auto Detect ROI rectangles plus the
-        # active drag-edit target. Drag handles + canvas clicks only
-        # operate on the active eye's rectangle for the active target;
+        # Per-eye, per-kind Auto Detect ROI rectangles plus the
+        # active drag-edit kind. Drag handles + canvas clicks only
+        # operate on the active eye's rectangle for the active kind;
         # the inactive eye's rectangle paints without handles for context.
         self.target_rois = TargetRoiStore()
-
-        # Per-eye, per-target threshold masks + per-target Show-mask
-        # visibility flags. All stores are populated from outside via
-        # the public setters; the viewer never inspects plugin result
-        # shapes itself.
-        self.target_masks = TargetMaskStore()
 
     @property
     def factor(self) -> float:
@@ -390,14 +367,14 @@ class ImageViewer(QWidget):
         return self.target_rois.active_drag_roi(self.active_eye_slot())
 
     def _set_active_drag_roi(self, value: tuple | None) -> None:
-        """Write the in-progress drag rectangle to the active eye's slot for the active target."""
+        """Write the in-progress drag rectangle to the active eye's slot for the active kind."""
         if self.target_rois.active_target is None:
             return
         self.target_rois.set(self.target_rois.active_target, self.active_eye_slot(), value)
 
     # Minimum cursor movement (image coords) before a press counts as a
     # drag-to-draw rather than a click. Below this, the rectangle stays
-    # uncommitted so an accidental click on an active ROI target does
+    # uncommitted so an accidental click on an active ROI kind does
     # not produce an invisible / one-pixel rectangle.
     ROI_DRAG_THRESHOLD_PX = 5.0
 
@@ -504,19 +481,12 @@ class ImageViewer(QWidget):
                     self.setCursor(Qt.SizeHorCursor)
                     return
 
-                # A per-target ROI in drag-edit mode consumes the click
+                # A per-kind ROI in drag-edit mode consumes the click
                 # before any Manual-mode click-to-place flow runs. Drag
-                # operates on the active eye's slot for that target —
+                # operates on the active eye's slot for that kind —
                 # the inactive eye's rectangle paints but isn't grabbable.
                 if self.target_rois.active_target is not None:
                     self._try_begin_roi_drag(image_pos, self._active_drag_roi())
-                    return
-
-                # In Auto Detect mode manual edits are off — clicks on
-                # the canvas that don't hit the divider or an active
-                # ROI handle do nothing. The user must switch back to
-                # Manual mode to add or move manual annotations.
-                if not self._manual_edit_enabled:
                     return
 
                 self.mouse_state.selected_point, selected_annotation = self.find_closest_point_and_type(image_pos)
@@ -530,9 +500,9 @@ class ImageViewer(QWidget):
                         self.current_annotation = selected_annotation
                         self.annotation_type_changed.emit(self.current_annotation)
                 elif self.current_annotation in self._auto_managed_annotations:
-                    # The current target is owned by an auto detector; manual
+                    # The current kind is owned by an auto detector; manual
                     # click-to-place is disabled so the auto overlay stays the
-                    # single source of truth for this target.
+                    # single source of truth for this kind.
                     return
                 elif not self._point_on_active_side(image_pos):
                     # In binocular mode clicks on the inactive eye's half
@@ -605,8 +575,8 @@ class ImageViewer(QWidget):
                 self.mouse_state.reset_roi_drag()
                 draw_changed_roi = (not was_drawing) or committed
                 if draw_changed_roi and self.target_rois.active_target is not None:
-                    target = self.target_rois.active_target
-                    self.target_roi_changed.emit(target, self.target_rois.get(target, self.active_eye_slot()))
+                    kind = self.target_rois.active_target
+                    self.target_roi_changed.emit(kind, self.target_rois.get(kind, self.active_eye_slot()))
                 return
 
             self.mouse_state.moving_point = False
@@ -653,7 +623,6 @@ class ImageViewer(QWidget):
         # new image until the next plugin run.
         self.detection_overlays.clear_all()
         self.target_rois.clear_all()
-        self.target_masks.clear_all()
         self.reset_undo_stack()
         if not self.zoom_state.is_initialized():
             self.zoom_state.fit_to_viewport(self.scroll_area, self.original_pixmap)
@@ -677,6 +646,14 @@ class ImageViewer(QWidget):
         self.zoom_state.fit_to_viewport(self.scroll_area, self.original_pixmap)
         self.update_image()
 
+    def set_zoom_factor(self, factor: float) -> None:
+        """Set the zoom factor directly (clamped to the controller's range)."""
+        clamped = max(self.zoom_state.MIN_FACTOR, min(self.zoom_state.MAX_FACTOR, float(factor)))
+        if clamped == self.zoom_state.factor:
+            return
+        self.zoom_state.factor = clamped
+        self.update_image()
+
     def brighten_display(self) -> None:
         """Multiply the displayed grayscale by the brightness step."""
         if self.brightness.brighten():
@@ -695,30 +672,33 @@ class ImageViewer(QWidget):
             self.brightness.rebuild(self.original_pixmap, self.image_grayscale)
             self.update_image()
 
+    def set_brightness_factor(self, factor: float) -> None:
+        """Set the brightness factor directly (clamped to the controller's range)."""
+        if self.brightness.set_factor(float(factor)):
+            self.brightness.rebuild(self.original_pixmap, self.image_grayscale)
+            self.update_image()
+
     def get_current_image_grayscale(self) -> np.ndarray | None:
         """Return the grayscale numpy view of the current image (or None)."""
         return self.image_grayscale
 
     # ----- Auto Detect overlays -----
 
-    def set_manual_edit_enabled(self, enabled: bool) -> None:
-        """Allow / block manual click-to-place and click-to-edit on the canvas.
+    def set_overlay_state_lookup(self, lookup) -> None:  # type: ignore[no-untyped-def]
+        """Wire the callable that maps a kind slug to its DetectorCard overlay state."""
+        self._overlay_state_lookup = lookup
+        self.renderer.overlay_state_lookup = lookup
+        self.update_image()
 
-        Called by MainWindow when the user flips the mode switcher.
-        Existing manual annotations stay visible regardless; only
-        adding new ones and dragging existing ones is gated.
+    def set_auto_managed_targets(self, kinds: set[str]) -> None:
+        """Declare which detector kinds are now owned by an auto detector.
+
+        Manual annotations and click-to-place for these kinds are
+        suppressed; the auto-detector overlay is the single source for
+        those kinds. Targets not in the set fall back to the manual
+        annotation path.
         """
-        self._manual_edit_enabled = bool(enabled)
-
-    def set_auto_managed_targets(self, plugin_targets: set[str]) -> None:
-        """Declare which plugin targets are now owned by an auto detector.
-
-        Manual annotations and click-to-place for these targets are
-        suppressed; the auto-detector overlay is the only visible source
-        for those targets. Targets not in the set fall back to the
-        manual annotation path.
-        """
-        self._auto_managed_targets = set(plugin_targets)
+        self._auto_managed_targets = set(kinds)
         self._auto_managed_annotations = {
             self._PLUGIN_TARGET_TO_ANNOTATION[t]
             for t in self._auto_managed_targets
@@ -750,20 +730,6 @@ class ImageViewer(QWidget):
         self.annotation_changed.emit()
         self.update_image()
 
-    def set_active_plugin(self, target: str, plugin: object) -> None:
-        """Record the plugin instance currently owning ``target``.
-
-        Called by MainWindow whenever a plugin panel is mounted so the
-        viewer can later route detection overlay drawing through
-        ``plugin.draw_overlay`` and pick up the plugin's own
-        ``roi_color`` / ``mask_color`` palette.
-        """
-        self._active_plugins[target] = plugin
-
-    def clear_active_plugin(self, target: str) -> None:
-        """Drop the plugin reference for ``target`` (panel unmounted / disabled)."""
-        self._active_plugins.pop(target, None)
-
     def active_eye_slot(self) -> str:
         """Return the per-eye storage key for the currently active eye."""
         return self.current_eye if self.binocular_mode else "single"
@@ -772,22 +738,22 @@ class ImageViewer(QWidget):
         """Map ``None`` to the currently active eye slot."""
         return eye_slot if eye_slot is not None else self.active_eye_slot()
 
-    # ----- Per-eye, per-target Auto Detect overlays -----
+    # ----- Per-eye, per-kind Auto Detect overlays -----
 
-    def set_detection_overlay(self, target: str, result: dict, *, eye_slot: str | None = None) -> None:
-        """Store an Auto Detect result for ``target`` at ``eye_slot`` and re-paint.
+    def set_detection_overlay(self, kind: str, result: dict, *, eye_slot: str | None = None) -> None:
+        """Store an Auto Detect result for ``kind`` at ``eye_slot`` and re-paint.
 
         ``eye_slot`` defaults to the active eye; pass ``"left"`` /
         ``"right"`` / ``"single"`` explicitly when populating from a
         loaded annotation file that carries results for both eyes.
         """
-        self.detection_overlays.set(target, self._resolve_slot(eye_slot), result)
+        self.detection_overlays.set(kind, self._resolve_slot(eye_slot), result)
         self.update_image()
 
-    def clear_detection_overlay(self, target: str, *, eye_slot: str | None = None) -> None:
-        """Drop the stored result for ``target`` at ``eye_slot`` (or every slot when ``eye_slot`` is None)."""
+    def clear_detection_overlay(self, kind: str, *, eye_slot: str | None = None) -> None:
+        """Drop the stored result for ``kind`` at ``eye_slot`` (or every slot when ``eye_slot`` is None)."""
         slot = None if eye_slot is None else self._resolve_slot(eye_slot)
-        if self.detection_overlays.clear(target, slot):
+        if self.detection_overlays.clear(kind, slot):
             self.update_image()
 
     def clear_all_detection_overlays(self) -> None:
@@ -795,81 +761,55 @@ class ImageViewer(QWidget):
         if self.detection_overlays.clear_all():
             self.update_image()
 
-    def get_detection_overlay(self, target: str, *, eye_slot: str | None = None) -> dict | None:
-        """Return the result stored for ``(target, eye_slot)``, or None."""
-        return self.detection_overlays.get(target, self._resolve_slot(eye_slot))
+    def get_detection_overlay(self, kind: str, *, eye_slot: str | None = None) -> dict | None:
+        """Return the result stored for ``(kind, eye_slot)``, or None."""
+        return self.detection_overlays.get(kind, self._resolve_slot(eye_slot))
 
-    # ----- Per-eye, per-target Auto Detect ROIs -----
+    # ----- Per-eye, per-kind Auto Detect ROIs -----
 
-    def set_active_roi_target(self, target: str | None) -> None:
-        """Enter drag-edit mode for ``target``'s ROI, or leave it (``None``).
+    def set_active_roi_target(self, kind: str | None) -> None:
+        """Enter drag-edit mode for ``kind``'s ROI, or leave it (``None``).
 
         Cancels any in-progress drag and re-paints so the corner-handle
-        decoration follows the newly active target.
+        decoration follows the newly active kind.
         """
-        if target is not None and target == self.target_rois.active_target:
+        if kind is not None and kind == self.target_rois.active_target:
             return
-        self.target_rois.set_active_target(target)
+        self.target_rois.set_active_target(kind)
         # Cancel any drag in progress; the user toggled the active ROI
         # while pressing the mouse — rare but worth a clean reset.
         self.mouse_state.reset_roi_drag()
         self.update_image()
 
-    def set_target_roi(self, target: str, roi: tuple | None, *, eye_slot: str | None = None) -> None:
-        """Replace ``(target, eye_slot)``'s stored ROI without emitting ``target_roi_changed``.
+    def set_target_roi(self, kind: str, roi: tuple | None, *, eye_slot: str | None = None) -> None:
+        """Replace ``(kind, eye_slot)``'s stored ROI without emitting ``target_roi_changed``.
 
         Passing ``roi=None`` drops the rectangle for that slot.
         ``eye_slot`` defaults to the active eye.
         """
-        self.target_rois.set(target, self._resolve_slot(eye_slot), roi)
+        self.target_rois.set(kind, self._resolve_slot(eye_slot), roi)
         self.update_image()
 
-    def clear_target_roi(self, target: str, *, eye_slot: str | None = None) -> None:
-        """Drop the ROI(s) stored for ``target`` and emit ``target_roi_changed``.
+    def clear_target_roi(self, kind: str, *, eye_slot: str | None = None) -> None:
+        """Drop the ROI(s) stored for ``kind`` and emit ``target_roi_changed``.
 
-        ``eye_slot=None`` drops every slot for ``target`` (used on
+        ``eye_slot=None`` drops every slot for ``kind`` (used on
         plugin swap / Clear All); pass an explicit slot to clear only
         one eye's rectangle.
         """
         slot = None if eye_slot is None else eye_slot
-        if not self.target_rois.clear(target, slot):
+        if not self.target_rois.clear(kind, slot):
             return
-        self.target_roi_changed.emit(target, None)
+        self.target_roi_changed.emit(kind, None)
         self.update_image()
 
-    def get_target_roi(self, target: str, *, eye_slot: str | None = None) -> tuple | None:
-        """Return the ROI stored for ``(target, eye_slot)`` (or None)."""
-        return self.target_rois.get(target, self._resolve_slot(eye_slot))
+    def get_target_roi(self, kind: str, *, eye_slot: str | None = None) -> tuple | None:
+        """Return the ROI stored for ``(kind, eye_slot)`` (or None)."""
+        return self.target_rois.get(kind, self._resolve_slot(eye_slot))
 
     def clear_all_target_rois(self) -> None:
-        """Drop every stored ROI across all targets and eyes (no signals)."""
+        """Drop every stored ROI across all kinds and eyes (no signals)."""
         if self.target_rois.clear_all():
-            self.update_image()
-
-    # ----- Per-eye, per-target threshold-mask overlays -----
-
-    def set_target_mask(self, target: str, mask: "np.ndarray | None", *, eye_slot: str | None = None) -> None:
-        """Store ``(target, eye_slot)``'s threshold mask. Repaints when masks are visible."""
-        if self.target_masks.set(target, self._resolve_slot(eye_slot), mask):
-            self.update_image()
-
-    def set_show_target_mask(self, target: str, on: bool) -> None:
-        """Toggle visibility of every stored mask for ``target`` (across all eyes)."""
-        self.target_masks.set_show(target, on)
-        self.update_image()
-
-    def clear_target_mask(self, target: str, *, eye_slot: str | None = None) -> None:
-        """Drop the mask for ``(target, eye_slot)`` (or every slot when ``eye_slot`` is None)."""
-        if self.target_masks.clear(target, eye_slot):
-            self.update_image()
-
-    def get_target_mask(self, target: str, *, eye_slot: str | None = None) -> "np.ndarray | None":
-        """Return the mask stored for ``(target, eye_slot)`` (or None)."""
-        return self.target_masks.get(target, self._resolve_slot(eye_slot))
-
-    def clear_all_target_masks(self) -> None:
-        """Drop every stored mask across all targets and eyes. Repaints if anything was visible."""
-        if self.target_masks.clear_all():
             self.update_image()
 
     def eventFilter(self, source: QWidget, event: QEvent) -> bool:  # noqa: N802
@@ -939,7 +879,7 @@ class ImageViewer(QWidget):
 
         Skips any annotation type currently owned by an auto detector so
         the user can't accidentally drag a hidden manual point belonging
-        to an auto-managed target.
+        to an auto-managed kind.
         """
         pupil_point = find_closest_point(self.pupil_points, pos, self.factor)
         limbus_point = find_closest_point(self.limbus_points, pos, self.factor)

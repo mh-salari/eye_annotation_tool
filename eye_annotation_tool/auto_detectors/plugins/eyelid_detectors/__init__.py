@@ -1,1 +1,0 @@
-"""Eyelid detector plugins."""

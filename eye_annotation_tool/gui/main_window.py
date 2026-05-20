@@ -1,5 +1,6 @@
 """Main application window for the eye annotation tool."""
 
+import math
 from pathlib import Path
 
 import qtawesome as qta
@@ -16,12 +17,15 @@ from PyQt5.QtWidgets import (
     QMainWindow,
     QMessageBox,
     QScrollArea,
+    QSlider,
     QStatusBar,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
 
-from ..auto_detectors import PluginManager
+from lavan.gui.registry import discover_detectors
+
 from ..auto_detectors.orchestrator import DetectorOrchestrator
 from ..controllers.annotation_controller import AnnotationController
 from ..controllers.binocular_controller import BinocularController
@@ -30,16 +34,46 @@ from ..controllers.navigation_controller import NavigationController
 from ..policy import CliOverridePolicy
 from ..state import CarryRoiStore, PerEyeStateStore, ProjectStore, SessionState
 from ..utils.project_settings import (
-    DETECTOR_TARGETS,
+    KINDS,
     PROJECT_FILE_SUFFIX,
+    ProjectSchemaError,
 )
 from .about_dialog import show_about_dialog
-from .annotation_controls import MODE_AUTO_DETECT, MODE_MANUAL, AnnotationControlPanel
+from .annotation_controls import AnnotationControlPanel
 from .custom_widgets import MaterialButton
 from .image_viewer import ImageViewer
 from .menu_handler import MenuHandler
 from .new_project_dialog import NewProjectDialog
 from .shortcut_handler import ShortcutHandler
+
+# Slider ticks map onto the zoom / brightness controller's clamp range via a
+# log scale (multiplicative feel — equal slider steps multiply the factor).
+_ZOOM_SLIDER_MIN = 0
+_ZOOM_SLIDER_MAX = 1000
+_ZOOM_SLIDER_DEFAULT = 400  # ~1.0x (corresponds to slider position for factor 1)
+_ZOOM_MIN_FACTOR = 0.1
+_ZOOM_MAX_FACTOR = 25.0
+
+_BRIGHTNESS_SLIDER_MIN = 0
+_BRIGHTNESS_SLIDER_MAX = 1000
+_BRIGHTNESS_SLIDER_DEFAULT = 500  # 1.0x — identity brightness
+_BRIGHTNESS_MIN_FACTOR = 0.1
+_BRIGHTNESS_MAX_FACTOR = 10.0
+
+
+def _log_slider_to_factor(value: int, slider_min: int, slider_max: int, min_factor: float, max_factor: float) -> float:
+    """Map an integer slider position to a log-scaled multiplicative factor."""
+    span = slider_max - slider_min
+    t = (value - slider_min) / span if span else 0
+    log_lo, log_hi = math.log(min_factor), math.log(max_factor)
+    return math.exp(log_lo + t * (log_hi - log_lo))
+
+
+def _factor_to_log_slider(factor: float, slider_min: int, slider_max: int, min_factor: float, max_factor: float) -> int:
+    """Inverse of :func:`_log_slider_to_factor`."""
+    log_lo, log_hi = math.log(min_factor), math.log(max_factor)
+    t = (math.log(max(min_factor, min(max_factor, factor))) - log_lo) / (log_hi - log_lo)
+    return int(round(slider_min + t * (slider_max - slider_min)))
 
 
 class MainWindow(QMainWindow):
@@ -57,27 +91,31 @@ class MainWindow(QMainWindow):
                 regardless of any per-project setting (i.e. the image is
                 treated as a single eye with no left/right split).
             cli_auto_detectors: When given, restrict Auto Detect to this
-                subset of ``DETECTOR_TARGETS`` for the whole session;
-                targets not in the set are forced to ``"disabled"``
+                subset of ``KINDS`` for the whole session;
+                kinds not in the set are forced to ``"disabled"``
                 regardless of the per-project detector choices. ``None``
                 (the default) defers to the project file.
 
         """
         super().__init__()
         self.setWindowTitle("EyE Annotation Tool")
-        self.plugin_manager = PluginManager()
         self.orchestrator = DetectorOrchestrator(self)
         self.cli_policy = CliOverridePolicy(cli_monocular, cli_auto_detectors)
         self.project_store = ProjectStore()
-        self.per_eye_state = PerEyeStateStore(DETECTOR_TARGETS)
-        self.carry_roi_state = CarryRoiStore(DETECTOR_TARGETS)
+        self.per_eye_state = PerEyeStateStore(KINDS)
+        self.carry_roi_state = CarryRoiStore(KINDS)
         self.session = SessionState(self)
         self.session.modified_changed.connect(self._refresh_save_state_indicator)
+
+        # Group lavan detectors by kind so the side-panel cards have
+        # the right options in their dropdowns.
+        self._detectors_by_kind: dict[str, list] = {t: [] for t in KINDS}
+        for det in discover_detectors():
+            self._detectors_by_kind.setdefault(det.kind, []).append(det)
 
         self.setup_ui()
 
         self.detection_controller = DetectionController(
-            self.plugin_manager,
             self.orchestrator,
             self.per_eye_state,
             self.carry_roi_state,
@@ -88,7 +126,7 @@ class MainWindow(QMainWindow):
         )
         self.detection_controller.annotation_modified.connect(self._mark_modified)
         self.detection_controller.status_message.connect(self.statusBar().showMessage)
-        self.detection_controller.detectors_changed.connect(self._on_detectors_changed)
+        self.image_viewer.set_overlay_state_lookup(self.detection_controller.overlay_state_lookup)
 
         self.binocular_controller = BinocularController(
             self.image_viewer,
@@ -188,61 +226,44 @@ class MainWindow(QMainWindow):
 
         left_layout.addStretch(1)
 
-        # Zoom + display-brightness controls pinned at the bottom of the
-        # left panel — fixed rows so they stay reachable regardless of
-        # how long the loaded-images list grows. Brightness only changes
-        # the canvas; detector plugins keep seeing the unmodified source.
-        # Icons are Material Design Icons via qtawesome (mdi6.*); tooltips
-        # carry the full label so the icon-only buttons stay accessible.
         icon_colour = "#e0e0e0"
-        icon_size = QSize(18, 18)
+        icon_size = QSize(20, 20)
+
         zoom_row = QHBoxLayout()
         zoom_row.setContentsMargins(0, 0, 0, 0)
-        self.zoom_in_button = MaterialButton("  +", compact=True)
-        self.zoom_in_button.setIcon(qta.icon("mdi6.magnify-plus-outline", color=icon_colour))
-        self.zoom_in_button.setIconSize(icon_size)
-        self.zoom_in_button.setToolTip("Zoom in")
-        self.zoom_out_button = MaterialButton("  -", compact=True)
-        self.zoom_out_button.setIcon(qta.icon("mdi6.magnify-minus-outline", color=icon_colour))
-        self.zoom_out_button.setIconSize(icon_size)
-        self.zoom_out_button.setToolTip("Zoom out")
-        self.zoom_reset_button = MaterialButton("  reset", compact=True)
-        self.zoom_reset_button.setIcon(qta.icon("mdi6.fit-to-screen-outline", color=icon_colour))
+        self.zoom_reset_button = QToolButton()
+        self.zoom_reset_button.setIcon(qta.icon("mdi6.magnify", color=icon_colour))
         self.zoom_reset_button.setIconSize(icon_size)
-        self.zoom_reset_button.setToolTip("Fit image to viewport")
-        zoom_row.addWidget(self.zoom_in_button)
-        zoom_row.addWidget(self.zoom_out_button)
+        self.zoom_reset_button.setAutoRaise(True)
+        self.zoom_reset_button.setToolTip("Reset zoom to fit")
+        self.zoom_slider = QSlider(Qt.Horizontal)
+        self.zoom_slider.setRange(_ZOOM_SLIDER_MIN, _ZOOM_SLIDER_MAX)
+        self.zoom_slider.setValue(_ZOOM_SLIDER_DEFAULT)
+        self.zoom_slider.setToolTip("Zoom")
         zoom_row.addWidget(self.zoom_reset_button)
+        zoom_row.addWidget(self.zoom_slider, 1)
         left_layout.addLayout(zoom_row)
+
         brightness_row = QHBoxLayout()
         brightness_row.setContentsMargins(0, 0, 0, 0)
-        # The three sun icons differ only in subtle ray count; the +, -,
-        # 'reset' text suffixes are what actually communicates the
-        # direction at a glance. Tooltips spell out the full label.
-        self.brighter_button = MaterialButton("  +", compact=True)
-        self.brighter_button.setIcon(qta.icon("mdi6.brightness-5", color=icon_colour))
-        self.brighter_button.setIconSize(icon_size)
-        self.brighter_button.setToolTip("Brighten the displayed image")
-        self.darker_button = MaterialButton("  -", compact=True)
-        self.darker_button.setIcon(qta.icon("mdi6.brightness-4", color=icon_colour))
-        self.darker_button.setIconSize(icon_size)
-        self.darker_button.setToolTip("Darken the displayed image")
-        self.brightness_reset_button = MaterialButton("  reset", compact=True)
+        self.brightness_reset_button = QToolButton()
         self.brightness_reset_button.setIcon(qta.icon("mdi6.brightness-6", color=icon_colour))
         self.brightness_reset_button.setIconSize(icon_size)
-        self.brightness_reset_button.setToolTip("Restore original brightness")
-        brightness_row.addWidget(self.brighter_button)
-        brightness_row.addWidget(self.darker_button)
+        self.brightness_reset_button.setAutoRaise(True)
+        self.brightness_reset_button.setToolTip("Reset brightness")
+        self.brightness_slider = QSlider(Qt.Horizontal)
+        self.brightness_slider.setRange(_BRIGHTNESS_SLIDER_MIN, _BRIGHTNESS_SLIDER_MAX)
+        self.brightness_slider.setValue(_BRIGHTNESS_SLIDER_DEFAULT)
+        self.brightness_slider.setToolTip("Brightness")
         brightness_row.addWidget(self.brightness_reset_button)
+        brightness_row.addWidget(self.brightness_slider, 1)
         left_layout.addLayout(brightness_row)
         left_panel.setLayout(left_layout)
 
-        self.zoom_in_button.clicked.connect(self.image_viewer.zoom_in_centered)
-        self.zoom_out_button.clicked.connect(self.image_viewer.zoom_out_centered)
-        self.zoom_reset_button.clicked.connect(self.image_viewer.reset_zoom_to_fit)
-        self.brighter_button.clicked.connect(self.image_viewer.brighten_display)
-        self.darker_button.clicked.connect(self.image_viewer.darken_display)
-        self.brightness_reset_button.clicked.connect(self.image_viewer.reset_display_brightness)
+        self.zoom_reset_button.clicked.connect(self._on_zoom_reset_clicked)
+        self.zoom_slider.valueChanged.connect(self._on_zoom_slider_changed)
+        self.brightness_reset_button.clicked.connect(self._on_brightness_reset_clicked)
+        self.brightness_slider.valueChanged.connect(self._on_brightness_slider_changed)
         return left_panel
 
     def _build_right_panel(self) -> QWidget:
@@ -253,7 +274,7 @@ class MainWindow(QMainWindow):
         Clear All is a fixed footer below the scroll area so it stays
         visible regardless of how tall the panel contents grow.
         """
-        self.annotation_controls = AnnotationControlPanel()
+        self.annotation_controls = AnnotationControlPanel(self._detectors_by_kind)
         right_scroll = QScrollArea()
         right_scroll.setWidget(self.annotation_controls)
         right_scroll.setWidgetResizable(True)
@@ -325,14 +346,13 @@ class MainWindow(QMainWindow):
         self.annotation_controls.clear_eyelid_points_requested.connect(self.image_viewer.clear_eyelid_points)
         self.annotation_controls.clear_glint_points_requested.connect(self.image_viewer.clear_glint_points)
         self.annotation_controls.clear_all_requested.connect(self._on_clear_all)
-        self.annotation_controls.mode_changed.connect(self._on_mode_changed)
 
         self.image_viewer.annotation_changed.connect(self.on_annotation_changed)
         self.image_viewer.annotation_type_changed.connect(self.annotation_controls.set_current_annotation)
         # On image change: drop both the orchestrator's per-image cache
         # AND the per-eye snapshot before the annotation_controller
         # restores whatever the new image's saved annotation carries.
-        # The image viewer clears its own per-image overlay + target-ROI
+        # The image viewer clears its own per-image overlay + kind-ROI
         # state inside ``load_image`` itself.
         self.image_viewer.image_loaded.connect(self._on_image_loaded)
 
@@ -357,7 +377,15 @@ class MainWindow(QMainWindow):
 
     def open_project(self, project_path: str) -> None:
         """Load ``project_path`` from disk and apply it as the active project."""
-        self.project_store.load(project_path)
+        try:
+            self.project_store.load(project_path)
+        except ProjectSchemaError as exc:
+            QMessageBox.warning(
+                self,
+                "Cannot open this project",
+                f"{exc} Pick another project file or start a new project.",
+            )
+            return
         self._apply_project_state()
         self.session.current_image_index = 0 if self.image_paths else -1
         self.update_image_list()
@@ -379,7 +407,15 @@ class MainWindow(QMainWindow):
         File > Save Project As…; ``save_project_as`` clears the read-only
         flag (the snapshot becomes the new active project).
         """
-        self.project_store.load_for_review(project_path, image_paths)
+        try:
+            self.project_store.load_for_review(project_path, image_paths)
+        except ProjectSchemaError as exc:
+            QMessageBox.warning(
+                self,
+                "Cannot open this project",
+                f"{exc} Pick another project file or start a new project.",
+            )
+            return
         self._apply_project_state()
         self.session.current_image_index = 0 if self.image_paths else -1
         self.update_image_list()
@@ -407,10 +443,14 @@ class MainWindow(QMainWindow):
         the new active project, and subsequent edits write through to it
         normally.
         """
+        if self.project_store.path is not None:
+            default_path = self.project_store.path
+        else:
+            default_path = str(Path(self._default_dialog_dir()) / f"untitled{PROJECT_FILE_SUFFIX}")
         path, _ = QFileDialog.getSaveFileName(
             self,
             "Save Project As",
-            "",
+            default_path,
             f"Project Files (*{PROJECT_FILE_SUFFIX})",
         )
         if not path:
@@ -512,12 +552,7 @@ class MainWindow(QMainWindow):
             self.project_store.persist()
         self.binocular_controller.apply_mode(self.project_store.binocular_mode)
         self.image_viewer.set_divider_x_norm(self.binocular_controller.effective_divider_x_norm())
-        self.detection_controller.apply_enabled_plugins(project.get("detectors", {}))
-        self.menu_handler.update_auto_detectors_menu()
-        if self.project_store.current_mode == MODE_AUTO_DETECT:
-            self.annotation_controls.mode_auto_detect_button.setChecked(True)
-        else:
-            self.annotation_controls.mode_manual_button.setChecked(True)
+        self.detection_controller.apply_project_settings(project.get("detectors", {}))
         self.autosave_checkbox.blockSignals(True)
         self.autosave_checkbox.setChecked(self.project_store.autosave)
         self.autosave_checkbox.blockSignals(False)
@@ -532,12 +567,19 @@ class MainWindow(QMainWindow):
         result = dialog.result_payload()
         self.new_project(result["path"], result["project"])
 
+    def _default_dialog_dir(self) -> str:
+        """Return the current project's folder, or ``~/Desktop`` if none is loaded."""
+        project_root = self.project_store.project_root()
+        if project_root is not None:
+            return str(project_root)
+        return str(Path.home() / "Desktop")
+
     def on_open_project(self) -> None:
         """File > Open Project — pick a file, load it."""
         path, _ = QFileDialog.getOpenFileName(
             self,
             "Open Project",
-            "",
+            self._default_dialog_dir(),
             f"Project Files (*{PROJECT_FILE_SUFFIX})",
         )
         if path:
@@ -548,7 +590,7 @@ class MainWindow(QMainWindow):
         files, _ = QFileDialog.getOpenFileNames(
             self,
             "Select Image Files",
-            "",
+            self._default_dialog_dir(),
             "Image Files (*.png *.jpg *.bmp)",
         )
         if files:
@@ -556,7 +598,7 @@ class MainWindow(QMainWindow):
 
     def on_load_folder_clicked(self) -> None:
         """Left-panel "Load Images from Folder" button — folder picker, appends to project."""
-        folder = QFileDialog.getExistingDirectory(self, "Select Image Folder", "")
+        folder = QFileDialog.getExistingDirectory(self, "Select Image Folder", self._default_dialog_dir())
         if folder:
             self.add_images_from_folder(folder)
 
@@ -607,28 +649,6 @@ class MainWindow(QMainWindow):
         self.orchestrator.clear_cache()
         self.per_eye_state.clear_all()
 
-    def _on_mode_changed(self, mode: str) -> None:
-        """Persist the new mode and cancel any Auto-Detect ROI drag state.
-
-        Manual annotations and detection overlays both paint regardless of
-        the active mode; visibility is decided per-target by which side
-        owns that target (manual or an auto detector). The mode switcher
-        only controls which panel is on the right and which side of the
-        per-target data the user is allowed to edit.
-
-        Switching to Manual cancels any ROI drag-edit toggle the user
-        left active on an Auto Detect panel so canvas clicks in Manual
-        mode aren't intercepted by a stale ROI drag handler.
-        """
-        if mode == MODE_MANUAL:
-            self.detection_controller.cancel_active_roi_edit()
-        # Manual click-to-place and click-to-edit on the canvas are
-        # only allowed in Manual mode. Auto Detect mode still paints
-        # manual annotations so the user can see them, but blocks edits
-        # until they switch back.
-        self.image_viewer.set_manual_edit_enabled(mode == MODE_MANUAL)
-        self.project_store.current_mode = mode
-
     def update_image_list(self) -> None:
         """Update the image list widget with current image paths.
 
@@ -659,39 +679,63 @@ class MainWindow(QMainWindow):
             if self.image_viewer.load_image(image_path):
                 self.setWindowTitle(f"EyE Annotation Tool - {Path(image_path).name}")
                 self.annotation_controller.load_annotations()
+                self.detection_controller.refresh_all_detections()
             else:
                 QMessageBox.critical(self, "Error", f"Failed to load image: {image_path}")
 
     def on_annotation_changed(self) -> None:
-        """Handle a manual-annotation edit: mark dirty and republish the manual pupil.
-
-        Manual pupil ellipse changes are forwarded to the detection
-        controller so it can refresh the synthetic pupil cache and
-        re-run downstream live plugins (glint, limbus) against the
-        new centre / radius.
-        """
+        """Handle a manual-annotation edit: mark the project dirty."""
         self.session.modified = True
-        self.detection_controller.on_manual_annotation_changed()
 
     def _on_autosave_changed(self, enabled: bool) -> None:
         """Persist the autosave toggle in project settings."""
         self.project_store.autosave = enabled
         self._refresh_save_state_indicator()
 
+    def _on_zoom_reset_clicked(self) -> None:
+        self.image_viewer.reset_zoom_to_fit()
+        self._sync_zoom_slider_to_viewer()
+
+    def _on_zoom_slider_changed(self, value: int) -> None:
+        factor = _log_slider_to_factor(
+            value, _ZOOM_SLIDER_MIN, _ZOOM_SLIDER_MAX, _ZOOM_MIN_FACTOR, _ZOOM_MAX_FACTOR,
+        )
+        self.image_viewer.set_zoom_factor(factor)
+
+    def _sync_zoom_slider_to_viewer(self) -> None:
+        slider_value = _factor_to_log_slider(
+            self.image_viewer.zoom_state.factor,
+            _ZOOM_SLIDER_MIN, _ZOOM_SLIDER_MAX, _ZOOM_MIN_FACTOR, _ZOOM_MAX_FACTOR,
+        )
+        self.zoom_slider.blockSignals(True)
+        self.zoom_slider.setValue(slider_value)
+        self.zoom_slider.blockSignals(False)
+
+    def _on_brightness_reset_clicked(self) -> None:
+        self.image_viewer.reset_display_brightness()
+        self._sync_brightness_slider_to_viewer()
+
+    def _on_brightness_slider_changed(self, value: int) -> None:
+        factor = _log_slider_to_factor(
+            value, _BRIGHTNESS_SLIDER_MIN, _BRIGHTNESS_SLIDER_MAX,
+            _BRIGHTNESS_MIN_FACTOR, _BRIGHTNESS_MAX_FACTOR,
+        )
+        self.image_viewer.set_brightness_factor(factor)
+
+    def _sync_brightness_slider_to_viewer(self) -> None:
+        slider_value = _factor_to_log_slider(
+            self.image_viewer.brightness.factor,
+            _BRIGHTNESS_SLIDER_MIN, _BRIGHTNESS_SLIDER_MAX,
+            _BRIGHTNESS_MIN_FACTOR, _BRIGHTNESS_MAX_FACTOR,
+        )
+        self.brightness_slider.blockSignals(True)
+        self.brightness_slider.setValue(slider_value)
+        self.brightness_slider.blockSignals(False)
+
     def _on_clear_all(self) -> None:
-        """Wipe every manual annotation AND every Auto Detect result on the current image.
-
-        Clear All is mode-agnostic by design: it drops the manual
-        point/ellipse sets across both eyes and resets every mounted
-        plugin panel + cached detection + overlay + mask + ROI. No
-        detection re-runs after the clear.
-        """
+        """Wipe every manual annotation AND every detection result on the current image."""
         self.image_viewer.clear_all()
-        self.detection_controller.clear_all_auto_detect()
-
-    def _on_detectors_changed(self) -> None:
-        """Refresh the Auto Detectors menu after the controller mutated the detectors block."""
-        self.menu_handler.update_auto_detectors_menu()
+        self.detection_controller.clear_all()
 
     def get_current_screen(self) -> QScreen | None:
         """Get the screen that currently contains the window."""
