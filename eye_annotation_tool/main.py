@@ -208,6 +208,21 @@ def _bootstrap_new_project(args: argparse.Namespace) -> None:
     save_project(args.new_project, project)
 
 
+def _run_startup_chooser(main_window: "MainWindow") -> None:
+    """Show the New / Open chooser, looping until a project loads or the user cancels."""
+    while main_window.project_store.path is None:
+        chooser = StartupChooserDialog()
+        if chooser.exec_() != QDialog.Accepted:
+            return
+        if chooser.choice == StartupChooserDialog.NEW:
+            wizard = NewProjectDialog(main_window)
+            if wizard.exec_() == QDialog.Accepted:
+                payload = wizard.result_payload()
+                main_window.new_project(payload["path"], payload["project"])
+        elif chooser.choice == StartupChooserDialog.OPEN:
+            main_window.on_open_project()
+
+
 def run_app() -> None:
     """Run the eye annotation application."""
     args = _parse_args(sys.argv[1:])
@@ -243,16 +258,7 @@ def run_app() -> None:
             sys.exit(2)
         main_window.open_project(str(args.project))
     elif args.images is None and args.folders is None:
-        # Fully unattended launch with no CLI hints — show the startup chooser.
-        chooser = StartupChooserDialog()
-        if chooser.exec_() == QDialog.Accepted:
-            if chooser.choice == StartupChooserDialog.NEW:
-                wizard = NewProjectDialog(main_window)
-                if wizard.exec_() == QDialog.Accepted:
-                    payload = wizard.result_payload()
-                    main_window.new_project(payload["path"], payload["project"])
-            elif chooser.choice == StartupChooserDialog.OPEN:
-                main_window.on_open_project()
+        _run_startup_chooser(main_window)
 
     if args.folders is not None:
         for folder in args.folders:
