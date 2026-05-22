@@ -25,17 +25,13 @@ dependencies = [
     "qtawesome>=1.4.2",
     "pyqtdarktheme>=2.1",
     "scipy>=1.7.0",
-    "cheshm",
+    "cheshm>=2.0.0",
 ]
 
 [project.urls]
 Homepage = "https://github.com/mh-salari/eye_annotation_tool"
 Repository = "https://github.com/mh-salari/eye_annotation_tool"
 Issues = "https://github.com/mh-salari/eye_annotation_tool/issues"
-
-[tool.uv.sources]
-# Local dev only — remove before publishing.
-cheshm = { path = "/Users/mh/Library/CloudStorage/Dropbox/DC3/Dev/cheshm", editable = true }
 
 [project.scripts]
 eye_annotation_tool = "eye_annotation_tool.main:run_app"

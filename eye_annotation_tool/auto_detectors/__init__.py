@@ -1,1 +1,1 @@
-"""Auto-detector dispatch built on top of ``cheshm.gui.registry``."""
+"""Auto-detector plugin system."""

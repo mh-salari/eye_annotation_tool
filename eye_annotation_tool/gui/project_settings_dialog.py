@@ -1,6 +1,5 @@
 """Dialog for editing project-wide settings (mode, autosave, per-kind detector picks)."""
 
-from cheshm.gui.registry import discover_detectors
 from PyQt5.QtWidgets import (
     QButtonGroup,
     QCheckBox,
@@ -14,6 +13,8 @@ from PyQt5.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+
+from eye_annotation_tool.auto_detectors.plugin_loader import discover_plugins
 
 from ..utils.project_settings import (
     DETECTOR_MANUAL,
@@ -31,7 +32,7 @@ class ProjectSettingsDialog(QDialog):
         self.setMinimumWidth(480)
         self._project = project
         self._detectors_by_kind: dict[str, list] = {k: [] for k in KINDS}
-        for det in discover_detectors():
+        for det in discover_plugins():
             self._detectors_by_kind.setdefault(det.kind, []).append(det)
         self._build_ui()
 
@@ -65,7 +66,7 @@ class ProjectSettingsDialog(QDialog):
             combo.addItem("Off", DETECTOR_OFF)
             combo.addItem("Manual", DETECTOR_MANUAL)
             for det in self._detectors_by_kind.get(kind, []):
-                combo.addItem(det.id, det.id)
+                combo.addItem(det.name, det.name)
             current = (detectors_block.get(kind) or {}).get("id", DETECTOR_OFF)
             current_idx = combo.findData(current)
             if current_idx >= 0:

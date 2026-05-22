@@ -7,7 +7,6 @@ and (for Manual) the per-kind manual annotation group widget. Clear
 All sits at the bottom and dispatches to the image viewer.
 """
 
-from cheshm.gui.registry import Detector
 from PyQt5.QtCore import pyqtSignal
 from PyQt5.QtWidgets import (
     QButtonGroup,
@@ -15,10 +14,11 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
+from eye_annotation_tool.auto_detectors.plugin import DetectorPlugin as Detector
+
 from ..utils.project_settings import KINDS
 from .custom_widgets import AnnotationGroup, EyeSelector, MaterialButton
 from .detector_card import DetectorCard, build_detector_cards
-
 
 # Annotation slug per detector kind — the canvas uses these names for the
 # manual point / ellipse types it draws.

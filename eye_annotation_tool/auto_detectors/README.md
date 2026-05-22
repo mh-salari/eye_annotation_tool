@@ -1,235 +1,111 @@
 # Writing a Detector Plugin
 
-A detector plugin is a single Python class that owns its algorithm,
-its Qt parameter panel, its serialization, its overlay drawing and
-its colour palette. Dropping in a new plugin requires **no edits to
-the core application** — discovery is automatic via one of three
-channels, and the canvas paints whatever shape your `draw_overlay`
-method produces.
+A plugin is a single `DetectorPlugin` instance: a function plus enough
+metadata to render its parameter panel and to wire upstream results
+into its call. No Qt code, no subclassing — just one dataclass.
 
-## The four anatomical targets
+## Discovery
 
-Every plugin targets exactly one of:
+eye-annotation-tool loads plugins from three places at startup:
 
-| Target   | What it detects                  | May depend on              |
-|----------|----------------------------------|----------------------------|
-| `pupil`  | Pupil centre + contour ellipse   | (none — root of the graph) |
-| `glint`  | IR-LED reflection point(s)       | `pupil`                    |
-| `limbus` | Iris / limbus circle             | `pupil`                    |
-| `eyelid` | Eyelid contour                   | (free; not currently used) |
+1. **cheshm bridge (built-in)** — every detector exposed by
+   [cheshm](https://github.com/mh-salari/cheshm) is wrapped
+   automatically. Nothing to do.
+2. **User plugin dir** — `~/.config/eye_annotation_tool/plugins/`.
+   Drop a `.py` file here and it loads on the next launch.
+3. **`EYE_ANNOTATION_PLUGINS` env var** — `os.pathsep`-separated list
+   of extra directories scanned the same way:
 
-The target set is fixed — adding a fifth requires editing the core
-`Target` literal. The set of plugins per target is open.
+   ```bash
+   export EYE_ANNOTATION_PLUGINS=$HOME/my_plugins:/path/to/another
+   eye_annotation_tool
+   ```
 
-## Minimal plugin
+A `.py` file in any user dir is loaded if it declares a module-level
+`PLUGINS = [DetectorPlugin(...), ...]` list. Files whose name starts
+with `_` are skipped. A plugin that shares `(kind, name)` with a
+built-in shadows the built-in — useful for tuning a detector without
+forking cheshm.
 
-```python
-# my_pupil.py
-import numpy as np
-from PyQt5.QtCore import QPointF, Qt, pyqtSignal
-from PyQt5.QtGui import QColor, QPainter, QPen
-from PyQt5.QtWidgets import QGroupBox, QSlider, QVBoxLayout, QWidget
-
-from eye_annotation_tool.auto_detectors.plugin_interface import DetectorPlugin
-
-
-CENTER_COLOR = QColor(0, 200, 255, 255)
-
-
-class _Panel(QGroupBox):
-    """Right-side panel widget for the plugin."""
-
-    # Required: emitted on every widget change with the new params dict.
-    params_changed = pyqtSignal(dict)
-
-    def __init__(self, parent=None):
-        super().__init__("My Pupil", parent)
-        self._params = {"radius": 30}
-        layout = QVBoxLayout()
-        self.slider = QSlider(Qt.Horizontal)
-        self.slider.setRange(5, 100)
-        self.slider.setValue(self._params["radius"])
-        self.slider.valueChanged.connect(self._on_change)
-        layout.addWidget(self.slider)
-        self.setLayout(layout)
-
-    def _on_change(self, value):
-        self._params["radius"] = int(value)
-        self.params_changed.emit(dict(self._params))
-
-    # Required: current widget state as a params dict.
-    def current_params(self) -> dict:
-        return dict(self._params)
-
-    # Required: populate widgets from a params dict WITHOUT emitting
-    # ``params_changed`` (use blockSignals around the writes).
-    def set_params(self, params: dict) -> None:
-        if "radius" in params:
-            self.slider.blockSignals(True)
-            self.slider.setValue(int(params["radius"]))
-            self.slider.blockSignals(False)
-            self._params["radius"] = int(params["radius"])
-
-
-class MyPupil(DetectorPlugin):
-    """Toy pupil detector — picks a fixed circle at the image centre."""
-
-    name = "my_pupil"  # unique slug; appears in the Auto Detectors menu
-    target = "pupil"  # one of the four anatomical targets
-    requires = ()  # other targets whose results we need
-    live = True  # True = re-run on slider drag; False = manual Detect button only
-
-    @classmethod
-    def default_params(cls) -> dict:
-        return {"radius": 30}
-
-    def make_panel(self, parent=None) -> QWidget:
-        return _Panel(parent)
-
-    def detect(self, image: np.ndarray, params: dict, shared_results: dict) -> dict | None:
-        h, w = image.shape[:2]
-        cx, cy = w / 2.0, h / 2.0
-        r = float(params["radius"])
-        return {
-            "center": [cx, cy],
-            "ellipse": {
-                "center": [cx, cy],
-                "size": [2 * r, 2 * r],
-                "angle": 0.0,
-            },
-        }
-
-    def serialize(self, result: dict) -> dict:
-        return {
-            "center": list(result["center"]),
-            "ellipse": {
-                "center": list(result["ellipse"]["center"]),
-                "size": list(result["ellipse"]["size"]),
-                "angle": float(result["ellipse"]["angle"]),
-            },
-        }
-
-    def deserialize(self, blob: dict) -> dict:
-        return self.serialize(blob)  # symmetric here
-
-    def draw_overlay(self, painter: QPainter, result: dict, scale: float) -> None:
-        cx, cy = result["center"]
-        painter.setBrush(CENTER_COLOR)
-        painter.setPen(QPen(CENTER_COLOR, 3, Qt.SolidLine))
-        painter.drawEllipse(QPointF(cx * scale, cy * scale), 1.5, 1.5)
-```
-
-That's the complete contract. The next sections cover **how to load
-it** and **optional surface** you may want.
-
-## Discovery channels
-
-The plugin manager scans three places at startup:
-
-### 1. Built-in (shipped with the app)
-
-`eye_annotation_tool/auto_detectors/plugins/<target>_detectors/*.py`.
-Only used by plugins you contribute upstream.
-
-### 2. Env-var directories — `EYE_ANNOTATION_PLUGIN_PATH`
-
-`os.pathsep`-separated list of directories. Each directory is walked
-recursively for `*.py` files and every concrete `DetectorPlugin`
-subclass found is registered. Simplest way to add a one-off plugin
-without packaging:
-
-```bash
-export EYE_ANNOTATION_PLUGIN_PATH=$HOME/my_plugins
-eye_annotation_tool
-```
-
-### 3. Python entry-points — `eye_annotation_tool.plugins`
-
-For pip-installable plugin packages. In your plugin package's
-`pyproject.toml`:
-
-```toml
-[project.entry-points."eye_annotation_tool.plugins"]
-my_pupil = "my_pkg.detector:MyPupil"
-```
-
-Install the package (`pip install -e .` during development) and the
-plugin shows up the next time `eye_annotation_tool` starts.
-
-## Optional surface
-
-The minimum contract above gives you a working plugin. Additional
-class attributes and panel signals unlock more behaviour:
-
-### Class attributes
+## Plugin contract
 
 ```python
-class MyPupil(DetectorPlugin):
-    # ... required attrs above ...
+from eye_annotation_tool.auto_detectors.plugin import DetectorPlugin, SettingSpec
 
-    # Lower z-order draws first (behind). Built-in limbus uses -10 so
-    # the iris ring sits under pupil + glint markers. Default 0.
-    overlay_z_order: int = 0
-
-    # Colour for the per-target ROI rectangle. Set only on plugins
-    # whose panel emits ``roi_edit_requested``.
-    roi_color: QColor | None = QColor(0, 200, 255, 200)
-
-    # Colour for the threshold-mask overlay. Set only on plugins whose
-    # ``detect`` returns a ``"mask"`` key.
-    mask_color: QColor | None = QColor(0, 200, 220, 64)
+DetectorPlugin(
+    name: str,                                  # unique slug, shown in the menu
+    kind: "pupil" | "glint" | "limbus" | "eyelid",
+    function: Callable,                         # (image, *wired_args, **settings) -> dict | None
+    settings: list[SettingSpec] = [],           # tunables -> Qt panel
+    wired_inputs: list[str] = [],               # ["pupil_center", "pupil_radius", ...]
+    overlays: list[tuple[str, str]] = [],       # [("contour", "line"), ("center", "point")]
+    description: str = "",
+    family: str = "",
+)
 ```
 
-### Panel signals (all optional)
+`function` receives the grayscale image first, then any wired upstream
+results (positionally, in the order `wired_inputs` lists them), then
+the settings as keyword arguments. It returns the result dict — shape
+depends on `kind`; see the cheshm built-ins for examples — or `None`
+when detection fails.
 
-A panel widget can additionally expose these `pyqtSignal`s, which the
-core wires up automatically if present:
+### SettingSpec
 
-| Signal                 | Payload | What it does                                                      |
-|------------------------|---------|-------------------------------------------------------------------|
-| `roi_edit_requested`   | `bool`  | Enters / leaves canvas drag-edit mode for this target's ROI rect  |
-| `clear_roi_requested`  | none    | Drops the ROI rectangle and re-runs detection without it          |
-| `show_mask_toggled`    | `bool`  | Toggles the threshold-mask overlay visibility                     |
-| `detect_requested`     | none    | Triggers a single detection run (used by `live=False` plugins)    |
-
-If the panel surfaces an ROI button, it should also expose a
-`set_<target>_roi(roi)` method (e.g. `set_pupil_roi`) — the canvas
-calls it after the user finishes drag-editing the rectangle so the
-new value lands in the panel's params dict.
-
-### Returning a mask
-
-If your `detect` returns a `"mask"` key (a `uint8` numpy array of the
-same shape as the input image, non-zero where the mask is "on"), the
-viewer can render it as a semi-transparent fill when the user toggles
-**Show mask**. The mask must be stripped on `serialize` — it's
-transient view-only state, never persisted to JSON.
-
-### Consuming upstream results — `requires`
-
-Listing a target in `requires` guarantees `shared_results[target]` is
-non-None when `detect` runs (the orchestrator topologically sorts the
-chain). The shape matches the upstream plugin's `deserialize` output;
-the built-in `pupil` shape is documented above.
-
-Pupil can come from either an auto pupil plugin or from a manually
-fitted ellipse — your plugin doesn't need to care which.
-
-## Strict discovery
-
-Discovery is intentionally strict — at startup any of these raise
-`RuntimeError` with the offending plugin's source:
-
-- empty `name`
-- duplicate `name` across plugins
-- plugin's `target` mismatches what project settings expect
-- a directory in `EYE_ANNOTATION_PLUGIN_PATH` that doesn't exist
-- an entry-point whose value is not a `DetectorPlugin` subclass
-
-If a plugin is silently missing from the menu, list the registered
-ones with:
-
-```bash
-python -c "from eye_annotation_tool.auto_detectors import PluginManager; \
-           print(sorted(PluginManager().all()))"
+```python
+SettingSpec(
+    name: str,
+    default: Any,
+    type: str = "float",       # "int" | "float" | "bool" | "choice"
+                               # | "optional_int" | "optional_float" | "roi" | "any"
+    min: float | int | None = None,
+    max: float | int | None = None,
+    choices: list[str] = [],   # required for type="choice"
+    label: str = "",           # falls back to name title-cased
+    help: str = "",
+    hidden: bool = False,      # skip in the UI (orchestrator fills it)
+)
 ```
+
+## Minimal example
+
+```python
+# ~/.config/eye_annotation_tool/plugins/my_pupil.py
+import cv2
+from eye_annotation_tool.auto_detectors.plugin import DetectorPlugin, SettingSpec
+
+
+def detect_my_pupil(image, threshold=50):
+    _, binary = cv2.threshold(image, threshold, 255, cv2.THRESH_BINARY_INV)
+    contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    if not contours:
+        return None
+    largest = max(contours, key=cv2.contourArea)
+    m = cv2.moments(largest)
+    if m["m00"] == 0:
+        return None
+    cx = m["m10"] / m["m00"]
+    cy = m["m01"] / m["m00"]
+    (ex, ey), (w, h), angle = cv2.fitEllipse(largest) if len(largest) >= 5 else ((cx, cy), (1.0, 1.0), 0.0)
+    return {
+        "center": (cx, cy),
+        "ellipse": ((ex, ey), (w, h), angle),
+        "contour": largest,
+    }
+
+
+PLUGINS = [
+    DetectorPlugin(
+        name="MyPupil",
+        kind="pupil",
+        function=detect_my_pupil,
+        settings=[
+            SettingSpec(name="threshold", default=50, type="int", min=0, max=255, label="Pupil threshold"),
+        ],
+        overlays=[("contour", "line"), ("center", "point")],
+    ),
+]
+```
+
+Restart `eye_annotation_tool` — "MyPupil" appears in the pupil card's
+detector dropdown with a threshold slider.

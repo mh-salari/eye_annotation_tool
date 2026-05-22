@@ -1,15 +1,17 @@
-"""Detector lifecycle: wire DetectorCards to the orchestrator + persistence."""
+"""DetectorPlugin lifecycle: wire DetectorCards to the orchestrator + persistence."""
 
 from typing import TYPE_CHECKING, Any
 
 import numpy as np
-from cheshm.gui.registry import Detector, discover_detectors
 from PyQt5.QtCore import QObject, QTimer, pyqtSignal
 from PyQt5.QtWidgets import QWidget
 
+from eye_annotation_tool.auto_detectors.plugin import DetectorPlugin
+from eye_annotation_tool.auto_detectors.plugin_loader import discover_plugins
+
 from ..auto_detectors.orchestrator import DetectorOrchestrator
 from ..gui.annotation_controls import AnnotationControlPanel
-from ..gui.detector_card import MANUAL, OFF, DetectorCard
+from ..gui.detector_card import MANUAL, OFF
 from ..gui.image_viewer import ImageViewer
 from ..state import CarryRoiStore, PerEyeStateStore, ProjectStore
 from ..utils.project_settings import (
@@ -24,7 +26,7 @@ if TYPE_CHECKING:
 AUTO_DETECT_DEBOUNCE_MS = 0
 
 
-def _roi_setting_name(detector: Detector) -> str | None:
+def _roi_setting_name(detector: DetectorPlugin) -> str | None:
     """Return the name of the detector's ROI-typed setting (or ``None``)."""
     for s in detector.settings:
         if s.type == "roi":
@@ -66,8 +68,8 @@ class DetectionController(QObject):
         self.annotation_controls = annotation_controls
         self._binocular: BinocularController | None = None
 
-        self._detectors_by_kind_id: dict[tuple[str, str], Detector] = {
-            (d.kind, d.id): d for d in discover_detectors()
+        self._detectors_by_kind_id: dict[tuple[str, str], DetectorPlugin] = {
+            (d.kind, d.name): d for d in discover_plugins()
         }
 
         self._pending_run_one: tuple[str, dict] | None = None
@@ -101,7 +103,7 @@ class DetectionController(QObject):
             return None
         return card.overlay_state()
 
-    def enabled_detector(self, kind: str) -> Detector | None:
+    def enabled_detector(self, kind: str) -> DetectorPlugin | None:
         card = self.annotation_controls.card(kind)
         return card.active_detector() if card is not None else None
 
@@ -174,7 +176,7 @@ class DetectionController(QObject):
         self._refresh_auto_managed_kinds()
         self._kick_live_run_for_all_enabled()
 
-    def _restore_card_params(self, kind: str, det: Detector, params_by_slot: dict) -> None:
+    def _restore_card_params(self, kind: str, det: DetectorPlugin, params_by_slot: dict) -> None:
         active_slot = self._active_slot()
         for slot in CARRY_ROI_SLOTS:
             slot_params = params_by_slot.get(slot) if isinstance(params_by_slot, dict) else None
@@ -413,14 +415,14 @@ class DetectionController(QObject):
                         "result": _serialize_result(result),
                     }
                 if per_eye_block:
-                    out[kind] = {"id": det.id, **per_eye_block}
+                    out[kind] = {"id": det.name, **per_eye_block}
             else:
                 result = self.per_eye_state.get_result("single", kind)
                 if result is None:
                     continue
                 params = self.per_eye_state.get_params("single", kind) or {s.name: s.default for s in det.settings}
                 out[kind] = {
-                    "id": det.id,
+                    "id": det.name,
                     "params": params,
                     "result": _serialize_result(result),
                 }
@@ -493,7 +495,7 @@ class DetectionController(QObject):
     # ---------------------------------------------------------------------------
 
     def _refresh_orchestrator_enabled(self) -> None:
-        per_kind: dict[str, Detector | None] = {kind: self.enabled_detector(kind) for kind in KINDS}
+        per_kind: dict[str, DetectorPlugin | None] = {kind: self.enabled_detector(kind) for kind in KINDS}
         self.orchestrator.set_enabled_detectors(per_kind)
 
     def _refresh_auto_managed_kinds(self) -> None:

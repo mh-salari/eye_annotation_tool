@@ -5,7 +5,7 @@
 [![License](https://img.shields.io/pypi/l/eye_annotation_tool)](https://github.com/mh-salari/eye_annotation_tool/blob/main/LICENSE)
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.18723470.svg)](https://doi.org/10.5281/zenodo.18723470)
 
-A Qt-based desktop tool for annotating pupil, limbus (iris), eyelid, and glints in eye images. Supports monocular and binocular projects, auto-detector plugins for each annotation type, and per-eye carry-across-frames workflows.
+A Qt-based desktop tool for annotating pupil, limbus (iris), eyelid, and glints in eye images. Supports monocular and binocular projects, auto-detectors for each annotation type, and per-eye carry-across-frames workflows. Auto-detectors come from [cheshm](https://github.com/mh-salari/cheshm).
 
 <p align="center">
 <img src="https://raw.githubusercontent.com/mh-salari/eye_annotation_tool/main/eye_annotation_tool/resources/main_page.png" alt="EyE Annotation Tool Main Page" width="800">
@@ -15,22 +15,10 @@ A Qt-based desktop tool for annotating pupil, limbus (iris), eyelid, and glints 
 
 - Monocular and binocular projects; per-eye overrides for ROI, carry, and defaults.
 - Manual annotation of pupil ellipse, limbus ellipse, eyelid mask, and glints.
-- Auto-detector plugins per annotation type; live detection re-runs on image load and plugin swap.
-- Built-in auto-detectors backed by [`lavan`](https://github.com/mh-salari/lavan) (pupil, limbus, glint).
-- Project sessions with persistent defaults, undo, brightness/zoom controls, and review mode for revisiting an existing project.
-- Plugin system with three discovery channels (built-in, env-var directories, Python entry-points).
+- Live auto-detection that re-runs on image load and detector swap.
+- Auto-detectors are every pupil / glint / limbus detector cheshm exposes (`Simple`, `ElSe`, `ExCuSe`, `PuRe`, `PuReST`, `PupilLabs2D`, `Starburst`, `Swirski2D` for pupil; `Simple` for glint; `active_contour`, `integro_differential`, `pupil_guided` for limbus). See [cheshm's detector list](https://github.com/mh-salari/cheshm#detectors) for licences.
+- Project sessions with persistent defaults, undo, brightness/zoom controls, and review mode.
 - CLI flags for batch use: `--images`, `--review`, `--auto-detectors`.
-
-## Built-in auto-detectors
-
-| Annotation | Detector | Backend |
-|---|---|---|
-| Pupil | `pupil_labs_2d` | `lavan.pupil_detector_2d` (Pupil Labs 2D detector) |
-| Pupil | `threshold_pupil` | `lavan.detect` (threshold + ellipse fit) |
-| Limbus | `daugman_limbus` | `lavan.boundary` (Daugman integro-differential / active contour) |
-| Glint | `threshold_glint` | `lavan.detect` (threshold + shape-quality gates) |
-
-See [`auto_detectors/README.md`](eye_annotation_tool/auto_detectors/README.md) for the full plugin contract.
 
 ## Installation
 
@@ -98,25 +86,9 @@ eye_annotation_tool --auto-detectors pupil,limbus
 
 See `eye_annotation_tool --help` for the full flag list.
 
-## Adding Custom Plugins
+## Adding your own detectors
 
-Every auto-detector is a self-contained plugin that owns its algorithm,
-its Qt panel, its serialization, its overlay drawing and its colour
-palette — adding one requires **no edits to the core application**.
-Three discovery channels are scanned at startup:
-
-- **Built-in** — `eye_annotation_tool/auto_detectors/plugins/` (for
-  plugins contributed upstream).
-- **Env-var directories** — `EYE_ANNOTATION_PLUGIN_PATH`
-  (`os.pathsep`-separated) for drop-in `.py` files. Easiest path for a
-  one-off plugin: write a single file, point the env var at its
-  directory, restart the app.
-- **Python entry-points** — `[project.entry-points."eye_annotation_tool.plugins"]`
-  in any installed distribution. For pip-installable plugin packages.
-
-The full plugin authoring guide — minimal example, the `DetectorPlugin`
-contract, optional panel signals, mask + ROI rendering — lives in the
-[Plugin Development Guide](eye_annotation_tool/auto_detectors/README.md).
+To add a custom detector without modifying this project, drop a `.py` file in `~/.config/eye_annotation_tool/plugins/` (or any directory listed in the `EYE_ANNOTATION_PLUGINS` env var) that declares a module-level `PLUGINS = [DetectorPlugin(...)]` list. See [`eye_annotation_tool/auto_detectors/README.md`](eye_annotation_tool/auto_detectors/README.md) for the full plugin contract and a minimal example.
 
 ## Citing
 
@@ -134,10 +106,6 @@ If you use this software, please cite it using the following BibTeX entry:
 ```
 
 You can also click the "Cite this repository" button on the GitHub page for more citation formats.
-
-## Contributing
-
-Contributions are welcome! Please feel free to submit a Pull Request.
 
 ## License
 

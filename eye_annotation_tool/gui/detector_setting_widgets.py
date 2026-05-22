@@ -1,13 +1,12 @@
-"""Qt widget builder for cheshm ``Setting`` descriptors.
+"""Qt widget builder for ``SettingSpec`` descriptors.
 
-One widget kind per :attr:`cheshm.gui.registry.Setting.type` tag. The
-card chrome in :mod:`detector_card` consumes only :class:`SettingsBlock`.
+One widget kind per ``SettingSpec.type`` tag. The card chrome in
+:mod:`detector_card` consumes only :class:`SettingsBlock`.
 """
 
 from collections.abc import Callable
 from typing import Any
 
-from cheshm.gui.registry import Setting
 from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import (
     QAbstractSpinBox,
@@ -22,6 +21,8 @@ from PyQt5.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+
+from eye_annotation_tool.auto_detectors.plugin import SettingSpec as Setting
 
 # Integer tick resolution for float sliders. 1000 ticks keeps the
 # integer<->float round-trip lossless to 3 decimals.

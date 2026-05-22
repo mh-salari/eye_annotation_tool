@@ -97,9 +97,7 @@ class CarryRoiStore:
         """Emit ``kind``'s rows as a project-file ``carry_roi`` block."""
         return {
             "enabled": {slot: bool(self.enabled[kind][slot]) for slot in self.SLOTS},
-            "values": {
-                slot: list(value) if value is not None else None for slot, value in self.values[kind].items()
-            },
+            "values": {slot: list(value) if value is not None else None for slot, value in self.values[kind].items()},
         }
 
     # ---------------------------------------------------------------------------

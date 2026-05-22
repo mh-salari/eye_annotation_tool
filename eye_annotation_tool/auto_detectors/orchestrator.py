@@ -1,26 +1,25 @@
-"""Run cheshm detector functions in dependency order; cache results per image.
+"""Run detector plugins in dependency order; cache results per image.
 
 The orchestrator sits between the GUI side (the per-kind detector
-cards) and cheshm's detector functions:
+cards) and the plugins discovered by :mod:`.plugin_loader`:
 
-  - The controller registers one :class:`cheshm.gui.registry.Detector`
-    per kind via :meth:`set_enabled_detectors`. ``None`` means the kind
-    is not run (Off or Manual).
+  - The controller registers one :class:`.plugin.DetectorPlugin` per
+    kind via :meth:`set_enabled_detectors`. ``None`` means the kind is
+    not run (Off or Manual).
   - On image change, the caller invokes :meth:`clear_cache`.
   - :meth:`run_all` walks the enabled detectors in dependency order and
     runs each one. :meth:`run_one` re-runs a single kind reusing
     whichever upstream results are cached.
 
-Upstream wiring is implicit, matching the contract every cheshm detector
-already satisfies:
+Upstream wiring is implicit:
 
-  - Glint detectors take ``pupil_center`` and ``pupil_radius`` as
-    hidden keyword args. The orchestrator pops any user-supplied values
-    and injects the cached pupil's centre + max-axis radius.
-  - Limbus / eyelid detectors take the pupil centre (and optionally the
+  - Glint plugins take ``pupil_center`` and ``pupil_radius`` as hidden
+    keyword args. The orchestrator pops any user-supplied values and
+    injects the cached pupil's centre + max-axis radius.
+  - Limbus / eyelid plugins take the pupil centre (and optionally the
     pupil ellipse) as positional args after ``img``. The orchestrator
-    passes them positionally regardless of the parameter name cheshm
-    used in its own signature.
+    passes them positionally regardless of the parameter name in the
+    plugin's signature.
 
 Two signals carry outcomes outward:
 
@@ -32,8 +31,9 @@ Two signals carry outcomes outward:
 from collections.abc import Callable
 
 import numpy as np
-from cheshm.gui.registry import Detector
 from PyQt5.QtCore import QObject, pyqtSignal
+
+from .plugin import DetectorPlugin
 
 PostProcess = Callable[[dict], dict]
 
@@ -41,19 +41,19 @@ KINDS = ("pupil", "glint", "limbus", "eyelid")
 
 
 class DetectorOrchestrator(QObject):
-    """Dependency-aware runner + per-image result cache for cheshm detectors."""
+    """Dependency-aware runner + per-image result cache for detector plugins."""
 
     detector_ready = pyqtSignal(str, dict)
     detector_failed = pyqtSignal(str)
 
     def __init__(self, parent: QObject | None = None) -> None:
         super().__init__(parent)
-        self._enabled: dict[str, Detector | None] = dict.fromkeys(KINDS, None)
+        self._enabled: dict[str, DetectorPlugin | None] = dict.fromkeys(KINDS, None)
         self._results: dict[str, dict | None] = dict.fromkeys(KINDS, None)
 
     # ----- configuration -----
 
-    def set_enabled_detectors(self, per_kind: dict[str, Detector | None]) -> None:
+    def set_enabled_detectors(self, per_kind: dict[str, DetectorPlugin | None]) -> None:
         """Replace the active detector set; wipe the cache for kinds that changed."""
         for kind in KINDS:
             new_det = per_kind.get(kind)
@@ -61,7 +61,7 @@ class DetectorOrchestrator(QObject):
                 self._enabled[kind] = new_det
                 self._results[kind] = None
 
-    def enabled_detector(self, kind: str) -> Detector | None:
+    def enabled_detector(self, kind: str) -> DetectorPlugin | None:
         return self._enabled.get(kind)
 
     # ----- cache -----
@@ -119,7 +119,7 @@ class DetectorOrchestrator(QObject):
     def _run(
         self,
         kind: str,
-        det: Detector,
+        det: DetectorPlugin,
         image: np.ndarray,
         params: dict,
         post_process: PostProcess | None = None,
@@ -136,7 +136,7 @@ class DetectorOrchestrator(QObject):
                 return
         try:
             result = det.function(image, *wired_args, **kwargs)
-        except Exception:  # noqa: BLE001 - surface every detector failure to the status bar
+        except Exception:
             self._results[kind] = None
             self.detector_failed.emit(kind)
             return
@@ -169,14 +169,14 @@ class DetectorOrchestrator(QObject):
         kwargs["pupil_center"] = pupil["center"]
         kwargs["pupil_radius"] = max(float(w), float(h)) / 2.0
 
-    def _positional_pupil_for_limbus(self, det: Detector) -> list | None:
+    def _positional_pupil_for_limbus(self, det: DetectorPlugin) -> list | None:
         """Return the positional args limbus/eyelid detectors expect after ``img``.
 
         Every limbus detector takes the pupil centre as its 2nd
         positional, and any detector with a 3rd positional gets the
-        pupil ellipse there. The parameter names in the cheshm signature
-        (``seed_center``, ``pupil_ellipse``, etc.) are irrelevant — we
-        match by position against ``det.wired_inputs``.
+        pupil ellipse there. The parameter names in the plugin's
+        signature (``seed_center``, ``pupil_ellipse``, etc.) are
+        irrelevant — we match by position against ``det.wired_inputs``.
         """
         pupil = self._results.get("pupil")
         if not pupil:
@@ -195,7 +195,7 @@ class DetectorOrchestrator(QObject):
         return positional
 
     @staticmethod
-    def _default_params(det: Detector) -> dict:
+    def _default_params(det: DetectorPlugin) -> dict:
         return {s.name: s.default for s in det.settings}
 
     def _dependency_order(self) -> list[str]:

@@ -62,10 +62,14 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--glint", default=None, help="Detector slug ('off' / 'manual' / cheshm id) for glint (used by --new-project)."
     )
     parser.add_argument(
-        "--limbus", default=None, help="Detector slug ('off' / 'manual' / cheshm id) for limbus (used by --new-project)."
+        "--limbus",
+        default=None,
+        help="Detector slug ('off' / 'manual' / cheshm id) for limbus (used by --new-project).",
     )
     parser.add_argument(
-        "--eyelid", default=None, help="Detector slug ('off' / 'manual' / cheshm id) for eyelid (used by --new-project)."
+        "--eyelid",
+        default=None,
+        help="Detector slug ('off' / 'manual' / cheshm id) for eyelid (used by --new-project).",
     )
     parser.add_argument(
         "--autosave",
@@ -137,8 +141,7 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         invalid = chosen - VALID_AUTO_KINDS
         if invalid:
             parser.error(
-                f"unknown --auto-detectors kind(s): {sorted(invalid)} "
-                f"(choices: {sorted(VALID_AUTO_KINDS)})",
+                f"unknown --auto-detectors kind(s): {sorted(invalid)} (choices: {sorted(VALID_AUTO_KINDS)})",
             )
         args.auto_detectors = chosen
     return args

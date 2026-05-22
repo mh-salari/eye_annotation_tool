@@ -10,7 +10,6 @@ kind's manual annotation group widget instead.
 
 from typing import Any
 
-from cheshm.gui.registry import Detector
 from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtGui import QColor, QPalette
 from PyQt5.QtWidgets import (
@@ -30,6 +29,8 @@ from PyQt5.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+
+from eye_annotation_tool.auto_detectors.plugin import DetectorPlugin as Detector
 
 from .custom_widgets import MaterialButton
 from .detector_setting_widgets import SettingsBlock
@@ -325,13 +326,13 @@ class DetectorCard(QFrame):
         super().__init__(parent)
         self.kind = kind
         self._detectors = list(detectors_for_kind)
-        self._detector_by_id: dict[str, Detector] = {d.id: d for d in self._detectors}
+        self._detector_by_id: dict[str, Detector] = {d.name: d for d in self._detectors}
         self._active_id: str = OFF
         self._values: dict[str, dict[str, Any]] = {
-            d.id: {s.name: s.default for s in d.settings} for d in self._detectors
+            d.name: {s.name: s.default for s in d.settings} for d in self._detectors
         }
         self._overlay_state: dict[str, dict[str, dict[str, Any]]] = {
-            d.id: default_overlay_state(kind, d.overlays) for d in self._detectors
+            d.name: default_overlay_state(kind, d.overlays) for d in self._detectors
         }
         # Per-kind manual-annotation overlay state. Read by the canvas
         # renderer when the kind is in Manual mode so the user can pick
@@ -355,7 +356,7 @@ class DetectorCard(QFrame):
         self._combo.addItem("Off", OFF)
         self._combo.addItem("Manual", MANUAL)
         for det in self._detectors:
-            self._combo.addItem(det.id, det.id)
+            self._combo.addItem(det.name, det.name)
         self._combo.currentIndexChanged.connect(self._on_combo_changed)
         picker_row.addWidget(self._combo, 1)
         # Per-card Detect button — re-runs the active auto detector
@@ -414,13 +415,12 @@ class DetectorCard(QFrame):
         det = self.active_detector()
         if det is None:
             return None
-        return self._overlay_state[det.id]
+        return self._overlay_state[det.name]
 
     def set_selection(self, selection: str, *, emit: bool = False) -> None:
         """Select Off / Manual / detector_id without firing ``selection_changed`` unless asked."""
         index = self._combo.findData(selection)
-        if index < 0:
-            index = 0
+        index = max(index, 0)
         self._combo.blockSignals(True)
         self._combo.setCurrentIndex(index)
         self._combo.blockSignals(False)
@@ -437,17 +437,17 @@ class DetectorCard(QFrame):
         det = self.active_detector()
         if det is None or self._settings_block is None:
             return
-        self._values[det.id].update(params)
-        self._settings_block.set_values(self._values[det.id])
+        self._values[det.name].update(params)
+        self._settings_block.set_values(self._values[det.name])
 
     def set_overlay_state(self, overlay_state: dict[str, dict[str, Any]]) -> None:
         det = self.active_detector()
         if det is None:
             return
         for key, fields in overlay_state.items():
-            if key in self._overlay_state[det.id]:
-                self._overlay_state[det.id][key].update(fields)
-        self._overlay_row.populate(self._overlay_state[det.id])
+            if key in self._overlay_state[det.name]:
+                self._overlay_state[det.name][key].update(fields)
+        self._overlay_row.populate(self._overlay_state[det.name])
 
     def set_manual_host(self, widget: QWidget | None) -> None:
         """Register the widget shown when the user picks Manual."""
@@ -489,12 +489,12 @@ class DetectorCard(QFrame):
         det = self.active_detector()
         if det is None:
             return
-        self._values[det.id] = {s.name: s.default for s in det.settings}
-        self._overlay_state[det.id] = default_overlay_state(self.kind, det.overlays)
+        self._values[det.name] = {s.name: s.default for s in det.settings}
+        self._overlay_state[det.name] = default_overlay_state(self.kind, det.overlays)
         if self._settings_block is not None:
-            self._settings_block.set_values(self._values[det.id])
-        self._overlay_row.populate(self._overlay_state[det.id])
-        self.params_changed.emit(dict(self._values[det.id]))
+            self._settings_block.set_values(self._values[det.name])
+        self._overlay_row.populate(self._overlay_state[det.name])
+        self.params_changed.emit(dict(self._values[det.name]))
         self.reset_requested.emit()
 
     def _on_save_default_clicked(self) -> None:
@@ -519,15 +519,15 @@ class DetectorCard(QFrame):
         det = self.active_detector()
         if det is None:
             return
-        self._overlay_state[det.id][key][field] = value
+        self._overlay_state[det.name][key][field] = value
         self.overlay_changed.emit(key, field, value)
 
     def _on_setting_changed(self, name: str, value: Any) -> None:
         det = self.active_detector()
         if det is None:
             return
-        self._values[det.id][name] = value
-        self.params_changed.emit(dict(self._values[det.id]))
+        self._values[det.name][name] = value
+        self.params_changed.emit(dict(self._values[det.name]))
 
     # ----- ROI row re-emitters -----
 
@@ -584,10 +584,10 @@ class DetectorCard(QFrame):
         if det is None:
             return
 
-        self._overlay_row.populate(self._overlay_state[det.id])
+        self._overlay_row.populate(self._overlay_state[det.name])
         self._settings_block = SettingsBlock(
             det.settings,
-            self._values[det.id],
+            self._values[det.name],
             self._on_setting_changed,
             title="",
         )

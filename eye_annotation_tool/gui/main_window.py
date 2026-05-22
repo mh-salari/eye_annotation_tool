@@ -24,7 +24,7 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
-from cheshm.gui.registry import discover_detectors
+from eye_annotation_tool.auto_detectors.plugin_loader import discover_plugins
 
 from ..auto_detectors.orchestrator import DetectorOrchestrator
 from ..controllers.annotation_controller import AnnotationController
@@ -70,7 +70,9 @@ def _log_slider_to_factor(value: int, slider_min: int, slider_max: int, min_fact
     return math.exp(log_lo + t * (log_hi - log_lo))
 
 
-def _factor_to_log_slider(factor: float, slider_min: int, slider_max: int, min_factor: float, max_factor: float) -> int:
+def _factor_to_log_slider(
+    factor: float, slider_min: int, slider_max: int, min_factor: float, max_factor: float
+) -> int:
     """Inverse of :func:`_log_slider_to_factor`."""
     log_lo, log_hi = math.log(min_factor), math.log(max_factor)
     t = (math.log(max(min_factor, min(max_factor, factor))) - log_lo) / (log_hi - log_lo)
@@ -111,7 +113,7 @@ class MainWindow(QMainWindow):
         # Group cheshm detectors by kind so the side-panel cards have
         # the right options in their dropdowns.
         self._detectors_by_kind: dict[str, list] = {t: [] for t in KINDS}
-        for det in discover_detectors():
+        for det in discover_plugins():
             self._detectors_by_kind.setdefault(det.kind, []).append(det)
 
         self.setup_ui()
@@ -716,14 +718,21 @@ class MainWindow(QMainWindow):
 
     def _on_zoom_slider_changed(self, value: int) -> None:
         factor = _log_slider_to_factor(
-            value, _ZOOM_SLIDER_MIN, _ZOOM_SLIDER_MAX, _ZOOM_MIN_FACTOR, _ZOOM_MAX_FACTOR,
+            value,
+            _ZOOM_SLIDER_MIN,
+            _ZOOM_SLIDER_MAX,
+            _ZOOM_MIN_FACTOR,
+            _ZOOM_MAX_FACTOR,
         )
         self.image_viewer.set_zoom_factor(factor)
 
     def _sync_zoom_slider_to_viewer(self) -> None:
         slider_value = _factor_to_log_slider(
             self.image_viewer.zoom_state.factor,
-            _ZOOM_SLIDER_MIN, _ZOOM_SLIDER_MAX, _ZOOM_MIN_FACTOR, _ZOOM_MAX_FACTOR,
+            _ZOOM_SLIDER_MIN,
+            _ZOOM_SLIDER_MAX,
+            _ZOOM_MIN_FACTOR,
+            _ZOOM_MAX_FACTOR,
         )
         self.zoom_slider.blockSignals(True)
         self.zoom_slider.setValue(slider_value)
@@ -735,16 +744,21 @@ class MainWindow(QMainWindow):
 
     def _on_brightness_slider_changed(self, value: int) -> None:
         factor = _log_slider_to_factor(
-            value, _BRIGHTNESS_SLIDER_MIN, _BRIGHTNESS_SLIDER_MAX,
-            _BRIGHTNESS_MIN_FACTOR, _BRIGHTNESS_MAX_FACTOR,
+            value,
+            _BRIGHTNESS_SLIDER_MIN,
+            _BRIGHTNESS_SLIDER_MAX,
+            _BRIGHTNESS_MIN_FACTOR,
+            _BRIGHTNESS_MAX_FACTOR,
         )
         self.image_viewer.set_brightness_factor(factor)
 
     def _sync_brightness_slider_to_viewer(self) -> None:
         slider_value = _factor_to_log_slider(
             self.image_viewer.brightness.factor,
-            _BRIGHTNESS_SLIDER_MIN, _BRIGHTNESS_SLIDER_MAX,
-            _BRIGHTNESS_MIN_FACTOR, _BRIGHTNESS_MAX_FACTOR,
+            _BRIGHTNESS_SLIDER_MIN,
+            _BRIGHTNESS_SLIDER_MAX,
+            _BRIGHTNESS_MIN_FACTOR,
+            _BRIGHTNESS_MAX_FACTOR,
         )
         self.brightness_slider.blockSignals(True)
         self.brightness_slider.setValue(slider_value)

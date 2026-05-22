@@ -2,7 +2,6 @@
 
 from pathlib import Path
 
-from cheshm.gui.registry import discover_detectors
 from PyQt5.QtWidgets import (
     QButtonGroup,
     QCheckBox,
@@ -20,6 +19,8 @@ from PyQt5.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+
+from eye_annotation_tool.auto_detectors.plugin_loader import discover_plugins
 
 from ..utils.project_settings import (
     DEFAULT_ID_BY_KIND,
@@ -46,7 +47,7 @@ class NewProjectDialog(QDialog):
         self.setWindowTitle("New Project")
         self.setMinimumWidth(520)
         self._detectors_by_kind: dict[str, list] = {t: [] for t in KINDS}
-        for det in discover_detectors():
+        for det in discover_plugins():
             self._detectors_by_kind.setdefault(det.kind, []).append(det)
         self._build_ui()
 
@@ -92,7 +93,7 @@ class NewProjectDialog(QDialog):
             combo.addItem("Off", DETECTOR_OFF)
             combo.addItem("Manual", DETECTOR_MANUAL)
             for det in self._detectors_by_kind.get(kind, []):
-                combo.addItem(det.id, det.id)
+                combo.addItem(det.name, det.name)
             default_slug = DEFAULT_ID_BY_KIND[kind]
             default_idx = combo.findData(default_slug)
             if default_idx >= 0:
@@ -154,5 +155,5 @@ class NewProjectDialog(QDialog):
             slug = combo.currentData()
             block = detectors[kind]
             block["id"] = slug
-            block["params"] = {slot: None for slot in ("left", "right", "single")}
+            block["params"] = dict.fromkeys(("left", "right", "single"))
         return {"path": path, "project": project}
