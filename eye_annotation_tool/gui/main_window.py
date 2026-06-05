@@ -13,7 +13,6 @@ from PyQt5.QtWidgets import (
     QFileDialog,
     QHBoxLayout,
     QLabel,
-    QListWidget,
     QMainWindow,
     QMessageBox,
     QScrollArea,
@@ -41,6 +40,7 @@ from ..utils.project_settings import (
 from .about_dialog import show_about_dialog
 from .annotation_controls import AnnotationControlPanel
 from .custom_widgets import MaterialButton
+from .image_tree import ImageTree
 from .image_viewer import ImageViewer
 from .menu_handler import MenuHandler
 from .new_project_dialog import NewProjectDialog
@@ -159,7 +159,7 @@ class MainWindow(QMainWindow):
             self.annotation_controller,
             self.project_store,
             self.session,
-            self.image_list_widget,
+            self.image_tree,
             self.load_current_image,
             dialog_parent=self,
         )
@@ -200,6 +200,9 @@ class MainWindow(QMainWindow):
         left_layout = QVBoxLayout()
         self.load_images_button = MaterialButton("Load Images")
         self.load_folder_button = MaterialButton("Load Images from Folder")
+        self.recursive_folder_checkbox = QCheckBox("Include subfolders")
+        self.recursive_folder_checkbox.setChecked(True)
+        self.recursive_folder_checkbox.setToolTip("When loading a folder, also add images from all of its subfolders.")
         self.prev_image_button = MaterialButton("Previous Image")
         self.next_image_button = MaterialButton("Next Image")
         self.save_annotations_button = MaterialButton("Save Annotations")
@@ -208,15 +211,32 @@ class MainWindow(QMainWindow):
 
         left_layout.addWidget(self.load_images_button)
         left_layout.addWidget(self.load_folder_button)
+        left_layout.addWidget(self.recursive_folder_checkbox)
         left_layout.addWidget(self.prev_image_button)
         left_layout.addWidget(self.next_image_button)
         left_layout.addWidget(self.save_annotations_button)
         left_layout.addWidget(self.autosave_checkbox)
 
-        self.image_list_widget = QListWidget()
-        self.image_list_widget.setSelectionMode(QListWidget.ExtendedSelection)
-        left_layout.addWidget(QLabel("Loaded Images:"))
-        left_layout.addWidget(self.image_list_widget)
+        # Image list header: title plus expand-all / collapse-all controls.
+        tree_header = QHBoxLayout()
+        tree_header.setContentsMargins(0, 0, 0, 0)
+        tree_header.addWidget(QLabel("Loaded Images:"))
+        tree_header.addStretch(1)
+        self.expand_all_button = QToolButton()
+        self.expand_all_button.setIcon(qta.icon("mdi6.expand-all", color="#e0e0e0"))
+        self.expand_all_button.setAutoRaise(True)
+        self.expand_all_button.setToolTip("Expand all folders")
+        self.collapse_all_button = QToolButton()
+        self.collapse_all_button.setIcon(qta.icon("mdi6.collapse-all", color="#e0e0e0"))
+        self.collapse_all_button.setAutoRaise(True)
+        self.collapse_all_button.setToolTip("Collapse all folders")
+        tree_header.addWidget(self.expand_all_button)
+        tree_header.addWidget(self.collapse_all_button)
+        left_layout.addLayout(tree_header)
+
+        # The tree takes the stretch so it fills the panel's vertical space.
+        self.image_tree = ImageTree()
+        left_layout.addWidget(self.image_tree, 1)
 
         # Trash button below the image list: drops selected entries from the
         # project's image set (files on disk are untouched).
@@ -226,8 +246,6 @@ class MainWindow(QMainWindow):
         self.remove_images_button.setIconSize(QSize(18, 18))
         self.remove_images_button.setToolTip("Drop the selected images from the project (files on disk are kept).")
         left_layout.addWidget(self.remove_images_button)
-
-        left_layout.addStretch(1)
 
         icon_colour = "#e0e0e0"
         icon_size = QSize(20, 20)
@@ -338,8 +356,10 @@ class MainWindow(QMainWindow):
         self.next_image_button.clicked.connect(self.navigation_controller.next_image)
         self.save_annotations_button.clicked.connect(self.annotation_controller.save_annotations)
         self.remove_images_button.clicked.connect(self.remove_selected_images)
-        self.image_list_widget.itemClicked.connect(self.navigation_controller.on_image_selected)
-        self.image_list_widget.installEventFilter(self)
+        self.expand_all_button.clicked.connect(self.image_tree.expandAll)
+        self.collapse_all_button.clicked.connect(self.image_tree.collapseAll)
+        self.image_tree.image_selected.connect(self.navigation_controller.on_image_selected)
+        self.image_tree.remove_requested.connect(self.remove_images)
 
         self.annotation_controls.annotation_changed.connect(self.image_viewer.set_current_annotation)
         self.annotation_controls.fit_annotation_requested.connect(self.image_viewer.fit_annotation)
@@ -374,7 +394,7 @@ class MainWindow(QMainWindow):
         self.project_store.new(project_path, initial_project)
         self._apply_project_state()
         self.session.current_image_index = 0 if self.image_paths else -1
-        self.update_image_list()
+        self.refresh_image_tree()
         if self.image_paths:
             self.load_current_image()
 
@@ -391,7 +411,7 @@ class MainWindow(QMainWindow):
             return
         self._apply_project_state()
         self.session.current_image_index = 0 if self.image_paths else -1
-        self.update_image_list()
+        self.refresh_image_tree()
         if self.image_paths:
             self.load_current_image()
 
@@ -421,7 +441,7 @@ class MainWindow(QMainWindow):
             return
         self._apply_project_state()
         self.session.current_image_index = 0 if self.image_paths else -1
-        self.update_image_list()
+        self.refresh_image_tree()
         if self.image_paths:
             self.load_current_image()
         self._refresh_save_state_indicator()
@@ -491,15 +511,20 @@ class MainWindow(QMainWindow):
         self.project_store.add_images(valid)
         if not had_any_before:
             self.session.current_image_index = 0
-        self.update_image_list()
+        self.refresh_image_tree()
         if self.image_paths and self.session.current_image_index < 0:
             self.session.current_image_index = 0
         self.load_current_image()
 
-    def add_images_from_folder(self, folder: str) -> None:
-        """Append every supported image directly inside ``folder`` (non-recursive)."""
+    def add_images_from_folder(self, folder: str, recursive: bool = False) -> None:
+        """Append every supported image under ``folder``.
+
+        With ``recursive`` the whole subtree is walked; otherwise only the
+        files directly inside ``folder`` are added.
+        """
         suffixes = self.IMAGE_SUFFIXES
-        found = sorted(str(p) for p in Path(folder).iterdir() if p.is_file() and p.suffix.lower() in suffixes)
+        entries = Path(folder).rglob("*") if recursive else Path(folder).iterdir()
+        found = sorted(str(p) for p in entries if p.is_file() and p.suffix.lower() in suffixes)
         if not found:
             QMessageBox.warning(
                 self,
@@ -510,30 +535,28 @@ class MainWindow(QMainWindow):
         self.add_images(found)
 
     def remove_selected_images(self) -> None:
-        """Drop the currently-selected image-list rows from the project's image set.
+        """Drop the tree's currently-selected images from the project's image set."""
+        self.remove_images(self.image_tree.selected_image_paths())
 
-        Files on disk are untouched — only the project's image dict is
-        mutated. Triggered by the trash icon below the image list and by
-        the Delete / Backspace key on the list widget.
+    def remove_images(self, paths: list[str]) -> None:
+        """Drop ``paths`` from the project's image set; files on disk are untouched.
+
+        Triggered by the trash button, the Delete / Backspace key, and the
+        tree's folder / image removal context menu. Only the project's image
+        dict is mutated — the real folders and image files stay as they are.
         """
-        selected = self.image_list_widget.selectedIndexes()
-        if not selected:
+        to_remove = [p for p in paths if p in self.image_paths]
+        if not to_remove:
             return
-        paths_to_remove = [self.image_paths[idx.row()] for idx in selected if 0 <= idx.row() < len(self.image_paths)]
-        if not paths_to_remove:
-            return
-        current_path = (
-            self.image_paths[self.session.current_image_index]
-            if 0 <= self.session.current_image_index < len(self.image_paths)
-            else None
-        )
-        self.project_store.remove_images(paths_to_remove)
-        if current_path in paths_to_remove or not self.image_paths:
-            self.session.current_image_index = 0 if self.image_paths else -1
+        current_path = self._current_image_path()
+        self.project_store.remove_images(to_remove)
+        remaining = self.image_paths
+        if current_path in to_remove or not remaining:
+            self.session.current_image_index = 0 if remaining else -1
         else:
-            self.session.current_image_index = self.image_paths.index(current_path)
-        self.update_image_list()
-        if self.image_paths:
+            self.session.current_image_index = remaining.index(current_path)
+        self.refresh_image_tree()
+        if remaining:
             self.load_current_image()
         else:
             self.image_viewer.clear()
@@ -620,7 +643,7 @@ class MainWindow(QMainWindow):
         """Left-panel "Load Images from Folder" button — folder picker, appends to project."""
         folder = QFileDialog.getExistingDirectory(self, "Select Image Folder", self._default_dialog_dir())
         if folder:
-            self.add_images_from_folder(folder)
+            self.add_images_from_folder(folder, recursive=self.recursive_folder_checkbox.isChecked())
 
     # ----- CLI override session policy ---------------------------------
 
@@ -669,28 +692,16 @@ class MainWindow(QMainWindow):
         self.orchestrator.clear_cache()
         self.per_eye_state.clear_all()
 
-    def update_image_list(self) -> None:
-        """Update the image list widget with current image paths.
+    def refresh_image_tree(self) -> None:
+        """Rebuild the folder tree from the current image set and reselect the active image.
 
-        When a project file is set, display each entry as its path relative
-        to the project file's directory so files with the same basename in
-        different subdirs are distinguishable. Falls back to bare filenames
-        when the project hasn't been saved yet.
+        The tree groups the project's images by their real directories; the
+        project's stored order is the source of truth for the current-image
+        index, so only the presentation is rebuilt here.
         """
-        self.image_list_widget.clear()
-        project_root = self.project_store.project_root()
-        for image_path in self.image_paths:
-            p = Path(image_path)
-            if project_root is not None:
-                try:
-                    label = str(p.relative_to(project_root))
-                except ValueError:
-                    label = p.name
-            else:
-                label = p.name
-            self.image_list_widget.addItem(label)
-        if self.session.current_image_index >= 0:
-            self.image_list_widget.setCurrentRow(self.session.current_image_index)
+        self.image_tree.set_images(self.image_paths)
+        if 0 <= self.session.current_image_index < len(self.image_paths):
+            self.image_tree.select_path(self.image_paths[self.session.current_image_index])
 
     def load_current_image(self) -> None:
         """Load and display the current image with its annotations."""
@@ -801,20 +812,13 @@ class MainWindow(QMainWindow):
         super().moveEvent(event)
 
     def eventFilter(self, obj: QWidget, event: QEvent) -> bool:  # noqa: N802
-        """Filter events for window state changes + image-list Delete/Backspace."""
+        """Filter window state changes to restore a sensible size when un-maximised."""
         if event.type() == QEvent.WindowStateChange:
             if self.windowState() & Qt.WindowMaximized:
                 pass
             elif self.windowState() == Qt.WindowNoState:
                 # When restored from maximised, set to 75% of the current screen.
                 self.resize_to_percentage(0.75)
-        if (
-            obj is self.image_list_widget
-            and event.type() == QEvent.KeyPress
-            and event.key() in {Qt.Key_Delete, Qt.Key_Backspace}
-        ):
-            self.remove_selected_images()
-            return True
         return super().eventFilter(obj, event)
 
     def closeEvent(self, event: QCloseEvent) -> None:  # noqa: N802

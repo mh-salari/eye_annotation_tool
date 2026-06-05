@@ -83,9 +83,15 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=None,
         help=(
             "One or more folders whose images to add to the loaded project "
-            "on startup (non-recursive). Used together with --project, "
-            "--new-project, or stand-alone (creates an unsaved project)."
+            "on startup. Used together with --project, --new-project, or "
+            "stand-alone (creates an unsaved project). Add --recursive to "
+            "also include images in subfolders."
         ),
+    )
+    parser.add_argument(
+        "--recursive",
+        action="store_true",
+        help="With --folders, also add images found in subfolders (recursive walk).",
     )
     parser.add_argument(
         "--images",
@@ -265,7 +271,7 @@ def run_app() -> None:
 
     if args.folders is not None:
         for folder in args.folders:
-            main_window.add_images_from_folder(str(folder))
+            main_window.add_images_from_folder(str(folder), recursive=args.recursive)
     if args.images is not None:
         main_window.add_images([str(p) for p in args.images])
 
