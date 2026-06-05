@@ -76,7 +76,7 @@ def _factor_to_log_slider(
     """Inverse of :func:`_log_slider_to_factor`."""
     log_lo, log_hi = math.log(min_factor), math.log(max_factor)
     t = (math.log(max(min_factor, min(max_factor, factor))) - log_lo) / (log_hi - log_lo)
-    return int(round(slider_min + t * (slider_max - slider_min)))
+    return round(slider_min + t * (slider_max - slider_min))
 
 
 class MainWindow(QMainWindow):
