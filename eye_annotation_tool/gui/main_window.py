@@ -540,7 +540,7 @@ class MainWindow(QMainWindow):
 
     def remove_selected_images(self) -> None:
         """Drop the tree's currently-selected images from the project's image set."""
-        self.remove_images(self.image_tree.selected_image_paths())
+        self.remove_images(self.image_tree.selected_removal_paths())
 
     def remove_images(self, paths: list[str]) -> None:
         """Drop ``paths`` from the project's image set; files on disk are untouched.

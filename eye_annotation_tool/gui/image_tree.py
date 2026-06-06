@@ -173,6 +173,22 @@ class ImageTree(QTreeWidget):
         """Return the paths of the currently-selected image leaves (folders ignored)."""
         return [it.data(0, _PATH_ROLE) for it in self.selectedItems() if not it.data(0, _IS_DIR_ROLE)]
 
+    def selected_removal_paths(self) -> list[str]:
+        """Paths to remove for the selection: selected images plus every image under selected folders."""
+        paths: list[str] = []
+        for item in self.selectedItems():
+            if item.data(0, _IS_DIR_ROLE):
+                paths.extend(self._descendant_leaf_paths(item, recursive=True))
+            else:
+                paths.append(item.data(0, _PATH_ROLE))
+        seen: set[str] = set()
+        out: list[str] = []
+        for p in paths:
+            if p not in seen:
+                seen.add(p)
+                out.append(p)
+        return out
+
     # ---------------------------------------------------------------------------
     # Selection + removal interaction
     # ---------------------------------------------------------------------------
@@ -185,7 +201,7 @@ class ImageTree(QTreeWidget):
     def keyPressEvent(self, event: QKeyEvent) -> None:  # noqa: N802
         """Map Delete / Backspace to a removal request for the selected images."""
         if event.key() in {Qt.Key_Delete, Qt.Key_Backspace}:
-            paths = self.selected_image_paths()
+            paths = self.selected_removal_paths()
             if paths:
                 self.remove_requested.emit(paths)
                 return
