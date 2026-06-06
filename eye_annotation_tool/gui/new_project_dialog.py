@@ -30,6 +30,7 @@ from ..utils.project_settings import (
     PROJECT_FILE_SUFFIX,
     default_project,
 )
+from .combo_utils import fit_combo_to_items
 
 
 class NewProjectDialog(QDialog):
@@ -99,6 +100,7 @@ class NewProjectDialog(QDialog):
             default_idx = combo.findData(default_slug)
             if default_idx >= 0:
                 combo.setCurrentIndex(default_idx)
+            fit_combo_to_items(combo)
             self._detector_combos[kind] = combo
             detectors_form.addRow(QLabel(f"{kind.capitalize()} detector:"), combo)
         layout.addLayout(detectors_form)
