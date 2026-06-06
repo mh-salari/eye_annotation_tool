@@ -27,6 +27,7 @@ class ProjectSettingsDialog(QDialog):
     """Edit binocular mode, autosave flag, and the per-kind detector picks."""
 
     def __init__(self, project: dict, parent: QWidget | None = None) -> None:
+        """Build the Project Settings dialog for ``project``."""
         super().__init__(parent)
         self.setWindowTitle("Project Settings")
         self.setMinimumWidth(480)

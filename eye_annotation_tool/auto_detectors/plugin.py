@@ -14,9 +14,11 @@ See ``README.md`` in this folder for the authoring guide.
 
 from __future__ import annotations
 
-from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 Kind = Literal["pupil", "glint", "limbus", "eyelid"]
 

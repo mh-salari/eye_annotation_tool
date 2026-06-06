@@ -28,6 +28,9 @@ from eye_annotation_tool.auto_detectors.plugin import SettingSpec as Setting
 # integer<->float round-trip lossless to 3 decimals.
 _FLOAT_TICKS = 1000
 
+# A detector setting value, spanning every ``SettingSpec.type`` tag.
+SettingValue = int | float | str | bool | tuple | None
+
 
 # ---------------------------------------------------------------------------
 # Bound widgets: each owns its setting and reports changes through ``on_change``
@@ -37,7 +40,7 @@ _FLOAT_TICKS = 1000
 class _BoundWidget(QWidget):
     """Base for every setting widget. Exposes ``current_value`` / ``set_value``."""
 
-    def __init__(self, setting: Setting, value: Any, on_change: Callable[[str, Any], None]) -> None:
+    def __init__(self, setting: Setting, _value: SettingValue, on_change: Callable[[str, Any], None]) -> None:
         super().__init__()
         self._setting = setting
         self._on_change = on_change
@@ -48,10 +51,10 @@ class _BoundWidget(QWidget):
     def setting_name(self) -> str:
         return self._setting.name
 
-    def current_value(self) -> Any:
+    def current_value(self) -> SettingValue:
         raise NotImplementedError
 
-    def set_value(self, value: Any) -> None:
+    def set_value(self, value: SettingValue) -> None:
         raise NotImplementedError
 
 
@@ -75,7 +78,7 @@ def _float_bounds(setting: Setting, default: float) -> tuple[float, float]:
 class _IntSliderRow(_BoundWidget):
     """Slider + spinbox row for an ``int`` setting."""
 
-    def __init__(self, setting: Setting, value: Any, on_change: Callable[[str, Any], None]) -> None:
+    def __init__(self, setting: Setting, value: SettingValue, on_change: Callable[[str, Any], None]) -> None:
         super().__init__(setting, value, on_change)
         lo, hi = _int_bounds(setting, value if value is not None else 0)
         row = QHBoxLayout()
@@ -99,7 +102,7 @@ class _IntSliderRow(_BoundWidget):
     def current_value(self) -> int:
         return int(self._slider.value())
 
-    def set_value(self, value: Any) -> None:
+    def set_value(self, value: SettingValue) -> None:
         v = int(value)
         self._slider.blockSignals(True)
         self._spin.blockSignals(True)
@@ -112,7 +115,7 @@ class _IntSliderRow(_BoundWidget):
 class _FloatSliderRow(_BoundWidget):
     """Slider + double-spinbox row for a ``float`` setting."""
 
-    def __init__(self, setting: Setting, value: Any, on_change: Callable[[str, Any], None]) -> None:
+    def __init__(self, setting: Setting, value: SettingValue, on_change: Callable[[str, Any], None]) -> None:
         super().__init__(setting, value, on_change)
         self._lo, self._hi = _float_bounds(setting, value if value is not None else 0.0)
         row = QHBoxLayout()
@@ -166,14 +169,14 @@ class _FloatSliderRow(_BoundWidget):
     def current_value(self) -> float:
         return float(self._spin.value())
 
-    def set_value(self, value: Any) -> None:
+    def set_value(self, value: SettingValue) -> None:
         self._set_from_value(float(value))
 
 
 class _BoolCheckbox(_BoundWidget):
     """Single checkbox for a ``bool`` setting."""
 
-    def __init__(self, setting: Setting, value: Any, on_change: Callable[[str, Any], None]) -> None:
+    def __init__(self, setting: Setting, value: SettingValue, on_change: Callable[[str, Any], None]) -> None:
         super().__init__(setting, value, on_change)
         row = QHBoxLayout()
         row.setContentsMargins(0, 0, 0, 0)
@@ -187,7 +190,7 @@ class _BoolCheckbox(_BoundWidget):
     def current_value(self) -> bool:
         return bool(self._check.isChecked())
 
-    def set_value(self, value: Any) -> None:
+    def set_value(self, value: SettingValue) -> None:
         self._check.blockSignals(True)
         self._check.setChecked(bool(value))
         self._check.blockSignals(False)
@@ -196,7 +199,7 @@ class _BoolCheckbox(_BoundWidget):
 class _ChoiceCombo(_BoundWidget):
     """Combo box for a ``Literal[...]`` setting."""
 
-    def __init__(self, setting: Setting, value: Any, on_change: Callable[[str, Any], None]) -> None:
+    def __init__(self, setting: Setting, value: SettingValue, on_change: Callable[[str, Any], None]) -> None:
         super().__init__(setting, value, on_change)
         row = QHBoxLayout()
         row.setContentsMargins(0, 0, 0, 0)
@@ -213,7 +216,7 @@ class _ChoiceCombo(_BoundWidget):
     def current_value(self) -> str:
         return self._combo.currentText()
 
-    def set_value(self, value: Any) -> None:
+    def set_value(self, value: SettingValue) -> None:
         idx = self._combo.findText(str(value))
         if idx < 0:
             return
@@ -225,7 +228,7 @@ class _ChoiceCombo(_BoundWidget):
 class _OptionalInt(_BoundWidget):
     """Enable checkbox + integer slider; emits ``None`` when disabled."""
 
-    def __init__(self, setting: Setting, value: Any, on_change: Callable[[str, Any], None]) -> None:
+    def __init__(self, setting: Setting, value: SettingValue, on_change: Callable[[str, Any], None]) -> None:
         super().__init__(setting, value, on_change)
         lo, hi = _int_bounds(setting, int(value) if value is not None else 0)
         enabled = value is not None
@@ -264,7 +267,7 @@ class _OptionalInt(_BoundWidget):
     def current_value(self) -> int | None:
         return int(self._slider.value()) if self._check.isChecked() else None
 
-    def set_value(self, value: Any) -> None:
+    def set_value(self, value: SettingValue) -> None:
         for w in (self._check, self._slider, self._spin):
             w.blockSignals(True)
         try:
@@ -282,7 +285,7 @@ class _OptionalInt(_BoundWidget):
 class _OptionalFloat(_BoundWidget):
     """Enable checkbox + float slider; emits ``None`` when disabled."""
 
-    def __init__(self, setting: Setting, value: Any, on_change: Callable[[str, Any], None]) -> None:
+    def __init__(self, setting: Setting, value: SettingValue, on_change: Callable[[str, Any], None]) -> None:
         super().__init__(setting, value, on_change)
         self._lo, self._hi = _float_bounds(setting, float(value) if value is not None else 0.0)
         enabled = value is not None
@@ -350,7 +353,7 @@ class _OptionalFloat(_BoundWidget):
     def current_value(self) -> float | None:
         return float(self._spin.value()) if self._check.isChecked() else None
 
-    def set_value(self, value: Any) -> None:
+    def set_value(self, value: SettingValue) -> None:
         for w in (self._check, self._slider, self._spin):
             w.blockSignals(True)
         try:
@@ -367,7 +370,7 @@ class _OptionalFloat(_BoundWidget):
 class _RoiSpinboxRow(_BoundWidget):
     """Four-spinbox row for an ``(x, y, w, h)`` ROI tuple. ``None`` means whole image."""
 
-    def __init__(self, setting: Setting, value: Any, on_change: Callable[[str, Any], None]) -> None:
+    def __init__(self, setting: Setting, value: SettingValue, on_change: Callable[[str, Any], None]) -> None:
         super().__init__(setting, value, on_change)
         outer = QVBoxLayout()
         outer.setContentsMargins(0, 0, 0, 0)
@@ -396,7 +399,7 @@ class _RoiSpinboxRow(_BoundWidget):
         values = tuple(int(s.value()) for s in self._spins)
         return values if any(values) else None
 
-    def set_value(self, value: Any) -> None:
+    def set_value(self, value: SettingValue) -> None:
         coords = tuple(value) if isinstance(value, (list, tuple)) and len(value) == 4 else (0, 0, 0, 0)
         for spin, v in zip(self._spins, coords, strict=True):
             spin.blockSignals(True)
@@ -438,6 +441,7 @@ class SettingsBlock(QGroupBox):
         title: str = "",
         parent: QWidget | None = None,
     ) -> None:
+        """Build one widget per visible setting of the detector."""
         super().__init__(title, parent)
         self._on_change = on_change
         self._widgets: dict[str, _BoundWidget] = {}
@@ -459,9 +463,11 @@ class SettingsBlock(QGroupBox):
         self.setLayout(layout)
 
     def current_values(self) -> dict[str, Any]:
+        """Return the current value of every setting, including hidden ones."""
         return {**self._hidden, **{name: widget.current_value() for name, widget in self._widgets.items()}}
 
     def set_values(self, values: dict[str, Any]) -> None:
+        """Push ``values`` into the matching widgets and hidden settings."""
         for name, value in values.items():
             if name in self._hidden:
                 self._hidden[name] = value

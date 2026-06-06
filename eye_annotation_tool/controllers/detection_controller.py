@@ -1,6 +1,6 @@
 """DetectorPlugin lifecycle: wire DetectorCards to the orchestrator + persistence."""
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 import numpy as np
 from PyQt5.QtCore import QObject, QTimer, pyqtSignal
@@ -59,6 +59,7 @@ class DetectionController(QObject):
         annotation_controls: AnnotationControlPanel,
         parent: QObject | None = None,
     ) -> None:
+        """Wire the detector cards, orchestrator, and per-eye stores together."""
         super().__init__(parent)
         self.orchestrator = orchestrator
         self.per_eye_state = per_eye_state
@@ -85,10 +86,12 @@ class DetectionController(QObject):
         self._wire_card_signals()
 
     def bind_binocular_controller(self, binocular_controller: "BinocularController") -> None:
+        """Store the binocular controller used for active-eye queries."""
         self._binocular = binocular_controller
 
     @property
     def binocular(self) -> "BinocularController":
+        """Return the bound binocular controller, raising if unbound."""
         if self._binocular is None:
             raise RuntimeError("DetectionController.bind_binocular_controller was not called")
         return self._binocular
@@ -105,13 +108,16 @@ class DetectionController(QObject):
         return card.overlay_state()
 
     def enabled_detector(self, kind: str) -> DetectorPlugin | None:
+        """Return the active detector for ``kind``, or ``None``."""
         card = self.annotation_controls.card(kind)
         return card.active_detector() if card is not None else None
 
     def panel_for_kind(self, kind: str) -> QWidget | None:
+        """Return the detector card widget for ``kind``."""
         return self.annotation_controls.card(kind)
 
     def detector_default_params(self, kind: str) -> dict:
+        """Return the default param values for ``kind``'s active detector."""
         det = self.enabled_detector(kind)
         if det is None:
             return {}
@@ -244,7 +250,7 @@ class DetectionController(QObject):
         self.project_store.persist()
         self.status_message.emit(f"{kind.capitalize()} defaults saved.", 3000)
 
-    def _on_overlay_changed(self, _key: str, _field: str, _value: Any) -> None:
+    def _on_overlay_changed(self, _key: str, _field: str, _value: object) -> None:
         # The card already mutated its overlay state before emitting;
         # the canvas reads through the same lookup, so a repaint is enough.
         self.image_viewer.update_image()
@@ -529,7 +535,7 @@ class DetectionController(QObject):
             card = self.annotation_controls.card(kind)
             if card is None:
                 continue
-            if card.active_id() not in (OFF, MANUAL):
+            if card.active_id() not in {OFF, MANUAL}:
                 auto_kinds.add(kind)
         self.image_viewer.set_auto_managed_targets(auto_kinds)
 
@@ -567,14 +573,12 @@ class DetectionController(QObject):
 # ---------------------------------------------------------------------------
 
 
-def _serialize_result(result: object):
+def _serialize_result(result: object) -> object:
     """Recursively convert numpy / tuples / contours into JSON-friendly types.
 
     Mask arrays (any 2-D uint8 ndarray) are dropped — they are transient
     visualisation data and should not bloat the per-image annotation.
     """
-    import numpy as np
-
     if isinstance(result, dict):
         out: dict = {}
         for k, v in result.items():

@@ -12,7 +12,7 @@ from ..state import EyeDataStore, OverlayStore, TargetRoiStore, UndoStack
 from ..state.eye_data_store import FIELDS_BY_ANNOTATION
 from ..utils.image_processing import find_closest_point, fit_ellipse
 from .brightness_controller import BrightnessController
-from .canvas_renderer import AnnotationColors, CanvasGeometry, CanvasRenderer
+from .canvas_renderer import AnnotationColors, CanvasGeometry, CanvasRenderer, OverlayStateLookup
 from .mouse_drag_state import MouseDragState
 from .zoom_controller import ZoomController
 
@@ -684,7 +684,7 @@ class ImageViewer(QWidget):
 
     # ----- Auto Detect overlays -----
 
-    def set_overlay_state_lookup(self, lookup) -> None:  # type: ignore[no-untyped-def]
+    def set_overlay_state_lookup(self, lookup: OverlayStateLookup) -> None:
         """Wire the callable that maps a kind slug to its DetectorCard overlay state."""
         self._overlay_state_lookup = lookup
         self.renderer.overlay_state_lookup = lookup

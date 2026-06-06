@@ -43,6 +43,7 @@ class NewProjectDialog(QDialog):
     """
 
     def __init__(self, parent: QWidget | None = None) -> None:
+        """Build the New Project dialog and discover available detectors."""
         super().__init__(parent)
         self.setWindowTitle("New Project")
         self.setMinimumWidth(520)
@@ -144,6 +145,7 @@ class NewProjectDialog(QDialog):
         self.accept()
 
     def result_payload(self) -> dict:
+        """Return the ``{path, project}`` payload from the dialog's inputs."""
         path = self._path_edit.text().strip()
         if path and not path.endswith(PROJECT_FILE_SUFFIX):
             path += PROJECT_FILE_SUFFIX

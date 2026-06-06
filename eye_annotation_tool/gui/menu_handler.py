@@ -16,9 +16,11 @@ class MenuHandler:
     """Build the File and Help menus on the main window's menu bar."""
 
     def __init__(self, main_window: "MainWindow") -> None:
+        """Store the main window the menus attach to."""
         self.main_window = main_window
 
     def setup_menu(self) -> None:
+        """Build the File and Help menus on the menu bar."""
         menubar = self.main_window.menuBar()
         self._add_file_menu(menubar.addMenu("File"))
         self._add_help_menu(menubar.addMenu("Help"))

@@ -35,6 +35,9 @@ from eye_annotation_tool.auto_detectors.plugin import DetectorPlugin as Detector
 from .custom_widgets import MaterialButton
 from .detector_setting_widgets import SettingsBlock
 
+# A detector setting value, spanning every ``SettingSpec.type`` tag.
+SettingValue = int | float | str | bool | tuple | None
+
 _TYPE_DEFAULT_ALPHA = {"line": 1.0, "point": 1.0, "fill": 0.5}
 _TYPE_DEFAULT_THICKNESS = {"line": 1, "point": 1, "fill": 0}
 _TYPE_DEFAULT_SHOW = {"line": True, "point": True, "fill": False}
@@ -225,7 +228,7 @@ class OverlayRow(QWidget):
         alpha.valueChanged.connect(lambda v, k=key: self.overlay_changed.emit(k, "alpha", float(v) / 100.0))
         row.addWidget(alpha)
         elem_type = entry.get("type", "line")
-        if elem_type in ("line", "point"):
+        if elem_type in {"line", "point"}:
             thickness = QSpinBox()
             thickness.setRange(1, 20)
             thickness.setValue(int(entry["thickness"]))
@@ -323,6 +326,7 @@ class DetectorCard(QFrame):
         detectors_for_kind: list[Detector],
         parent: QWidget | None = None,
     ) -> None:
+        """Build the card UI for ``kind`` from its available detectors."""
         super().__init__(parent)
         self.kind = kind
         self._detectors = list(detectors_for_kind)
@@ -389,15 +393,19 @@ class DetectorCard(QFrame):
     # ----- public API -----
 
     def detectors(self) -> list[Detector]:
+        """Return the detectors available for this card's kind."""
         return list(self._detectors)
 
     def active_id(self) -> str:
+        """Return the active selection slug (Off / Manual / detector id)."""
         return self._active_id
 
     def active_detector(self) -> Detector | None:
+        """Return the active detector, or ``None`` when off/manual."""
         return self._detector_by_id.get(self._active_id)
 
     def current_params(self) -> dict[str, Any]:
+        """Return the active detector's current setting values."""
         if self._settings_block is None:
             return {}
         return self._settings_block.current_values()
@@ -441,6 +449,7 @@ class DetectorCard(QFrame):
         self._settings_block.set_values(self._values[det.name])
 
     def set_overlay_state(self, overlay_state: dict[str, dict[str, Any]]) -> None:
+        """Merge ``overlay_state`` into the active detector's overlay state."""
         det = self.active_detector()
         if det is None:
             return
@@ -461,12 +470,14 @@ class DetectorCard(QFrame):
         return host
 
     def set_carry_state(self, carry_enabled: bool, override_available: bool) -> None:
+        """Update the ROI row's Carry checkbox and Override button state."""
         if self._roi_row is None:
             return
         self._roi_row.set_carry_enabled(carry_enabled)
         self._roi_row.set_override_enabled(override_available)
 
     def set_roi_button_checked(self, checked: bool) -> None:
+        """Set the ROI edit button's checked state."""
         if self._roi_row is not None:
             self._roi_row.set_roi_button_checked(checked)
 
@@ -522,7 +533,7 @@ class DetectorCard(QFrame):
         self._overlay_state[det.name][key][field] = value
         self.overlay_changed.emit(key, field, value)
 
-    def _on_setting_changed(self, name: str, value: Any) -> None:
+    def _on_setting_changed(self, name: str, value: SettingValue) -> None:
         det = self.active_detector()
         if det is None:
             return

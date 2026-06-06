@@ -47,6 +47,7 @@ class DetectorOrchestrator(QObject):
     detector_failed = pyqtSignal(str)
 
     def __init__(self, parent: QObject | None = None) -> None:
+        """Set up empty per-kind detector and result tables."""
         super().__init__(parent)
         self._enabled: dict[str, DetectorPlugin | None] = dict.fromkeys(KINDS, None)
         self._results: dict[str, dict | None] = dict.fromkeys(KINDS, None)
@@ -62,19 +63,23 @@ class DetectorOrchestrator(QObject):
                 self._results[kind] = None
 
     def enabled_detector(self, kind: str) -> DetectorPlugin | None:
+        """Return the detector enabled for ``kind``, or ``None``."""
         return self._enabled.get(kind)
 
     # ----- cache -----
 
     def cached_result(self, kind: str) -> dict | None:
+        """Return the cached result for ``kind``, or ``None``."""
         return self._results.get(kind)
 
     def set_cached_result(self, kind: str, result: dict | None) -> None:
+        """Store ``result`` as the cached result for ``kind``."""
         if kind not in self._results:
             raise ValueError(f"unknown kind {kind!r}")
         self._results[kind] = result
 
     def clear_cache(self) -> None:
+        """Drop every cached detection result."""
         for kind in KINDS:
             self._results[kind] = None
 
@@ -128,7 +133,7 @@ class DetectorOrchestrator(QObject):
         wired_args: list = []
         if det.kind == "glint":
             self._inject_pupil_kwargs_for_glint(kwargs)
-        elif det.kind in ("limbus", "eyelid"):
+        elif det.kind in {"limbus", "eyelid"}:
             wired_args = self._positional_pupil_for_limbus(det)
             if wired_args is None:
                 self._results[kind] = None

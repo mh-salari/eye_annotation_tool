@@ -565,7 +565,7 @@ class CanvasRenderer:
         if not overlay_state:
             return self.colors.fallback_roi
         for entry in overlay_state.values():
-            if entry.get("type") in ("line", "point"):
+            if entry.get("type") in {"line", "point"}:
                 return QColor(entry["color"])
         return self.colors.fallback_roi
 

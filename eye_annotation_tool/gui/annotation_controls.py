@@ -49,12 +49,14 @@ class AnnotationControlPanel(QWidget):
         detectors_by_kind: dict[str, list[Detector]],
         parent: QWidget | None = None,
     ) -> None:
+        """Build the panel from the per-kind detector lists."""
         super().__init__(parent)
         self.setFixedWidth(360)
         self._detectors_by_kind = detectors_by_kind
         self.setup_ui()
 
     def setup_ui(self) -> None:
+        """Build the eye selector, per-kind cards, and Clear All button."""
         layout = QVBoxLayout()
 
         self.eye_selector = EyeSelector()
@@ -115,12 +117,16 @@ class AnnotationControlPanel(QWidget):
     # ----- accessors used by the controllers + main window -----
 
     def card(self, kind: str) -> DetectorCard | None:
+        """Return the detector card for ``kind``, or ``None``."""
         return self.cards.get(kind)
 
-    def manual_annotation_for_kind(self, kind: str) -> str | None:
+    @staticmethod
+    def manual_annotation_for_kind(kind: str) -> str | None:
+        """Return the manual annotation slug for ``kind``, or ``None``."""
         return _MANUAL_ANNOTATION_BY_KIND.get(kind)
 
     def manual_group_for_kind(self, kind: str) -> AnnotationGroup | None:
+        """Return the manual annotation group widget for ``kind``."""
         return self._manual_group_by_kind.get(kind)
 
     def set_current_annotation(self, annotation_type: str) -> None:
@@ -145,13 +151,17 @@ class AnnotationControlPanel(QWidget):
         return "glint"
 
     def get_current_eye(self) -> str:
+        """Return the currently selected eye."""
         return self.eye_selector.get_current_eye()
 
     def set_current_eye(self, eye: str) -> None:
+        """Select ``eye`` in the eye selector."""
         self.eye_selector.set_current_eye(eye)
 
     def is_binocular(self) -> bool:
+        """Return whether binocular mode is active."""
         return self.eye_selector.is_binocular()
 
     def set_binocular(self, enabled: bool) -> None:
+        """Toggle binocular mode."""
         self.eye_selector.set_binocular(enabled)
