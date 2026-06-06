@@ -26,6 +26,7 @@ dependencies = [
     "pyqtdarktheme>=2.1",
     "scipy>=1.7.0",
     "cheshm>=2.0.0",
+    "darkdetect>=0.7.1",
 ]
 
 [project.urls]
