@@ -32,7 +32,7 @@ from ..controllers.binocular_controller import BinocularController
 from ..controllers.detection_controller import DetectionController
 from ..controllers.navigation_controller import NavigationController
 from ..policy import CliOverridePolicy
-from ..state import CarryRoiStore, PerEyeStateStore, ProjectStore, SessionState
+from ..state import CarryRoiStore, PerEyeStateStore, ProjectStore, SessionState, recent_projects
 from ..utils.project_settings import (
     KINDS,
     PROJECT_FILE_SUFFIX,
@@ -398,6 +398,7 @@ class MainWindow(QMainWindow):
         and becomes the active session project.
         """
         self.project_store.new(project_path, initial_project)
+        recent_projects.add(project_path)
         self._apply_project_state()
         self.session.current_image_index = 0 if self.image_paths else -1
         self.refresh_image_tree()
@@ -415,6 +416,7 @@ class MainWindow(QMainWindow):
                 f"{exc} Pick another project file or start a new project.",
             )
             return
+        recent_projects.add(project_path)
         self._apply_project_state()
         self.session.current_image_index = 0 if self.image_paths else -1
         self.refresh_image_tree()

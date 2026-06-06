@@ -4,12 +4,26 @@ import argparse
 import sys
 from pathlib import Path
 
+import qtawesome as qta
+from PyQt5.QtCore import pyqtSignal
 from PyQt5.QtGui import QIcon
-from PyQt5.QtWidgets import QApplication, QDialog, QDialogButtonBox, QHBoxLayout, QLabel, QPushButton, QVBoxLayout
+from PyQt5.QtWidgets import (
+    QApplication,
+    QDialog,
+    QDialogButtonBox,
+    QHBoxLayout,
+    QLabel,
+    QPushButton,
+    QToolButton,
+    QVBoxLayout,
+    QWidget,
+)
 
 from .gui import MainWindow
+from .gui.dialogs import confirm
 from .gui.new_project_dialog import NewProjectDialog
 from .gui.theme import apply_theme
+from .state import recent_projects
 from .utils.project_settings import (
     DEFAULT_ID_BY_KIND,
     DETECTOR_OFF,
@@ -153,20 +167,56 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     return args
 
 
+class _RecentProjectRow(QWidget):
+    """One recent-project row: an open button plus a remove (x) button."""
+
+    open_requested = pyqtSignal(str)
+    remove_requested = pyqtSignal(str)
+
+    def __init__(self, project_path: str, exists: bool, parent: QWidget | None = None) -> None:
+        """Build the row; greyed out and non-openable when ``exists`` is False."""
+        super().__init__(parent)
+        self._path = project_path
+        tooltip = project_path if exists else f"{project_path}\n(project file not found)"
+        self.setToolTip(tooltip)
+        name = Path(project_path).name
+        name = name.removesuffix(PROJECT_FILE_SUFFIX)
+        row = QHBoxLayout(self)
+        row.setContentsMargins(0, 0, 0, 0)
+        open_button = QPushButton(name)
+        open_button.setStyleSheet(
+            "QPushButton { background: transparent; border: none; text-align: left; padding: 4px 6px; }"
+            "QPushButton:hover { background: rgba(255, 255, 255, 0.08); }"
+            "QPushButton:disabled { color: #777777; }"
+        )
+        open_button.setToolTip(tooltip)
+        open_button.setEnabled(exists)
+        open_button.clicked.connect(lambda: self.open_requested.emit(self._path))
+        remove_button = QToolButton()
+        remove_button.setIcon(qta.icon("mdi6.close", color="#cccccc"))
+        remove_button.setAutoRaise(True)
+        remove_button.setToolTip("Remove from the recent list (the project file is kept)")
+        remove_button.clicked.connect(lambda: self.remove_requested.emit(self._path))
+        row.addWidget(open_button, 1)
+        row.addWidget(remove_button)
+
+
 class StartupChooserDialog(QDialog):
-    """Modal: New Project / Open Project shown when the GUI launches with no CLI hints."""
+    """Modal: recent projects + New / Open, shown when the GUI launches with no CLI hints."""
 
     NEW = "new"
     OPEN = "open"
+    OPEN_RECENT = "open_recent"
 
     def __init__(self) -> None:
-        """Lay out the chooser with New / Open / Cancel buttons."""
+        """Lay out recent projects, the New / Open buttons, and Cancel."""
         super().__init__()
         self.setWindowTitle("EyE Annotation Tool")
-        self.setMinimumWidth(360)
+        self.setMinimumWidth(420)
         self._choice: str | None = None
+        self._selected_path: str | None = None
         layout = QVBoxLayout(self)
-        layout.addWidget(QLabel("Start a new project or open an existing one."))
+
         button_row = QHBoxLayout()
         new_button = QPushButton("New Project…")
         new_button.clicked.connect(self._on_new)
@@ -175,9 +225,47 @@ class StartupChooserDialog(QDialog):
         button_row.addWidget(new_button)
         button_row.addWidget(open_button)
         layout.addLayout(button_row)
+
+        layout.addSpacing(12)
+
+        self._recent_label = QLabel("Recent projects:")
+        self._recent_host = QWidget()
+        self._recent_layout = QVBoxLayout(self._recent_host)
+        self._recent_layout.setContentsMargins(0, 0, 0, 0)
+        layout.addWidget(self._recent_label)
+        layout.addWidget(self._recent_host)
+        self._rebuild_recent()
+
         bbox = QDialogButtonBox(QDialogButtonBox.Cancel)
         bbox.rejected.connect(self.reject)
         layout.addWidget(bbox)
+
+    def _rebuild_recent(self) -> None:
+        """Repopulate the recent-project rows from disk; hide the section when empty."""
+        while self._recent_layout.count():
+            widget = self._recent_layout.takeAt(0).widget()
+            if widget is not None:
+                widget.deleteLater()
+        paths = recent_projects.load()
+        for path in paths:
+            row = _RecentProjectRow(path, Path(path).exists())
+            row.open_requested.connect(self._on_open_recent)
+            row.remove_requested.connect(self._on_remove_recent)
+            self._recent_layout.addWidget(row)
+        self._recent_label.setVisible(bool(paths))
+        self._recent_host.setVisible(bool(paths))
+
+    def _on_open_recent(self, path: str) -> None:
+        self._choice = self.OPEN_RECENT
+        self._selected_path = path
+        self.accept()
+
+    def _on_remove_recent(self, path: str) -> None:
+        if confirm(
+            self, "Remove from recent", "Remove this project from the recent list?\nThe project file is not deleted."
+        ):
+            recent_projects.remove(path)
+            self._rebuild_recent()
 
     def _on_new(self) -> None:
         self._choice = self.NEW
@@ -189,8 +277,13 @@ class StartupChooserDialog(QDialog):
 
     @property
     def choice(self) -> str | None:
-        """Selected mode (``NEW`` / ``OPEN``), or ``None`` if the dialog was cancelled."""
+        """Selected mode (``NEW`` / ``OPEN`` / ``OPEN_RECENT``), or ``None`` if cancelled."""
         return self._choice
+
+    @property
+    def selected_path(self) -> str | None:
+        """The recent project path chosen, when :attr:`choice` is ``OPEN_RECENT``."""
+        return self._selected_path
 
 
 def _resolve_new_project_detectors(args: argparse.Namespace) -> dict:
@@ -230,6 +323,8 @@ def _run_startup_chooser(main_window: "MainWindow") -> None:
                 main_window.new_project(payload["path"], payload["project"])
         elif chooser.choice == StartupChooserDialog.OPEN:
             main_window.on_open_project()
+        elif chooser.choice == StartupChooserDialog.OPEN_RECENT and chooser.selected_path is not None:
+            main_window.open_project(chooser.selected_path)
 
 
 def run_app() -> None:
