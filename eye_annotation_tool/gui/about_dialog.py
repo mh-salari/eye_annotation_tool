@@ -13,6 +13,8 @@ from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QPixmap
 from PyQt5.QtWidgets import QLabel, QMessageBox, QVBoxLayout, QWidget
 
+from .theme import theme
+
 
 def get_version_from_setup() -> str:
     """Read the application version literal from ``setup.py``."""
@@ -33,11 +35,11 @@ def show_about_dialog(parent: QWidget) -> None:
         "<p>A tool to annotate eye images for pupil, limbus and eyelid detection.</p>"
         "<p>Developed by "
         "<a href='https://mh-salari.ir/'"
-        "style='color: #8b7aa2;'>Mohammadhossein Salari</a></p>"
+        f"style='color: {theme.color('link')};'>Mohammadhossein Salari</a></p>"
         f"<p>Current version: {get_version_from_setup()}</p>"
         "<p>To get the latest version of Eye Annotation Tool, visit<br>"
         "<a href='https://github.com/mh-salari/eye_annotation_tool' "
-        "style='color: #8b7aa2;' target='_blank' rel='noopener noreferrer'>"
+        f"style='color: {theme.color('link')};' target='_blank' rel='noopener noreferrer'>"
         "github.com/mh-salari/eye_annotation_tool</a></p>"
         "<p>This project has received funding from the European Union's Horizon "
         "Europe research and innovation funding program under grant "

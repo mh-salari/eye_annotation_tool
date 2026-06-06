@@ -48,6 +48,7 @@ from .menu_handler import MenuHandler
 from .new_project_dialog import NewProjectDialog
 from .project_settings_dialog import ProjectSettingsDialog
 from .shortcut_handler import ShortcutHandler
+from .theme import theme
 
 # Slider ticks map onto the zoom / brightness controller's clamp range via a
 # log scale (multiplicative feel — equal slider steps multiply the factor).
@@ -239,11 +240,11 @@ class MainWindow(QMainWindow):
         tree_header.addWidget(QLabel("Loaded Images:"))
         tree_header.addStretch(1)
         self.expand_all_button = QToolButton()
-        self.expand_all_button.setIcon(qta.icon("mdi6.expand-all", color="#e0e0e0"))
+        self.expand_all_button.setIcon(qta.icon("mdi6.expand-all", color=theme.color("icon")))
         self.expand_all_button.setAutoRaise(True)
         self.expand_all_button.setToolTip("Expand all folders")
         self.collapse_all_button = QToolButton()
-        self.collapse_all_button.setIcon(qta.icon("mdi6.collapse-all", color="#e0e0e0"))
+        self.collapse_all_button.setIcon(qta.icon("mdi6.collapse-all", color=theme.color("icon")))
         self.collapse_all_button.setAutoRaise(True)
         self.collapse_all_button.setToolTip("Collapse all folders")
         tree_header.addWidget(self.expand_all_button)
@@ -254,7 +255,7 @@ class MainWindow(QMainWindow):
         self.image_tree = ImageTree()
         left_layout.addWidget(self.image_tree, 1)
 
-        icon_colour = "#e0e0e0"
+        icon_colour = theme.color("icon")
         icon_size = QSize(20, 20)
 
         zoom_row = QHBoxLayout()
@@ -366,6 +367,7 @@ class MainWindow(QMainWindow):
         self.collapse_all_button.clicked.connect(self.image_tree.collapseAll)
         self.image_tree.image_selected.connect(self.navigation_controller.on_image_selected)
         self.image_tree.remove_requested.connect(self.remove_images)
+        theme.changed.connect(self._apply_theme_chrome)
 
         self.annotation_controls.annotation_changed.connect(self.image_viewer.set_current_annotation)
         self.annotation_controls.fit_annotation_requested.connect(self.image_viewer.fit_annotation)
@@ -735,6 +737,14 @@ class MainWindow(QMainWindow):
         """Persist the autosave toggle in project settings."""
         self.project_store.autosave = enabled
         self._refresh_save_state_indicator()
+
+    def _apply_theme_chrome(self) -> None:
+        """Re-colour the toolbar icons for the active theme (live theme switch)."""
+        colour = theme.color("icon")
+        self.expand_all_button.setIcon(qta.icon("mdi6.expand-all", color=colour))
+        self.collapse_all_button.setIcon(qta.icon("mdi6.collapse-all", color=colour))
+        self.zoom_reset_button.setIcon(qta.icon("mdi6.magnify", color=colour))
+        self.brightness_reset_button.setIcon(qta.icon("mdi6.brightness-6", color=colour))
 
     def _on_zoom_reset_clicked(self) -> None:
         self.image_viewer.reset_zoom_to_fit()

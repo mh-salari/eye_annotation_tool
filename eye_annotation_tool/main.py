@@ -22,8 +22,8 @@ from PyQt5.QtWidgets import (
 from .gui import MainWindow
 from .gui.dialogs import confirm
 from .gui.new_project_dialog import NewProjectDialog
-from .gui.theme import apply_theme
-from .state import recent_projects
+from .gui.theme import apply_theme, theme
+from .state import recent_projects, settings
 from .utils.project_settings import (
     DEFAULT_ID_BY_KIND,
     DETECTOR_OFF,
@@ -186,14 +186,14 @@ class _RecentProjectRow(QWidget):
         open_button = QPushButton(name)
         open_button.setStyleSheet(
             "QPushButton { background: transparent; border: none; text-align: left; padding: 4px 6px; }"
-            "QPushButton:hover { background: rgba(255, 255, 255, 0.08); }"
-            "QPushButton:disabled { color: #777777; }"
+            f"QPushButton:hover {{ background: {theme.color('hover_bg')}; }}"
+            f"QPushButton:disabled {{ color: {theme.color('muted_fg')}; }}"
         )
         open_button.setToolTip(tooltip)
         open_button.setEnabled(exists)
         open_button.clicked.connect(lambda: self.open_requested.emit(self._path))
         remove_button = QToolButton()
-        remove_button.setIcon(qta.icon("mdi6.close", color="#cccccc"))
+        remove_button.setIcon(qta.icon("mdi6.close", color=theme.color("icon_subtle")))
         remove_button.setAutoRaise(True)
         remove_button.setToolTip("Remove from the recent list (the project file is kept)")
         remove_button.clicked.connect(lambda: self.remove_requested.emit(self._path))
@@ -333,7 +333,8 @@ def run_app() -> None:
 
     app = QApplication(sys.argv[:1])
 
-    apply_theme(app)
+    apply_theme(settings.load_theme())
+    theme.watch_os(app)
 
     icon_path = str(Path(__file__).parent / "resources" / "app_icon.ico")
     app.setWindowIcon(QIcon(icon_path))

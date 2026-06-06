@@ -6,7 +6,10 @@ detector id…) — the menu only carries project lifecycle and help.
 
 from typing import TYPE_CHECKING
 
-from PyQt5.QtWidgets import QAction, QMenu
+from PyQt5.QtWidgets import QAction, QActionGroup, QMenu
+
+from ..state import settings
+from .theme import theme
 
 if TYPE_CHECKING:
     from .main_window import MainWindow
@@ -20,10 +23,35 @@ class MenuHandler:
         self.main_window = main_window
 
     def setup_menu(self) -> None:
-        """Build the File and Help menus on the menu bar."""
+        """Build the File, Settings, and Help menus on the menu bar."""
         menubar = self.main_window.menuBar()
         self._add_file_menu(menubar.addMenu("File"))
+        self._add_settings_menu(menubar.addMenu("Settings"))
         self._add_help_menu(menubar.addMenu("Help"))
+
+    def _add_settings_menu(self, menu: QMenu) -> None:
+        """Build the Settings menu: an app-wide Theme submenu plus Project Settings."""
+        theme_menu = menu.addMenu("Theme")
+        group = QActionGroup(self.main_window)
+        group.setExclusive(True)
+        for label, mode in (("System", "system"), ("Light", "light"), ("Dark", "dark")):
+            action = QAction(label, self.main_window)
+            action.setCheckable(True)
+            action.setChecked(theme.mode == mode)
+            action.triggered.connect(lambda *_, m=mode: self._on_theme_selected(m))
+            group.addAction(action)
+            theme_menu.addAction(action)
+
+        menu.addSeparator()
+        project_settings_action = QAction("Project Settings…", self.main_window)
+        project_settings_action.triggered.connect(self.main_window.on_project_settings)
+        menu.addAction(project_settings_action)
+
+    @staticmethod
+    def _on_theme_selected(mode: str) -> None:
+        """Apply and persist the chosen theme."""
+        theme.apply(mode)
+        settings.save_theme(mode)
 
     def _add_file_menu(self, file_menu: QMenu) -> None:
         new_action = QAction("New Project", self.main_window)
@@ -45,12 +73,6 @@ class MenuHandler:
         save_as_action.setShortcut("Ctrl+Shift+S")
         save_as_action.triggered.connect(self.main_window.save_project_as)
         file_menu.addAction(save_as_action)
-
-        file_menu.addSeparator()
-
-        settings_action = QAction("Project Settings…", self.main_window)
-        settings_action.triggered.connect(self.main_window.on_project_settings)
-        file_menu.addAction(settings_action)
 
         file_menu.addSeparator()
 

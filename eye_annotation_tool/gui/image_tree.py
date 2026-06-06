@@ -29,14 +29,12 @@ from PyQt5.QtWidgets import (
     QTreeWidgetItem,
 )
 
+from .theme import theme
+
 # Per-item data: the absolute path (image path for leaves, directory path for
 # folders) and whether the item is a directory node.
 _PATH_ROLE = Qt.UserRole
 _IS_DIR_ROLE = Qt.UserRole + 1
-
-# Match the rest of the app's icons (trash / zoom / brightness all use this grey).
-_FOLDER_COLOUR = "#e0e0e0"
-_FILE_COLOUR = "#9aa0a6"
 
 _DIGITS = re.compile(r"(\d+)")
 
@@ -53,9 +51,13 @@ class _RemoveButtonDelegate(QStyledItemDelegate):
     _MARGIN = 6
 
     def __init__(self, parent: QObject | None = None) -> None:
-        """Build the delegate with the close icon."""
+        """Build the delegate with the close icon in the active theme colour."""
         super().__init__(parent)
-        self._icon = qta.icon("mdi6.close-circle", color="#c0c0c0")
+        self._icon = qta.icon("mdi6.close-circle", color=theme.color("icon_subtle"))
+
+    def set_icon_color(self, color: str) -> None:
+        """Re-create the close icon in ``color`` (for a theme change)."""
+        self._icon = qta.icon("mdi6.close-circle", color=color)
 
     def button_rect(self, row_rect: QRect) -> QRect:
         """Return the x-button rect within ``row_rect`` (right-aligned, vertically centred)."""
@@ -91,8 +93,9 @@ class ImageTree(QTreeWidget):
         self._remove_delegate = _RemoveButtonDelegate(self)
         self.setItemDelegate(self._remove_delegate)
         self._path_to_item: dict[str, QTreeWidgetItem] = {}
-        self._folder_icon = qta.icon("mdi6.folder", color=_FOLDER_COLOUR)
-        self._file_icon = qta.icon("mdi6.image-outline", color=_FILE_COLOUR)
+        self._folder_icon = qta.icon("mdi6.folder", color=theme.color("icon"))
+        self._file_icon = qta.icon("mdi6.image-outline", color=theme.color("icon_muted"))
+        theme.changed.connect(self._apply_theme)
 
     # ---------------------------------------------------------------------------
     # Building the tree
@@ -169,6 +172,23 @@ class ImageTree(QTreeWidget):
             item.addChild(child)
             if child.data(0, _IS_DIR_ROLE):
                 self._sort_children(child)
+
+    def _apply_theme(self) -> None:
+        """Re-colour folder/file/remove icons for the active theme and repaint."""
+        self._folder_icon = qta.icon("mdi6.folder", color=theme.color("icon"))
+        self._file_icon = qta.icon("mdi6.image-outline", color=theme.color("icon_muted"))
+        self._remove_delegate.set_icon_color(theme.color("icon_subtle"))
+        for i in range(self.topLevelItemCount()):
+            self._recolor_item(self.topLevelItem(i))
+        self.viewport().update()
+
+    def _recolor_item(self, item: QTreeWidgetItem) -> None:
+        """Re-set ``item``'s icon for the active theme and recurse into folders."""
+        is_dir = bool(item.data(0, _IS_DIR_ROLE))
+        item.setIcon(0, self._folder_icon if is_dir else self._file_icon)
+        if is_dir:
+            for i in range(item.childCount()):
+                self._recolor_item(item.child(i))
 
     # ---------------------------------------------------------------------------
     # Navigation helpers (image order + selection)
