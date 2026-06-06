@@ -18,7 +18,8 @@ Schema::
       "detectors": {
         "pupil":  {"id": "<cheshm-id>" | "off" | "manual",
                     "params": {"left": {...}|null, "right": {...}|null, "single": {...}|null},
-                    "carry_roi": {"enabled": {...}, "values": {...}}},
+                    "carry_roi": {"enabled": {...}, "values": {...}},
+                    "overlays": {"<key>": {"show": bool, "color": "#rrggbb", ...}}},
         "glint":  {...},
         "limbus": {...},
         "eyelid": {...}

@@ -492,7 +492,9 @@ class MainWindow(QMainWindow):
         """
         suffixes = self.IMAGE_SUFFIXES
         missing = [str(p) for p in image_paths if not Path(p).is_file()]
-        valid = [str(Path(p)) for p in image_paths if Path(p).is_file() and Path(p).suffix.lower() in suffixes]
+        valid = [
+            str(Path(p).resolve()) for p in image_paths if Path(p).is_file() and Path(p).suffix.lower() in suffixes
+        ]
         if not valid:
             QMessageBox.warning(
                 self,

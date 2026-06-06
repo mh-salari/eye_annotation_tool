@@ -4,6 +4,7 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 from PyQt5.QtCore import QObject, QTimer, pyqtSignal
+from PyQt5.QtGui import QColor
 from PyQt5.QtWidgets import QWidget
 
 from eye_annotation_tool.auto_detectors.plugin import DetectorPlugin
@@ -178,6 +179,9 @@ class DetectionController(QObject):
             det = card.active_detector()
             if det is not None:
                 self._restore_card_params(kind, det, params_by_slot)
+                overlays = entry.get("overlays")
+                if isinstance(overlays, dict):
+                    card.set_overlay_state(_deserialize_overlays(overlays))
             self.carry_roi_state.load_from_project_block(kind, entry.get("carry_roi") or {})
         self._refresh_orchestrator_enabled()
         self._refresh_auto_managed_kinds()
@@ -238,21 +242,22 @@ class DetectionController(QObject):
             return
         roi_name = _roi_setting_name(det)
         cleaned = _strip_roi(card.current_params(), roi_name)
-        for slot in CARRY_ROI_SLOTS:
+        slots = ("left", "right") if self.binocular.is_binocular else ("single",)
+        for slot in slots:
             self.per_eye_state.set_project_default(kind, slot, dict(cleaned))
         detectors_block = self.project_store.project.setdefault("detectors", {})
         kind_block = detectors_block.setdefault(kind, {})
         kind_block["id"] = card.active_id()
-        kind_block.setdefault("params", {})
-        for slot in CARRY_ROI_SLOTS:
-            kind_block["params"][slot] = dict(cleaned)
+        kind_block["params"] = {slot: dict(cleaned) for slot in slots}
         kind_block["carry_roi"] = self.carry_roi_state.to_project_block(kind)
+        kind_block["overlays"] = _serialize_overlays(card.overlay_state())
         self.project_store.persist()
         self.status_message.emit(f"{kind.capitalize()} defaults saved.", 3000)
 
     def _on_overlay_changed(self, _key: str, _field: str, _value: object) -> None:
-        # The card already mutated its overlay state before emitting;
-        # the canvas reads through the same lookup, so a repaint is enough.
+        # The card already mutated its overlay state; mark the project modified
+        # so autosave persists it, then repaint to reflect the change.
+        self.annotation_modified.emit(True)
         self.image_viewer.update_image()
 
     # ---------------------------------------------------------------------------
@@ -454,6 +459,10 @@ class DetectionController(QObject):
                     "params": params,
                     "result": _serialize_result(result),
                 }
+            if kind in out:
+                card = self.annotation_controls.card(kind)
+                if card is not None:
+                    out[kind]["overlays"] = _serialize_overlays(card.overlay_state())
         return out
 
     def apply_loaded_detections(self, detections: dict) -> None:
@@ -477,6 +486,11 @@ class DetectionController(QObject):
                     self.per_eye_state.set_result(slot, kind, result)
                     if result is not None:
                         self.image_viewer.set_detection_overlay(kind, result, eye_slot=slot)
+                overlays = block.get("overlays")
+                if isinstance(overlays, dict):
+                    card = self.annotation_controls.card(kind)
+                    if card is not None:
+                        card.set_overlay_state(_deserialize_overlays(overlays))
                 active_params = per_eye_params.get(active_slot)
                 if active_params is not None:
                     card = self.annotation_controls.card(kind)
@@ -600,6 +614,33 @@ def _serialize_result(result: object) -> object:
     if isinstance(result, np.floating):
         return float(result)
     return result
+
+
+def _serialize_overlays(overlay_state: dict | None) -> dict:
+    """Convert a detector's overlay state to JSON form (QColor -> hex string)."""
+    if not overlay_state:
+        return {}
+    out: dict = {}
+    for key, fields in overlay_state.items():
+        entry = dict(fields)
+        color = entry.get("color")
+        if isinstance(color, QColor):
+            entry["color"] = color.name()
+        out[key] = entry
+    return out
+
+
+def _deserialize_overlays(saved: dict) -> dict:
+    """Convert a saved overlay block back to in-memory form (hex string -> QColor)."""
+    out: dict = {}
+    for key, fields in saved.items():
+        if not isinstance(fields, dict):
+            continue
+        entry = dict(fields)
+        if isinstance(entry.get("color"), str):
+            entry["color"] = QColor(entry["color"])
+        out[key] = entry
+    return out
 
 
 def _intersect_roi_with_crop(
