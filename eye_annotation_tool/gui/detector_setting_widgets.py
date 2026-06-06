@@ -7,7 +7,8 @@ One widget kind per ``SettingSpec.type`` tag. The card chrome in
 from collections.abc import Callable
 from typing import Any
 
-from PyQt5.QtCore import Qt
+import qtawesome as qta
+from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtWidgets import (
     QAbstractSpinBox,
     QCheckBox,
@@ -18,11 +19,15 @@ from PyQt5.QtWidgets import (
     QLabel,
     QSlider,
     QSpinBox,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
 
 from eye_annotation_tool.auto_detectors.plugin import SettingSpec as Setting
+
+from .collapsible import CollapsibleSection
+from .theme import theme
 
 # Integer tick resolution for float sliders. 1000 ticks keeps the
 # integer<->float round-trip lossless to 3 decimals.
@@ -429,8 +434,39 @@ _BUILDERS: dict[str, Callable[[Setting, Any, Callable[[str, Any], None]], _Bound
 }
 
 
+class _SettingRow(QWidget):
+    """A setting widget plus a pin toggle that moves it to/from the quick zone."""
+
+    pin_toggled = pyqtSignal(str, bool)
+
+    def __init__(self, name: str, widget: _BoundWidget, pinned: bool, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._name = name
+        row = QHBoxLayout(self)
+        row.setContentsMargins(0, 0, 0, 0)
+        self._pin = QToolButton()
+        self._pin.setCheckable(True)
+        self._pin.setChecked(pinned)
+        self._pin.setAutoRaise(True)
+        self._pin.setToolTip("Pin to quick settings")
+        self._pin.toggled.connect(self._on_toggle)
+        self._refresh_icon()
+        row.addWidget(self._pin)
+        row.addWidget(widget, 1)
+
+    def _on_toggle(self, checked: bool) -> None:
+        self._refresh_icon()
+        self.pin_toggled.emit(self._name, checked)
+
+    def _refresh_icon(self) -> None:
+        icon = "mdi6.pin" if self._pin.isChecked() else "mdi6.pin-outline"
+        self._pin.setIcon(qta.icon(icon, color=theme.color("icon_muted")))
+
+
 class SettingsBlock(QGroupBox):
-    """Container that builds one widget per visible :class:`Setting` of a detector."""
+    """Builds one widget per visible :class:`Setting`, split into pinned + Advanced zones."""
+
+    pins_changed = pyqtSignal(list)
 
     def __init__(
         self,
@@ -438,29 +474,76 @@ class SettingsBlock(QGroupBox):
         values: dict[str, Any],
         on_change: Callable[[str, Any], None],
         *,
+        pinned: list[str] | None = None,
         title: str = "",
         parent: QWidget | None = None,
     ) -> None:
-        """Build one widget per visible setting of the detector."""
+        """Build one widget per visible setting; pinned ones lead, the rest fold into Advanced."""
         super().__init__(title, parent)
         self._on_change = on_change
         self._widgets: dict[str, _BoundWidget] = {}
+        self._rows: dict[str, _SettingRow] = {}
         # Hidden settings (e.g. the canvas-driven ROI) have no widget but still carry a value.
         self._hidden: dict[str, Any] = {}
+        self._pinned: list[str] = list(pinned or [])
+        # Natural order of the visible settings; pins slot back into this order.
+        self._order: list[str] = []
+
         layout = QVBoxLayout()
         layout.setContentsMargins(6, 6, 6, 6)
+        self._quick_layout = QVBoxLayout()
+        self._quick_layout.setContentsMargins(0, 0, 0, 0)
+        layout.addLayout(self._quick_layout)
+        self._advanced = CollapsibleSection("Advanced", expanded=not self._pinned)
+        layout.addWidget(self._advanced)
+        self.setLayout(layout)
+
         for setting in settings:
             if setting.hidden:
                 self._hidden[setting.name] = values.get(setting.name, setting.default)
                 continue
             builder = _BUILDERS.get(setting.type)
             if builder is None:
-                layout.addWidget(QLabel(f"{setting.label}  (unsupported type {setting.type!r})"))
+                self._quick_layout.addWidget(QLabel(f"{setting.label}  (unsupported type {setting.type!r})"))
                 continue
             widget = builder(setting, values.get(setting.name, setting.default), on_change)
-            layout.addWidget(widget)
             self._widgets[setting.name] = widget
-        self.setLayout(layout)
+            row = _SettingRow(setting.name, widget, setting.name in self._pinned)
+            row.pin_toggled.connect(self._on_pin_toggled)
+            self._rows[setting.name] = row
+            self._order.append(setting.name)
+            if setting.name in self._pinned:
+                self._quick_layout.addWidget(row)
+            else:
+                self._advanced.add_widget(row)
+        # Keep the pinned set in the detector's natural setting order.
+        self._pinned = [name for name in self._order if name in set(self._pinned)]
+        self._advanced.setVisible(not self._advanced.is_empty())
+
+    def _on_pin_toggled(self, name: str, pinned: bool) -> None:
+        """Move a row between zones at its natural-order position, then persist the set."""
+        row = self._rows.get(name)
+        if row is None:
+            return
+        if pinned:
+            self._advanced.take_widget(row)
+            if name not in self._pinned:
+                self._pinned.append(name)
+                self._pinned.sort(key=self._order.index)
+            self._quick_layout.insertWidget(self._pinned.index(name), row)
+        else:
+            self._quick_layout.removeWidget(row)
+            if name in self._pinned:
+                self._pinned.remove(name)
+            self._advanced.insert_widget(self._advanced_index(name), row)
+        self._advanced.setVisible(not self._advanced.is_empty())
+        self.pins_changed.emit(list(self._pinned))
+
+    def _advanced_index(self, name: str) -> int:
+        """Row position of ``name`` among the unpinned settings, in natural order."""
+        pinned = set(self._pinned)
+        unpinned = [n for n in self._order if n not in pinned]
+        return unpinned.index(name)
 
     def current_values(self) -> dict[str, Any]:
         """Return the current value of every setting, including hidden ones."""

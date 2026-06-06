@@ -127,6 +127,7 @@ def default_project() -> dict:
                 "id": DEFAULT_ID_BY_KIND[kind],
                 "params": _default_params_per_eye(),
                 "carry_roi": _default_carry_roi(),
+                "pinned": [],
             }
             for kind in KINDS
         },
@@ -204,6 +205,7 @@ def _parse_detector_entry(entry: dict) -> dict:
         "id": entry.get("id", DETECTOR_OFF),
         "params": _parse_params_per_eye(entry.get("params")),
         "carry_roi": _parse_carry_roi(entry.get("carry_roi")),
+        "pinned": [name for name in (entry.get("pinned") or []) if isinstance(name, str)],
     }
 
 

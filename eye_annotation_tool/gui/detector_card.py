@@ -25,13 +25,13 @@ from PyQt5.QtWidgets import (
     QSizePolicy,
     QSlider,
     QSpinBox,
-    QToolButton,
     QVBoxLayout,
     QWidget,
 )
 
 from eye_annotation_tool.auto_detectors.plugin import DetectorPlugin as Detector
 
+from .collapsible import CollapsibleSection
 from .custom_widgets import MaterialButton
 from .detector_setting_widgets import SettingsBlock
 
@@ -179,36 +179,18 @@ class OverlayRow(QWidget):
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        outer = QVBoxLayout()
+        outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
-        self._toggle = QToolButton()
-        self._toggle.setText("overlay")
-        self._toggle.setCheckable(True)
-        self._toggle.setChecked(False)
-        self._toggle.setArrowType(Qt.RightArrow)
-        self._toggle.toggled.connect(self._on_toggle)
-        outer.addWidget(self._toggle)
-        self._body = QFrame()
-        self._body_layout = QVBoxLayout()
-        self._body_layout.setContentsMargins(8, 0, 0, 0)
-        self._body.setLayout(self._body_layout)
-        self._body.setVisible(False)
-        outer.addWidget(self._body)
-        self.setLayout(outer)
-
-    def _on_toggle(self, expanded: bool) -> None:
-        self._toggle.setArrowType(Qt.DownArrow if expanded else Qt.RightArrow)
-        self._body.setVisible(expanded)
+        self._section = CollapsibleSection("overlay")
+        outer.addWidget(self._section)
 
     def populate(self, state: dict[str, dict[str, Any]]) -> None:
         """Rebuild the row from a fresh overlay-state dict."""
-        while self._body_layout.count():
-            item = self._body_layout.takeAt(0)
-            w = item.widget()
-            if w is not None:
-                w.deleteLater()
+        self._section.clear()
         for key, entry in state.items():
-            self._body_layout.addLayout(self._build_row(key, entry))
+            row_widget = QWidget()
+            row_widget.setLayout(self._build_row(key, entry))
+            self._section.add_widget(row_widget)
 
     def _build_row(self, key: str, entry: dict[str, Any]) -> QHBoxLayout:
         row = QHBoxLayout()
@@ -310,6 +292,8 @@ class DetectorCard(QFrame):
     overlay_changed = pyqtSignal(str, str, object)
     reset_requested = pyqtSignal()
     save_default_requested = pyqtSignal()
+    # New pinned-setting-name list for the active detector.
+    pins_changed = pyqtSignal(list)
     # User clicked the per-card "Detect" button — runs the active auto
     # detector on the current image without needing a settings change.
     detect_requested = pyqtSignal()
@@ -335,6 +319,8 @@ class DetectorCard(QFrame):
         self._values: dict[str, dict[str, Any]] = {
             d.name: {s.name: s.default for s in d.settings} for d in self._detectors
         }
+        # Pinned setting names per detector id (which settings sit in the quick zone).
+        self._pinned: dict[str, list[str]] = {}
         self._overlay_state: dict[str, dict[str, dict[str, Any]]] = {
             d.name: default_overlay_state(kind, d.overlays) for d in self._detectors
         }
@@ -409,6 +395,15 @@ class DetectorCard(QFrame):
         if self._settings_block is None:
             return {}
         return self._settings_block.current_values()
+
+    def current_pinned(self) -> list[str]:
+        """Return the active detector's pinned setting names."""
+        det = self.active_detector()
+        return list(self._pinned.get(det.name, [])) if det is not None else []
+
+    def set_pinned(self, detector_id: str, pinned: list[str]) -> None:
+        """Store the pinned setting names for ``detector_id`` (applied on next build)."""
+        self._pinned[detector_id] = list(pinned)
 
     def overlay_state(self) -> dict[str, dict[str, Any]] | None:
         """Return the overlay state for the current selection.
@@ -540,6 +535,13 @@ class DetectorCard(QFrame):
         self._values[det.name][name] = value
         self.params_changed.emit(dict(self._values[det.name]))
 
+    def _on_pins_changed(self, pinned: list) -> None:
+        det = self.active_detector()
+        if det is None:
+            return
+        self._pinned[det.name] = list(pinned)
+        self.pins_changed.emit(list(pinned))
+
     # ----- ROI row re-emitters -----
 
     def _on_roi_edit(self, active: bool) -> None:
@@ -600,8 +602,10 @@ class DetectorCard(QFrame):
             det.settings,
             self._values[det.name],
             self._on_setting_changed,
+            pinned=self._pinned.get(det.name, []),
             title="",
         )
+        self._settings_block.pins_changed.connect(self._on_pins_changed)
         self._content_layout.addWidget(self._settings_block)
 
         if detector_has_roi(det) is not None:

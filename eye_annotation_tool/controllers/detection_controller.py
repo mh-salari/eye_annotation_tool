@@ -146,6 +146,9 @@ class DetectionController(QObject):
             card.save_default_requested.connect(
                 lambda k=kind: self._on_card_save_default(k),
             )
+            card.pins_changed.connect(
+                lambda pinned, k=kind: self._on_card_pins_changed(k, pinned),
+            )
             card.roi_edit_requested.connect(
                 lambda active, k=kind: self._on_roi_edit_requested(k, active),
             )
@@ -175,6 +178,7 @@ class DetectionController(QObject):
             card = self.annotation_controls.card(kind)
             if card is None:
                 continue
+            card.set_pinned(slug, entry.get("pinned") or [])
             card.set_selection(slug, emit=False)
             det = card.active_detector()
             if det is not None:
@@ -250,6 +254,7 @@ class DetectionController(QObject):
         kind_block["id"] = card.active_id()
         kind_block["params"] = {slot: dict(cleaned) for slot in slots}
         kind_block["carry_roi"] = self.carry_roi_state.to_project_block(kind)
+        kind_block["pinned"] = card.current_pinned()
         kind_block["overlays"] = _serialize_overlays(card.overlay_state())
         self.project_store.persist()
         self.status_message.emit(f"{kind.capitalize()} defaults saved.", 3000)
@@ -565,6 +570,12 @@ class DetectionController(QObject):
         detectors_block = self.project_store.project.setdefault("detectors", {})
         kind_block = detectors_block.setdefault(kind, {})
         kind_block["carry_roi"] = self.carry_roi_state.to_project_block(kind)
+        self.project_store.persist()
+
+    def _on_card_pins_changed(self, kind: str, pinned: list) -> None:
+        detectors_block = self.project_store.project.setdefault("detectors", {})
+        kind_block = detectors_block.setdefault(kind, {})
+        kind_block["pinned"] = list(pinned)
         self.project_store.persist()
 
     def _refresh_carry_state_for(self, kind: str) -> None:
