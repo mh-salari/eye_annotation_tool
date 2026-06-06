@@ -663,6 +663,7 @@ class ImageViewer(QWidget):
         clamped = max(self.zoom_state.MIN_FACTOR, min(self.zoom_state.MAX_FACTOR, float(factor)))
         if clamped == self.zoom_state.factor:
             return
+        self.zoom_state.at_fit = False
         self.zoom_state.factor = clamped
         self.update_image()
 
@@ -825,15 +826,14 @@ class ImageViewer(QWidget):
             self.update_image()
 
     def eventFilter(self, source: QWidget, event: QEvent) -> bool:  # noqa: N802
-        """Filter events for window state changes."""
-        if (
-            source == self.scroll_area.viewport()
-            and event.type() == QEvent.Wheel
-            and event.modifiers() == Qt.ControlModifier
-        ):
-            zoom_in = event.angleDelta().y() > 0
-            self.zoom(zoom_in, event.position().toPoint())
-            return True  # Event handled, don't propagate further
+        """Ctrl+wheel zooms; resizing the viewport refits the image while in fit mode."""
+        if source == self.scroll_area.viewport():
+            if event.type() == QEvent.Wheel and event.modifiers() == Qt.ControlModifier:
+                zoom_in = event.angleDelta().y() > 0
+                self.zoom(zoom_in, event.position().toPoint())
+                return True  # Event handled, don't propagate further
+            if event.type() == QEvent.Resize and self.zoom_state.at_fit and self.original_pixmap is not None:
+                self.reset_zoom_to_fit()
 
         return super().eventFilter(source, event)  # Propagate other events
 

@@ -17,9 +17,17 @@ import re
 from pathlib import Path
 
 import qtawesome as qta
-from PyQt5.QtCore import QPoint, Qt, pyqtSignal
-from PyQt5.QtGui import QKeyEvent
-from PyQt5.QtWidgets import QAbstractItemView, QMenu, QTreeWidget, QTreeWidgetItem
+from PyQt5.QtCore import QModelIndex, QObject, QPoint, QRect, Qt, pyqtSignal
+from PyQt5.QtGui import QKeyEvent, QMouseEvent, QPainter
+from PyQt5.QtWidgets import (
+    QAbstractItemView,
+    QMenu,
+    QStyle,
+    QStyledItemDelegate,
+    QStyleOptionViewItem,
+    QTreeWidget,
+    QTreeWidgetItem,
+)
 
 # Per-item data: the absolute path (image path for leaves, directory path for
 # folders) and whether the item is a directory node.
@@ -38,6 +46,29 @@ def _natural_key(text: str) -> list:
     return [int(chunk) if chunk.isdigit() else chunk.lower() for chunk in _DIGITS.split(text)]
 
 
+class _RemoveButtonDelegate(QStyledItemDelegate):
+    """Paint a hover-revealed remove (x) button at the right edge of each row."""
+
+    _ICON_SIZE = 16
+    _MARGIN = 6
+
+    def __init__(self, parent: QObject | None = None) -> None:
+        """Build the delegate with the close icon."""
+        super().__init__(parent)
+        self._icon = qta.icon("mdi6.close-circle", color="#c0c0c0")
+
+    def button_rect(self, row_rect: QRect) -> QRect:
+        """Return the x-button rect within ``row_rect`` (right-aligned, vertically centred)."""
+        y = row_rect.top() + (row_rect.height() - self._ICON_SIZE) // 2
+        return QRect(row_rect.right() - self._ICON_SIZE - self._MARGIN, y, self._ICON_SIZE, self._ICON_SIZE)
+
+    def paint(self, painter: QPainter, option: QStyleOptionViewItem, index: QModelIndex) -> None:
+        """Draw the standard row, then the x button on the hovered row."""
+        super().paint(painter, option, index)
+        if option.state & QStyle.State_MouseOver:
+            self._icon.paint(painter, self.button_rect(option.rect))
+
+
 class ImageTree(QTreeWidget):
     """A folder tree of the project's images, grouped by their real directories."""
 
@@ -52,10 +83,13 @@ class ImageTree(QTreeWidget):
         self.setHeaderHidden(True)
         self.setSelectionMode(QAbstractItemView.ExtendedSelection)
         self.setUniformRowHeights(True)
+        self.setMouseTracking(True)  # so the hover-x repaints the row under the cursor
         self.setContextMenuPolicy(Qt.CustomContextMenu)
         self.customContextMenuRequested.connect(self._show_context_menu)
         self.itemClicked.connect(self._on_item_interacted)
         self.itemActivated.connect(self._on_item_interacted)
+        self._remove_delegate = _RemoveButtonDelegate(self)
+        self.setItemDelegate(self._remove_delegate)
         self._path_to_item: dict[str, QTreeWidgetItem] = {}
         self._folder_icon = qta.icon("mdi6.folder", color=_FOLDER_COLOUR)
         self._file_icon = qta.icon("mdi6.image-outline", color=_FILE_COLOUR)
@@ -115,6 +149,7 @@ class ImageTree(QTreeWidget):
         item.setData(0, _PATH_ROLE, dir_path)
         item.setData(0, _IS_DIR_ROLE, True)
         item.setIcon(0, self._folder_icon)
+        item.setToolTip(0, dir_path)
         return item
 
     def _make_file_item(self, path: str) -> QTreeWidgetItem:
@@ -206,6 +241,23 @@ class ImageTree(QTreeWidget):
                 self.remove_requested.emit(paths)
                 return
         super().keyPressEvent(event)
+
+    def mouseReleaseEvent(self, event: QMouseEvent) -> None:  # noqa: N802
+        """Remove an item when its hover-x is clicked; otherwise behave normally."""
+        item = self.itemAt(event.pos())
+        if item is not None and self._remove_delegate.button_rect(self.visualItemRect(item)).contains(event.pos()):
+            self._emit_remove_for_item(item)
+            return
+        super().mouseReleaseEvent(event)
+
+    def _emit_remove_for_item(self, item: QTreeWidgetItem) -> None:
+        """Request removal of one item — a folder takes everything under it."""
+        if item.data(0, _IS_DIR_ROLE):
+            paths = self._descendant_leaf_paths(item, recursive=True)
+        else:
+            paths = [item.data(0, _PATH_ROLE)]
+        if paths:
+            self.remove_requested.emit(paths)
 
     def _descendant_leaf_paths(self, item: QTreeWidgetItem, *, recursive: bool) -> list[str]:
         """Image paths directly under ``item`` (``recursive=False``) or anywhere below it."""

@@ -17,6 +17,7 @@ from PyQt5.QtWidgets import (
     QMessageBox,
     QScrollArea,
     QSlider,
+    QSplitter,
     QStatusBar,
     QToolButton,
     QVBoxLayout,
@@ -183,13 +184,26 @@ class MainWindow(QMainWindow):
         """Set up the user interface components."""
         self.image_viewer = ImageViewer()
         left_panel = self._build_left_panel()
+        left_panel.setMinimumWidth(180)
         right_panel = self._build_right_panel()
+
+        # Horizontal splitter so the left panel (image tree) can be dragged
+        # wider or narrower like a file-explorer sidebar; the viewer takes the slack.
+        splitter = QSplitter(Qt.Horizontal)
+        splitter.addWidget(left_panel)
+        splitter.addWidget(self.image_viewer)
+        splitter.addWidget(right_panel)
+        splitter.setStretchFactor(0, 0)
+        splitter.setStretchFactor(1, 1)
+        splitter.setStretchFactor(2, 0)
+        splitter.setSizes([300, 900, 360])
+        splitter.setChildrenCollapsible(False)
+        splitter.setHandleWidth(1)  # thin 1px divider like a file-explorer sidebar
 
         central_widget = QWidget()
         main_layout = QHBoxLayout()
-        main_layout.addWidget(left_panel)
-        main_layout.addWidget(self.image_viewer, 1)
-        main_layout.addWidget(right_panel)
+        main_layout.setContentsMargins(0, 0, 0, 0)
+        main_layout.addWidget(splitter)
         central_widget.setLayout(main_layout)
         self.setCentralWidget(central_widget)
 
@@ -239,15 +253,6 @@ class MainWindow(QMainWindow):
         # The tree takes the stretch so it fills the panel's vertical space.
         self.image_tree = ImageTree()
         left_layout.addWidget(self.image_tree, 1)
-
-        # Trash button below the image list: drops selected entries from the
-        # project's image set (files on disk are untouched).
-        icon_colour_for_trash = "#e0e0e0"
-        self.remove_images_button = MaterialButton("  Remove from project", compact=True)
-        self.remove_images_button.setIcon(qta.icon("mdi6.trash-can-outline", color=icon_colour_for_trash))
-        self.remove_images_button.setIconSize(QSize(18, 18))
-        self.remove_images_button.setToolTip("Drop the selected images from the project (files on disk are kept).")
-        left_layout.addWidget(self.remove_images_button)
 
         icon_colour = "#e0e0e0"
         icon_size = QSize(20, 20)
@@ -357,7 +362,6 @@ class MainWindow(QMainWindow):
         self.prev_image_button.clicked.connect(self.navigation_controller.prev_image)
         self.next_image_button.clicked.connect(self.navigation_controller.next_image)
         self.save_annotations_button.clicked.connect(self.annotation_controller.save_annotations)
-        self.remove_images_button.clicked.connect(self.remove_selected_images)
         self.expand_all_button.clicked.connect(self.image_tree.expandAll)
         self.collapse_all_button.clicked.connect(self.image_tree.collapseAll)
         self.image_tree.image_selected.connect(self.navigation_controller.on_image_selected)
@@ -538,16 +542,12 @@ class MainWindow(QMainWindow):
             return
         self.add_images(found)
 
-    def remove_selected_images(self) -> None:
-        """Drop the tree's currently-selected images from the project's image set."""
-        self.remove_images(self.image_tree.selected_removal_paths())
-
     def remove_images(self, paths: list[str]) -> None:
         """Drop ``paths`` from the project's image set; files on disk are untouched.
 
-        Triggered by the trash button, the Delete / Backspace key, and the
-        tree's folder / image removal context menu. Only the project's image
-        dict is mutated — the real folders and image files stay as they are.
+        Triggered by the row's inline x button, the Delete / Backspace key, and
+        the tree's removal context menu. Only the project's image dict is
+        mutated — the real folders and image files stay as they are.
         """
         to_remove = [p for p in paths if p in self.image_paths]
         if not to_remove:

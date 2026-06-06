@@ -23,6 +23,7 @@ class ZoomController:
         """Start unzoomed and unfit; the first ``load_image`` will fit + mark initialized."""
         self.factor: float = 1.0
         self._initialized: bool = False
+        self.at_fit: bool = False  # True while showing fit-to-viewport zoom; refit on resize
 
     # ---------------------------------------------------------------------------
     # First-image fit lifecycle
@@ -47,6 +48,7 @@ class ZoomController:
         coordinates. ``widget`` is needed only to convert global ↔
         local coordinates for the scroll adjustment math.
         """
+        self.at_fit = False
         old_factor = self.factor
         self.factor = self._clamp(old_factor * self.ZOOM_STEP if zoom_in else old_factor / self.ZOOM_STEP)
         if self.factor == old_factor:
@@ -74,6 +76,7 @@ class ZoomController:
         Never enlarges (caps at ``FIT_MAX = 1.0``) — smaller images
         keep their 1x size instead of being scaled up to fill.
         """
+        self.at_fit = True
         if pixmap is None or pixmap.isNull():
             return
         viewport = scroll_area.viewport().size()
