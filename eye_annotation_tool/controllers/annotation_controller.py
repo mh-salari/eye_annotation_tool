@@ -4,6 +4,7 @@ from pathlib import Path
 
 from PyQt5.QtWidgets import QMessageBox, QWidget
 
+from ..gui.error_dialog import error_dialog
 from ..gui.image_viewer import ImageViewer
 from ..state import ProjectStore, SessionState
 from ..utils.annotation_io import (
@@ -73,14 +74,17 @@ class AnnotationController:
             )
             if reply == QMessageBox.No:
                 return
-        save_annotations(
-            annotation_path,
-            self.image_viewer.get_annotation_data(),
-            binocular_mode=self.binocular_controller.is_binocular,
-            divider_x_norm=self.binocular_controller.divider_override_for_current_image(),
-            detections=self.detection_controller.collect_detections_for_save(),
-        )
-        self.session.modified = False
+        with error_dialog(
+            self._dialog_parent, "Save Failed", f"Could not save the annotation for this image:\n{annotation_path}"
+        ):
+            save_annotations(
+                annotation_path,
+                self.image_viewer.get_annotation_data(),
+                binocular_mode=self.binocular_controller.is_binocular,
+                divider_x_norm=self.binocular_controller.divider_override_for_current_image(),
+                detections=self.detection_controller.collect_detections_for_save(),
+            )
+            self.session.modified = False
 
     def load_annotations(self) -> None:
         """Load the saved annotation file for the current image (if any)."""
@@ -88,14 +92,15 @@ class AnnotationController:
         index = self.session.current_image_index
         if not (0 <= index < len(image_paths)):
             return
-        payload = load_annotations(get_annotation_path(image_paths[index]))
-        self.binocular_controller.apply_loaded_image_meta(
-            binocular_mode=payload["binocular_mode"],
-            divider_x_norm=payload["divider_x_norm"],
-        )
-        self.image_viewer.set_annotation_data(payload["eye_data"])
-        self.detection_controller.apply_loaded_detections(payload["detections"])
-        self.session.modified = False
+        with error_dialog(self._dialog_parent, "Load Failed", "Could not load the annotation for this image."):
+            payload = load_annotations(get_annotation_path(image_paths[index]))
+            self.binocular_controller.apply_loaded_image_meta(
+                binocular_mode=payload["binocular_mode"],
+                divider_x_norm=payload["divider_x_norm"],
+            )
+            self.image_viewer.set_annotation_data(payload["eye_data"])
+            self.detection_controller.apply_loaded_detections(payload["detections"])
+            self.session.modified = False
 
     def check_unsaved_changes(self) -> bool:
         """Prompt to save unsaved changes. Return True if it's safe to proceed."""

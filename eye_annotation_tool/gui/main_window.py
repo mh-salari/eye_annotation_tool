@@ -40,6 +40,7 @@ from ..utils.project_settings import (
 from .about_dialog import show_about_dialog
 from .annotation_controls import AnnotationControlPanel
 from .custom_widgets import MaterialButton
+from .error_dialog import show_error
 from .image_tree import ImageTree
 from .image_viewer import ImageViewer
 from .menu_handler import MenuHandler
@@ -105,6 +106,7 @@ class MainWindow(QMainWindow):
         self.orchestrator = DetectorOrchestrator(self)
         self.cli_policy = CliOverridePolicy(cli_monocular, cli_auto_detectors)
         self.project_store = ProjectStore()
+        self.project_store.set_error_handler(lambda exc: show_error(self, "Could Not Save Project", str(exc)))
         self.per_eye_state = PerEyeStateStore(KINDS)
         self.carry_roi_state = CarryRoiStore(KINDS)
         self.session = SessionState(self)

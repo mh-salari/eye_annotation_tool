@@ -10,6 +10,7 @@ Dialog flows (file pickers, missing-file warnings) live on
 ``MainWindow``; this class is pure state + I/O.
 """
 
+from collections.abc import Callable
 from pathlib import Path
 
 from ..utils.project_settings import default_project, load_project, save_project
@@ -28,6 +29,20 @@ class ProjectStore:
         self.project: dict = default_project()
         self.path: str | None = None
         self.read_only: bool = False
+        self._on_error: Callable[[Exception], None] | None = None
+
+    def set_error_handler(self, handler: Callable[[Exception], None]) -> None:
+        """Register a callback invoked when a disk save fails (keeps this store GUI-agnostic)."""
+        self._on_error = handler
+
+    def _guarded_save(self) -> None:
+        """Write the project to disk, routing a failure to the error handler."""
+        try:
+            save_project(self.path, self.project)
+        except Exception as exc:
+            if self._on_error is None:
+                raise
+            self._on_error(exc)
 
     # ---------------------------------------------------------------------------
     # Lifecycle
@@ -45,7 +60,7 @@ class ProjectStore:
                 self.project[key] = value
         self.path = str(project_path)
         self.read_only = False
-        save_project(self.path, self.project)
+        self._guarded_save()
 
     def load(self, project_path: str) -> None:
         """Replace the active project with the contents of ``project_path``."""
@@ -71,19 +86,19 @@ class ProjectStore:
         """Write the project to ``project_path``; clears the read-only flag."""
         self.path = str(project_path)
         self.read_only = False
-        save_project(self.path, self.project)
+        self._guarded_save()
 
     def save(self) -> None:
         """Write to ``self.path``. Caller must guard against ``path is None`` / read-only."""
         if self.path is None or self.read_only:
             return
-        save_project(self.path, self.project)
+        self._guarded_save()
 
     def persist(self) -> None:
         """Write the project to disk if a path is set and we're not read-only."""
         if self.path is None or self.read_only:
             return
-        save_project(self.path, self.project)
+        self._guarded_save()
 
     # ---------------------------------------------------------------------------
     # Image set
