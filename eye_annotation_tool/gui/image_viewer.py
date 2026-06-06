@@ -631,6 +631,18 @@ class ImageViewer(QWidget):
         self.image_loaded.emit()
         return True
 
+    def clear(self) -> None:
+        """Reset the viewer to an empty state (no image, no overlays)."""
+        self.original_pixmap = None
+        self.image_grayscale = None
+        self.detection_overlays.clear_all()
+        self.target_rois.clear_all()
+        self.pupil_points = []
+        self.limbus_points = []
+        self.pupil_ellipse = None
+        self.limbus_ellipse = None
+        self.image_label.clear()
+
     def zoom_in_centered(self) -> None:
         """Zoom in around the centre of the visible viewport."""
         self.zoom_state.zoom_in_centered(self.scroll_area, self)
