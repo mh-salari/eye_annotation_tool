@@ -28,6 +28,7 @@ from .utils.project_settings import (
     KINDS,
     PROJECT_FILE_SUFFIX,
     default_project,
+    disambiguated_labels,
     save_project,
 )
 
@@ -211,8 +212,8 @@ class StartupChooserDialog(QDialog):
             if widget is not None:
                 widget.deleteLater()
         paths = recent_projects.load()
-        for path in paths:
-            row = RecentProjectRow(path, Path(path).exists())
+        for path, label in zip(paths, disambiguated_labels(paths), strict=True):
+            row = RecentProjectRow(path, label, Path(path).exists())
             row.open_requested.connect(self._on_open_recent)
             row.remove_requested.connect(self._on_remove_recent)
             self._recent_layout.addWidget(row)

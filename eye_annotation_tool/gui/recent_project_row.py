@@ -1,12 +1,9 @@
 """A single recent-project row: open button plus a remove (x) button."""
 
-from pathlib import Path
-
 import qtawesome as qta
 from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtWidgets import QHBoxLayout, QPushButton, QToolButton, QWidget
 
-from ..utils.project_settings import PROJECT_FILE_SUFFIX
 from .theme import theme
 
 
@@ -16,7 +13,7 @@ class RecentProjectRow(QWidget):
     open_requested = pyqtSignal(str)
     remove_requested = pyqtSignal(str)
 
-    def __init__(self, project_path: str, exists: bool, parent: QWidget | None = None) -> None:
+    def __init__(self, project_path: str, label: str, exists: bool, parent: QWidget | None = None) -> None:
         """Build the row; greyed out and non-openable when ``exists`` is False."""
         super().__init__(parent)
         self._path = project_path
@@ -27,11 +24,9 @@ class RecentProjectRow(QWidget):
         self.setStyleSheet(
             f"RecentProjectRow:hover {{ background-color: {theme.color('hover_bg')}; border-radius: 4px; }}"
         )
-        name = Path(project_path).name
-        name = name.removesuffix(PROJECT_FILE_SUFFIX)
         row = QHBoxLayout(self)
         row.setContentsMargins(0, 0, 0, 0)
-        open_button = QPushButton(name)
+        open_button = QPushButton(label)
         open_button.setStyleSheet(
             "QPushButton { background: transparent; border: none; text-align: left; padding: 4px 6px; }"
             f"QPushButton:disabled {{ color: {theme.color('muted_fg')}; }}"

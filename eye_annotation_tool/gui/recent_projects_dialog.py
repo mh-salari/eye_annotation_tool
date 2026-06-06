@@ -16,7 +16,7 @@ from PyQt5.QtWidgets import (
 )
 
 from ..state import recent_projects
-from ..utils.project_settings import PROJECT_FILE_SUFFIX
+from ..utils.project_settings import disambiguated_labels
 from .dialogs import confirm
 from .theme import theme
 
@@ -81,9 +81,10 @@ class RecentProjectsDialog(QDialog):
     def _reload(self) -> None:
         """Repopulate the list from disk, greying out missing project files."""
         self._list.clear()
-        for path in recent_projects.load():
+        paths = recent_projects.load()
+        for path, label in zip(paths, disambiguated_labels(paths), strict=True):
             exists = Path(path).exists()
-            item = QListWidgetItem(Path(path).name.removesuffix(PROJECT_FILE_SUFFIX))
+            item = QListWidgetItem(label)
             item.setData(_PATH_ROLE, path)
             item.setToolTip(path if exists else f"{path}\n(project file not found)")
             if not exists:

@@ -37,6 +37,7 @@ next to each image — the project file owns the image *set* and the
 """
 
 import json
+from collections import Counter
 from pathlib import Path
 
 PROJECT_FILE_SUFFIX = ".eye_annotation_project.json"
@@ -70,6 +71,31 @@ DEFAULT_DIVIDER_X_NORM = 0.5
 # monocular mode where the eye selector is hidden, "left" / "right"
 # in binocular mode.
 CARRY_ROI_SLOTS = ("left", "right", "single")
+
+
+def disambiguated_labels(paths: list[str]) -> list[str]:
+    """Project display labels: file name, plus a parent-path tail where names collide."""
+    names = [Path(p).name.removesuffix(PROJECT_FILE_SUFFIX) for p in paths]
+    counts = Counter(names)
+    labels = []
+    for path, name in zip(paths, names, strict=True):
+        if counts[name] == 1:
+            labels.append(name)
+        else:
+            group = [other for other, n in zip(paths, names, strict=True) if n == name]
+            labels.append(f"{name}  ({_distinguishing_tail(path, group)})")
+    return labels
+
+
+def _distinguishing_tail(path: str, group: list[str]) -> str:
+    """Shortest trailing parent path of ``path`` that is unique within ``group``."""
+    parts = Path(path).parent.parts
+    others = [Path(other).parent.parts for other in group if other != path]
+    for depth in range(1, len(parts) + 1):
+        tail = parts[-depth:]
+        if all(tail != other[-depth:] for other in others):
+            return "/".join(tail)
+    return str(Path(path).parent)
 
 
 class ProjectSchemaError(RuntimeError):

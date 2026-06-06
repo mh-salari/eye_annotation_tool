@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING
 from PyQt5.QtWidgets import QAction, QActionGroup, QMenu
 
 from ..state import recent_projects, settings
-from ..utils.project_settings import PROJECT_FILE_SUFFIX
+from ..utils.project_settings import disambiguated_labels
 from .recent_projects_dialog import RecentProjectsDialog
 from .theme import theme
 
@@ -96,10 +96,9 @@ class MenuHandler:
             action = menu.addAction("No recent projects")
             action.setEnabled(False)
             return
-        for path in paths:
+        for path, label in zip(paths, disambiguated_labels(paths), strict=True):
             exists = Path(path).exists()
-            name = Path(path).name.removesuffix(PROJECT_FILE_SUFFIX)
-            action = menu.addAction(name)
+            action = menu.addAction(label)
             action.setToolTip(path if exists else f"{path}\n(project file not found)")
             if exists:
                 action.triggered.connect(lambda _checked=False, p=path: self.main_window.open_project(p))
