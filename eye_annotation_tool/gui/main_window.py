@@ -37,6 +37,8 @@ from ..utils.project_settings import (
     KINDS,
     PROJECT_FILE_SUFFIX,
     ProjectSchemaError,
+    normalize_project_filename,
+    strip_project_suffix,
 )
 from .about_dialog import show_about_dialog
 from .annotation_controls import AnnotationControlPanel
@@ -477,9 +479,9 @@ class MainWindow(QMainWindow):
         normally.
         """
         if self.project_store.path is not None:
-            default_path = self.project_store.path
+            default_path = strip_project_suffix(self.project_store.path)
         else:
-            default_path = str(Path(self._default_dialog_dir()) / f"untitled{PROJECT_FILE_SUFFIX}")
+            default_path = str(Path(self._default_dialog_dir()) / "untitled")
         path, _ = QFileDialog.getSaveFileName(
             self,
             "Save Project As",
@@ -488,8 +490,7 @@ class MainWindow(QMainWindow):
         )
         if not path:
             return
-        if not path.endswith(PROJECT_FILE_SUFFIX):
-            path += PROJECT_FILE_SUFFIX
+        path = normalize_project_filename(path)
         self.project_store.save_as(path)
         self._refresh_save_state_indicator()
 

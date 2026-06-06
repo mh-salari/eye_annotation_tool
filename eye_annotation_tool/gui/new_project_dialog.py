@@ -29,6 +29,8 @@ from ..utils.project_settings import (
     KINDS,
     PROJECT_FILE_SUFFIX,
     default_project,
+    normalize_project_filename,
+    strip_project_suffix,
 )
 from .combo_utils import fit_combo_to_items
 from .dialogs import overwrite_or_rename
@@ -64,10 +66,10 @@ class NewProjectDialog(QDialog):
 
         path_row = QHBoxLayout()
         self._path_edit = QLineEdit()
-        self._path_edit.setPlaceholderText(f"e.g. ~/projects/my_session{PROJECT_FILE_SUFFIX}")
+        self._path_edit.setPlaceholderText("e.g. ~/projects/my_session")
         # Pre-fill with a sensible default so the user can save without
-        # picking a folder first.
-        self._path_edit.setText(str(Path.home() / "Desktop" / f"untitled{PROJECT_FILE_SUFFIX}"))
+        # picking a folder first. The project suffix is added on save.
+        self._path_edit.setText(str(Path.home() / "Desktop" / "untitled"))
         browse_button = QPushButton("Browse…")
         browse_button.clicked.connect(self._on_browse)
         path_row.addWidget(QLabel("Project file:"))
@@ -119,13 +121,11 @@ class NewProjectDialog(QDialog):
         path, _ = QFileDialog.getSaveFileName(
             self,
             "Project file",
-            str(Path.home() / "Desktop" / f"untitled{PROJECT_FILE_SUFFIX}"),
+            str(Path.home() / "Desktop" / "untitled"),
             f"Project Files (*{PROJECT_FILE_SUFFIX})",
         )
         if path:
-            if not path.endswith(PROJECT_FILE_SUFFIX):
-                path += PROJECT_FILE_SUFFIX
-            self._path_edit.setText(path)
+            self._path_edit.setText(strip_project_suffix(path))
 
     def _on_accept(self) -> None:
         path = self._path_edit.text().strip()
@@ -136,8 +136,7 @@ class NewProjectDialog(QDialog):
                 "Pick a save path for the project file before creating it.",
             )
             return
-        if not path.endswith(PROJECT_FILE_SUFFIX):
-            path += PROJECT_FILE_SUFFIX
+        path = normalize_project_filename(path)
         path_obj = Path(path)
         parent = path_obj.parent
         if not parent.exists():
@@ -158,9 +157,7 @@ class NewProjectDialog(QDialog):
 
     def result_payload(self) -> dict:
         """Return the ``{path, project}`` payload from the dialog's inputs."""
-        path = self._path_edit.text().strip()
-        if path and not path.endswith(PROJECT_FILE_SUFFIX):
-            path += PROJECT_FILE_SUFFIX
+        path = normalize_project_filename(self._path_edit.text().strip())
         project = default_project()
         project["binocular_mode"] = self._binocular_radio.isChecked()
         project["autosave"] = self._autosave_checkbox.isChecked()

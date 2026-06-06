@@ -73,6 +73,18 @@ DEFAULT_DIVIDER_X_NORM = 0.5
 CARRY_ROI_SLOTS = ("left", "right", "single")
 
 
+def normalize_project_filename(path: str) -> str:
+    """Ensure ``path`` ends with the project suffix, dropping an accidental ``.json``."""
+    if not path or path.endswith(PROJECT_FILE_SUFFIX):
+        return path
+    return path.removesuffix(".json") + PROJECT_FILE_SUFFIX
+
+
+def strip_project_suffix(path: str) -> str:
+    """Remove the project suffix from ``path`` for display."""
+    return path.removesuffix(PROJECT_FILE_SUFFIX)
+
+
 def disambiguated_labels(paths: list[str]) -> list[str]:
     """Project display labels: file name, plus a parent-path tail where names collide."""
     names = [Path(p).name.removesuffix(PROJECT_FILE_SUFFIX) for p in paths]
