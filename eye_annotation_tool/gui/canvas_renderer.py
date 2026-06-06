@@ -515,14 +515,16 @@ class CanvasRenderer:
     def _contour_to_points(contour: object) -> np.ndarray | None:
         if contour is None:
             return None
-        if isinstance(contour, np.ndarray):
-            if contour.ndim == 3 and contour.shape[1] == 1 and contour.shape[2] == 2:
-                return contour.reshape(-1, 2)
-            if contour.ndim == 2 and contour.shape[1] == 2:
-                return contour
-            return None
-        if isinstance(contour, (list, tuple)) and contour and isinstance(contour[0], (list, tuple)):
-            return np.asarray(contour)
+        if not isinstance(contour, np.ndarray):
+            if not (isinstance(contour, (list, tuple)) and contour and isinstance(contour[0], (list, tuple))):
+                return None
+            contour = np.asarray(contour)
+        # Accept both OpenCV's (N, 1, 2) and a plain (N, 2) — whether the
+        # contour came straight from a detector or was reloaded from JSON.
+        if contour.ndim == 3 and contour.shape[1] == 1 and contour.shape[2] == 2:
+            return contour.reshape(-1, 2)
+        if contour.ndim == 2 and contour.shape[1] == 2:
+            return contour
         return None
 
     @staticmethod
