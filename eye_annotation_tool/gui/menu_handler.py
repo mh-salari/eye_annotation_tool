@@ -1,14 +1,17 @@
-"""Application menu bar setup: File + Help.
+"""Application menu bar setup: File, Settings, and Help.
 
 Detector picking lives in the side-panel cards (Off / Manual / cheshm
 detector id…) — the menu only carries project lifecycle and help.
 """
 
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from PyQt5.QtWidgets import QAction, QActionGroup, QMenu
 
-from ..state import settings
+from ..state import recent_projects, settings
+from ..utils.project_settings import PROJECT_FILE_SUFFIX
+from .recent_projects_dialog import RecentProjectsDialog
 from .theme import theme
 
 if TYPE_CHECKING:
@@ -64,6 +67,10 @@ class MenuHandler:
         open_action.triggered.connect(self.main_window.on_open_project)
         file_menu.addAction(open_action)
 
+        self._recent_menu = file_menu.addMenu("Open Recent")
+        self._recent_menu.setToolTipsVisible(True)
+        self._recent_menu.aboutToShow.connect(self._populate_recent_menu)
+
         save_action = QAction("Save Project", self.main_window)
         save_action.setShortcut("Ctrl+S")
         save_action.triggered.connect(self.main_window.save_project)
@@ -79,6 +86,32 @@ class MenuHandler:
         exit_action = QAction("Exit", self.main_window)
         exit_action.triggered.connect(self.main_window.close)
         file_menu.addAction(exit_action)
+
+    def _populate_recent_menu(self) -> None:
+        """Rebuild the Open Recent submenu from the persisted recent list."""
+        menu = self._recent_menu
+        menu.clear()
+        paths = recent_projects.load()
+        if not paths:
+            action = menu.addAction("No recent projects")
+            action.setEnabled(False)
+            return
+        for path in paths:
+            exists = Path(path).exists()
+            name = Path(path).name.removesuffix(PROJECT_FILE_SUFFIX)
+            action = menu.addAction(name)
+            action.setToolTip(path if exists else f"{path}\n(project file not found)")
+            if exists:
+                action.triggered.connect(lambda _checked=False, p=path: self.main_window.open_project(p))
+            else:
+                action.setEnabled(False)
+        menu.addSeparator()
+        clear_action = menu.addAction("Clear Recent")
+        clear_action.triggered.connect(self._on_clear_recent)
+
+    def _on_clear_recent(self) -> None:
+        """Open the manage-recent dialog (remove individually, by selection, or all)."""
+        RecentProjectsDialog(self.main_window).exec_()
 
     def _add_help_menu(self, help_menu: QMenu) -> None:
         about_action = QAction("About", self.main_window)

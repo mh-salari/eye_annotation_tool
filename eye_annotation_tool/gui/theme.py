@@ -35,6 +35,8 @@ _TOKENS = {
         "hover_bg": "rgba(255, 255, 255, 0.08)",
         "muted_fg": "#777777",
         "link": "#8b7aa2",
+        "danger": "#e06c75",
+        "danger_bg": "rgba(224, 108, 117, 0.22)",
     },
     "light": {
         "icon": "#3c3c3c",
@@ -43,6 +45,8 @@ _TOKENS = {
         "hover_bg": "rgba(0, 0, 0, 0.06)",
         "muted_fg": "#9a9a9a",
         "link": "#6a4fb0",
+        "danger": "#c0392b",
+        "danger_bg": "rgba(192, 57, 43, 0.12)",
     },
 }
 

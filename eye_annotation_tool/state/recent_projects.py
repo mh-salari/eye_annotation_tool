@@ -47,6 +47,11 @@ def remove(project_path: str) -> None:
     _save([x for x in load() if x != p])
 
 
+def clear() -> None:
+    """Empty the recent list; the project files are untouched."""
+    _save([])
+
+
 def _save(items: list[str]) -> None:
     """Write ``items`` to the recent-projects store, creating the config dir if needed."""
     path = _store_path()

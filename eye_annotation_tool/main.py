@@ -4,8 +4,6 @@ import argparse
 import sys
 from pathlib import Path
 
-import qtawesome as qta
-from PyQt5.QtCore import pyqtSignal
 from PyQt5.QtGui import QIcon
 from PyQt5.QtWidgets import (
     QApplication,
@@ -14,7 +12,6 @@ from PyQt5.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QPushButton,
-    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -22,6 +19,7 @@ from PyQt5.QtWidgets import (
 from .gui import MainWindow
 from .gui.dialogs import confirm
 from .gui.new_project_dialog import NewProjectDialog
+from .gui.recent_project_row import RecentProjectRow
 from .gui.theme import apply_theme, theme
 from .state import recent_projects, settings
 from .utils.project_settings import (
@@ -167,40 +165,6 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     return args
 
 
-class _RecentProjectRow(QWidget):
-    """One recent-project row: an open button plus a remove (x) button."""
-
-    open_requested = pyqtSignal(str)
-    remove_requested = pyqtSignal(str)
-
-    def __init__(self, project_path: str, exists: bool, parent: QWidget | None = None) -> None:
-        """Build the row; greyed out and non-openable when ``exists`` is False."""
-        super().__init__(parent)
-        self._path = project_path
-        tooltip = project_path if exists else f"{project_path}\n(project file not found)"
-        self.setToolTip(tooltip)
-        name = Path(project_path).name
-        name = name.removesuffix(PROJECT_FILE_SUFFIX)
-        row = QHBoxLayout(self)
-        row.setContentsMargins(0, 0, 0, 0)
-        open_button = QPushButton(name)
-        open_button.setStyleSheet(
-            "QPushButton { background: transparent; border: none; text-align: left; padding: 4px 6px; }"
-            f"QPushButton:hover {{ background: {theme.color('hover_bg')}; }}"
-            f"QPushButton:disabled {{ color: {theme.color('muted_fg')}; }}"
-        )
-        open_button.setToolTip(tooltip)
-        open_button.setEnabled(exists)
-        open_button.clicked.connect(lambda: self.open_requested.emit(self._path))
-        remove_button = QToolButton()
-        remove_button.setIcon(qta.icon("mdi6.close", color=theme.color("icon_subtle")))
-        remove_button.setAutoRaise(True)
-        remove_button.setToolTip("Remove from the recent list (the project file is kept)")
-        remove_button.clicked.connect(lambda: self.remove_requested.emit(self._path))
-        row.addWidget(open_button, 1)
-        row.addWidget(remove_button)
-
-
 class StartupChooserDialog(QDialog):
     """Modal: recent projects + New / Open, shown when the GUI launches with no CLI hints."""
 
@@ -248,7 +212,7 @@ class StartupChooserDialog(QDialog):
                 widget.deleteLater()
         paths = recent_projects.load()
         for path in paths:
-            row = _RecentProjectRow(path, Path(path).exists())
+            row = RecentProjectRow(path, Path(path).exists())
             row.open_requested.connect(self._on_open_recent)
             row.remove_requested.connect(self._on_remove_recent)
             self._recent_layout.addWidget(row)
