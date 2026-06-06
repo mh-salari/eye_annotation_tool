@@ -80,6 +80,7 @@ class DetectionController(QObject):
 
         self.orchestrator.detector_ready.connect(self._on_detector_ready)
         self.orchestrator.detector_failed.connect(self._on_detector_failed)
+        self.image_viewer.target_roi_changed.connect(self._on_target_roi_changed)
 
         self._wire_card_signals()
 
@@ -362,6 +363,27 @@ class DetectionController(QObject):
             card.set_params({roi_name: None})
             self._on_card_params_changed(kind, params)
 
+    def _on_target_roi_changed(self, kind: str, roi: tuple | None) -> None:
+        """Push a canvas-drawn ROI into the card params and re-run the detector.
+
+        A canvas edit means the user is tuning this image's ROI specifically,
+        so Carry auto-disables for the active eye when a rectangle lands.
+        """
+        card = self.annotation_controls.card(kind)
+        det = card.active_detector() if card is not None else None
+        if card is None or det is None:
+            return
+        roi_name = _roi_setting_name(det)
+        if roi_name is None:
+            return
+        card.set_params({roi_name: roi})
+        self._on_card_params_changed(kind, card.current_params())
+        active_slot = self._active_slot()
+        if roi is not None and self.carry_roi_state.is_enabled(kind, active_slot):
+            self.carry_roi_state.set_enabled(kind, active_slot, False)
+            self._persist_carry_roi(kind)
+            self._refresh_carry_state_for(kind)
+
     def _on_carry_roi_toggled(self, kind: str, enabled: bool) -> None:
         active_slot = self._active_slot()
         self.carry_roi_state.set_enabled(kind, active_slot, enabled)
@@ -438,10 +460,13 @@ class DetectionController(QObject):
                 if det is None or not isinstance(block, dict):
                     continue
                 per_eye_params, per_eye_results = _extract_loaded_blob(block)
+                roi_name = _roi_setting_name(det)
                 for slot, params in per_eye_params.items():
                     if params is None:
                         continue
                     self.per_eye_state.set_params(slot, kind, dict(params))
+                    if roi_name is not None and params.get(roi_name) is not None:
+                        self.image_viewer.set_target_roi(kind, tuple(params[roi_name]), eye_slot=slot)
                 for slot, result in per_eye_results.items():
                     self.per_eye_state.set_result(slot, kind, result)
                     if result is not None:

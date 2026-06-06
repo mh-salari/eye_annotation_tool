@@ -441,10 +441,13 @@ class SettingsBlock(QGroupBox):
         super().__init__(title, parent)
         self._on_change = on_change
         self._widgets: dict[str, _BoundWidget] = {}
+        # Hidden settings (e.g. the canvas-driven ROI) have no widget but still carry a value.
+        self._hidden: dict[str, Any] = {}
         layout = QVBoxLayout()
         layout.setContentsMargins(6, 6, 6, 6)
         for setting in settings:
             if setting.hidden:
+                self._hidden[setting.name] = values.get(setting.name, setting.default)
                 continue
             builder = _BUILDERS.get(setting.type)
             if builder is None:
@@ -456,10 +459,12 @@ class SettingsBlock(QGroupBox):
         self.setLayout(layout)
 
     def current_values(self) -> dict[str, Any]:
-        return {name: widget.current_value() for name, widget in self._widgets.items()}
+        return {**self._hidden, **{name: widget.current_value() for name, widget in self._widgets.items()}}
 
     def set_values(self, values: dict[str, Any]) -> None:
         for name, value in values.items():
+            if name in self._hidden:
+                self._hidden[name] = value
             widget = self._widgets.get(name)
             if widget is not None:
                 widget.set_value(value)
