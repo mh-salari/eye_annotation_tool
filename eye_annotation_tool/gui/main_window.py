@@ -40,7 +40,7 @@ from ..utils.project_settings import (
 from .about_dialog import show_about_dialog
 from .annotation_controls import AnnotationControlPanel
 from .custom_widgets import MaterialButton
-from .error_dialog import show_error
+from .dialogs import confirm, show_error
 from .image_tree import ImageTree
 from .image_viewer import ImageViewer
 from .menu_handler import MenuHandler
@@ -551,6 +551,13 @@ class MainWindow(QMainWindow):
         """
         to_remove = [p for p in paths if p in self.image_paths]
         if not to_remove:
+            return
+        plural = "s" if len(to_remove) != 1 else ""
+        if not confirm(
+            self,
+            "Remove from project",
+            f"Remove {len(to_remove)} image{plural} from the project?\nThe files on disk are kept.",
+        ):
             return
         current_path = self._current_image_path()
         self.project_store.remove_images(to_remove)

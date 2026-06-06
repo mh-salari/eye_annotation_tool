@@ -1,4 +1,4 @@
-"""Shared non-fatal error reporting: show a dialog instead of crashing."""
+"""Shared dialog helpers: error reporting and action confirmation."""
 
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -9,6 +9,12 @@ from PyQt5.QtWidgets import QMessageBox, QWidget
 def show_error(parent: QWidget | None, title: str, message: str) -> None:
     """Show a non-fatal warning dialog."""
     QMessageBox.warning(parent, title, message)
+
+
+def confirm(parent: QWidget | None, title: str, message: str) -> bool:
+    """Ask the user to confirm an action; return True only if they accept."""
+    reply = QMessageBox.question(parent, title, message, QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+    return reply == QMessageBox.Yes
 
 
 @contextmanager

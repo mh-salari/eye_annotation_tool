@@ -4,7 +4,7 @@ from pathlib import Path
 
 from PyQt5.QtWidgets import QMessageBox, QWidget
 
-from ..gui.error_dialog import error_dialog
+from ..gui.dialogs import error_dialog
 from ..gui.image_viewer import ImageViewer
 from ..state import ProjectStore, SessionState
 from ..utils.annotation_io import (
