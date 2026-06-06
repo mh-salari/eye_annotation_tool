@@ -17,6 +17,26 @@ def confirm(parent: QWidget | None, title: str, message: str) -> bool:
     return reply == QMessageBox.Yes
 
 
+def overwrite_or_rename(parent: QWidget | None, path: str) -> str:
+    """Warn that ``path`` exists; return 'overwrite', 'rename', or 'cancel'."""
+    box = QMessageBox(parent)
+    box.setIcon(QMessageBox.Warning)
+    box.setWindowTitle("File already exists")
+    box.setText(f"A project already exists at:\n{path}")
+    box.setInformativeText("Overwrite it, rename, or cancel?")
+    overwrite_button = box.addButton("Overwrite", QMessageBox.DestructiveRole)
+    rename_button = box.addButton("Rename…", QMessageBox.ActionRole)
+    box.addButton("Cancel", QMessageBox.RejectRole)
+    box.setDefaultButton(rename_button)
+    box.exec_()
+    clicked = box.clickedButton()
+    if clicked is overwrite_button:
+        return "overwrite"
+    if clicked is rename_button:
+        return "rename"
+    return "cancel"
+
+
 @contextmanager
 def error_dialog(parent: QWidget | None, title: str, detail: str = "") -> Iterator[None]:
     """Run a block; on any exception show a dialog and continue instead of crashing.

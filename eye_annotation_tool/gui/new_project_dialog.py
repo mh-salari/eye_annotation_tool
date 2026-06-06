@@ -31,6 +31,7 @@ from ..utils.project_settings import (
     default_project,
 )
 from .combo_utils import fit_combo_to_items
+from .dialogs import overwrite_or_rename
 
 
 class NewProjectDialog(QDialog):
@@ -135,6 +136,8 @@ class NewProjectDialog(QDialog):
                 "Pick a save path for the project file before creating it.",
             )
             return
+        if not path.endswith(PROJECT_FILE_SUFFIX):
+            path += PROJECT_FILE_SUFFIX
         path_obj = Path(path)
         parent = path_obj.parent
         if not parent.exists():
@@ -143,6 +146,13 @@ class NewProjectDialog(QDialog):
                 "Parent folder missing",
                 f"The folder {parent} does not exist. Pick a different path.",
             )
+            return
+        if path_obj.exists():
+            choice = overwrite_or_rename(self, str(path_obj))
+            if choice == "overwrite":
+                self.accept()
+            elif choice == "rename":
+                self._on_browse()
             return
         self.accept()
 
