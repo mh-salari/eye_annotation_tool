@@ -137,6 +137,11 @@ class CanvasRenderer:
             return None
         source_pixmap = self.brightness.display_pixmap(original_pixmap)
         scaled_pixmap = self._scaled_source_for(source_pixmap)
+        # Before the viewport is laid out the zoom factor can collapse to ~0,
+        # making the scaled pixmap null; painting on it would spam QPainter /
+        # QFont warnings. Skip until there is a real size to draw into.
+        if scaled_pixmap.isNull():
+            return None
         canvas = QPixmap(scaled_pixmap.size())
         canvas.fill(Qt.transparent)
         painter = QPainter(canvas)
