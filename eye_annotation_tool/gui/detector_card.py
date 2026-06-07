@@ -10,6 +10,7 @@ kind's manual annotation group widget instead.
 
 from typing import Any
 
+import qtawesome as qta
 from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtGui import QColor, QPalette
 from PyQt5.QtWidgets import (
@@ -20,11 +21,13 @@ from PyQt5.QtWidgets import (
     QFrame,
     QHBoxLayout,
     QLabel,
+    QMenu,
     QMessageBox,
     QPushButton,
     QSizePolicy,
     QSlider,
     QSpinBox,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -34,6 +37,7 @@ from eye_annotation_tool.auto_detectors.plugin import DetectorPlugin as Detector
 from .collapsible import CollapsibleSection
 from .custom_widgets import MaterialButton
 from .detector_setting_widgets import SettingsBlock
+from .theme import theme
 
 # A detector setting value, spanning every ``SettingSpec.type`` tag.
 SettingValue = int | float | str | bool | tuple | None
@@ -321,6 +325,8 @@ class DetectorCard(QFrame):
         }
         # Pinned setting names per detector id (which settings sit in the quick zone).
         self._pinned: dict[str, list[str]] = {}
+        # Saved project-default params per detector id (what "Reset" restores).
+        self._project_defaults: dict[str, dict[str, Any]] = {}
         self._overlay_state: dict[str, dict[str, dict[str, Any]]] = {
             d.name: default_overlay_state(kind, d.overlays) for d in self._detectors
         }
@@ -361,12 +367,24 @@ class DetectorCard(QFrame):
         layout.addWidget(self._overlay_row)
 
         button_row = QHBoxLayout()
-        self._reset_button = MaterialButton("Reset to defaults", compact=True)
-        self._reset_button.clicked.connect(self._on_reset_clicked)
-        self._save_default_button = MaterialButton("Save as default", compact=True)
+        self._reset_button = QToolButton()
+        self._reset_button.setText("Reset")
+        self._reset_button.setToolButtonStyle(Qt.ToolButtonTextOnly)
+        self._reset_button.setPopupMode(QToolButton.MenuButtonPopup)
+        self._reset_button.clicked.connect(self._on_reset_to_project)
+        reset_menu = QMenu(self._reset_button)
+        reset_menu.addAction("Reset to project default", self._on_reset_to_project)
+        reset_menu.addAction("Reset to built-in defaults", self._on_reset_to_builtin)
+        self._reset_button.setMenu(reset_menu)
+        self._save_default_button = QToolButton()
+        self._save_default_button.setAutoRaise(True)
+        self._save_default_button.setToolTip("Save settings as project default")
         self._save_default_button.clicked.connect(self._on_save_default_clicked)
+        self._refresh_save_icon()
+        theme.changed.connect(self._refresh_save_icon)
         button_row.addWidget(self._reset_button)
         button_row.addWidget(self._save_default_button)
+        button_row.addStretch(1)
         layout.addLayout(button_row)
 
         self._content_layout = QVBoxLayout()
@@ -404,6 +422,10 @@ class DetectorCard(QFrame):
     def set_pinned(self, detector_id: str, pinned: list[str]) -> None:
         """Store the pinned setting names for ``detector_id`` (applied on next build)."""
         self._pinned[detector_id] = list(pinned)
+
+    def set_project_default(self, detector_id: str, params: dict[str, Any] | None) -> None:
+        """Record the saved project-default params for ``detector_id`` (what Reset restores)."""
+        self._project_defaults[detector_id] = dict(params) if params else {}
 
     def overlay_state(self) -> dict[str, dict[str, Any]] | None:
         """Return the overlay state for the current selection.
@@ -486,16 +508,35 @@ class DetectorCard(QFrame):
         self._refresh_content()
         self.selection_changed.emit(self._active_id)
 
-    def _on_reset_clicked(self) -> None:
+    def _on_reset_to_project(self) -> None:
+        """Reset to the saved project default (falling back to built-in if none saved)."""
         if self._active_id == MANUAL:
-            self._manual_overlay_state = default_manual_overlay_state(self.kind)
-            self._overlay_row.populate(self._manual_overlay_state)
-            self.reset_requested.emit()
+            self._reset_manual()
             return
         det = self.active_detector()
         if det is None:
             return
-        self._values[det.name] = {s.name: s.default for s in det.settings}
+        saved = self._project_defaults.get(det.name)
+        values = dict(saved) if saved else {s.name: s.default for s in det.settings}
+        self._apply_reset(det, values)
+
+    def _on_reset_to_builtin(self) -> None:
+        """Reset to the detector's built-in defaults, ignoring any saved project default."""
+        if self._active_id == MANUAL:
+            self._reset_manual()
+            return
+        det = self.active_detector()
+        if det is None:
+            return
+        self._apply_reset(det, {s.name: s.default for s in det.settings})
+
+    def _reset_manual(self) -> None:
+        self._manual_overlay_state = default_manual_overlay_state(self.kind)
+        self._overlay_row.populate(self._manual_overlay_state)
+        self.reset_requested.emit()
+
+    def _apply_reset(self, det: Detector, values: dict[str, Any]) -> None:
+        self._values[det.name] = dict(values)
         self._overlay_state[det.name] = default_overlay_state(self.kind, det.overlays)
         if self._settings_block is not None:
             self._settings_block.set_values(self._values[det.name])
@@ -503,13 +544,16 @@ class DetectorCard(QFrame):
         self.params_changed.emit(dict(self._values[det.name]))
         self.reset_requested.emit()
 
+    def _refresh_save_icon(self) -> None:
+        self._save_default_button.setIcon(qta.icon("mdi6.content-save-cog", color=theme.color("icon")))
+
     def _on_save_default_clicked(self) -> None:
         if self.active_detector() is None:
             return
         reply = QMessageBox.question(
             self,
-            f"Save {self.kind.capitalize()} default?",
-            f"Replace this project's saved {self.kind} detector defaults with the current values?",
+            f"Save {self.kind.capitalize()} project default?",
+            f"Replace this project's saved {self.kind} default with the current values?",
             QMessageBox.Yes | QMessageBox.No,
             QMessageBox.No,
         )

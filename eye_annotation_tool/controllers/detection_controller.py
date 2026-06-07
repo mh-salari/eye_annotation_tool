@@ -201,6 +201,7 @@ class DetectionController(QObject):
         card = self.annotation_controls.card(kind)
         if card is None:
             return
+        card.set_project_default(det.name, defaults)
         if defaults:
             card.set_params(defaults)
         else:
@@ -257,7 +258,8 @@ class DetectionController(QObject):
         kind_block["pinned"] = card.current_pinned()
         kind_block["overlays"] = _serialize_overlays(card.overlay_state())
         self.project_store.persist()
-        self.status_message.emit(f"{kind.capitalize()} defaults saved.", 3000)
+        card.set_project_default(card.active_id(), cleaned)
+        self.status_message.emit(f"{kind.capitalize()} default saved.", 3000)
 
     def _on_overlay_changed(self, _key: str, _field: str, _value: object) -> None:
         # The card already mutated its overlay state; mark the project modified
