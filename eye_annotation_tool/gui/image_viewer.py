@@ -5,7 +5,7 @@ from typing import ClassVar
 import cv2
 import numpy as np
 from PyQt5.QtCore import QEvent, QPoint, QPointF, QSizeF, Qt, pyqtSignal
-from PyQt5.QtGui import QKeyEvent, QPixmap
+from PyQt5.QtGui import QKeyEvent, QPixmap, QResizeEvent
 from PyQt5.QtWidgets import QLabel, QMessageBox, QScrollArea, QVBoxLayout, QWidget
 
 from ..state import EyeDataStore, OverlayStore, TargetRoiStore, UndoStack
@@ -15,6 +15,33 @@ from .brightness_controller import BrightnessController
 from .canvas_renderer import AnnotationColors, CanvasGeometry, CanvasRenderer, OverlayStateLookup
 from .mouse_drag_state import MouseDragState
 from .zoom_controller import ZoomController
+
+
+class _ElidedPathLabel(QLabel):
+    """A single-line label that middle-elides its text to fit the available width.
+
+    The full text is kept as the tooltip so the complete path is always
+    reachable on hover even when the displayed text is truncated.
+    """
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        """Create an empty elided label."""
+        super().__init__(parent)
+        self._full_text = ""
+
+    def set_full_text(self, text: str) -> None:
+        """Store ``text`` as the full path and render an elided version of it."""
+        self._full_text = text
+        self.setToolTip(text)
+        self._apply_elide()
+
+    def resizeEvent(self, event: QResizeEvent) -> None:  # noqa: N802
+        """Re-elide on width changes so the visible text always fits."""
+        super().resizeEvent(event)
+        self._apply_elide()
+
+    def _apply_elide(self) -> None:
+        self.setText(self.fontMetrics().elidedText(self._full_text, Qt.ElideMiddle, self.width()))
 
 
 class ImageViewer(QWidget):
@@ -69,6 +96,9 @@ class ImageViewer(QWidget):
     def setup_ui(self) -> None:
         """Set up the user interface components."""
         layout = QVBoxLayout()
+        self.path_label = _ElidedPathLabel()
+        self.path_label.setContentsMargins(4, 2, 4, 2)
+        layout.addWidget(self.path_label)
         self.image_label = QLabel()
         self.image_label.setAlignment(Qt.AlignCenter)
         self.scroll_area = QScrollArea()
@@ -78,6 +108,10 @@ class ImageViewer(QWidget):
         self.setLayout(layout)
 
         self.scroll_area.viewport().installEventFilter(self)
+
+    def set_image_path_text(self, text: str) -> None:
+        """Show ``text`` (an image path) in the breadcrumb strip above the image."""
+        self.path_label.set_full_text(text)
 
     def setup_variables(self) -> None:
         """Initialize instance variables."""

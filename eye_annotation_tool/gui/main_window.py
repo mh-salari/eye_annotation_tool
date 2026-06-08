@@ -343,18 +343,20 @@ class MainWindow(QMainWindow):
         self.session.modified = modified
 
     def _refresh_save_state_indicator(self) -> None:
-        """Sync the window title to the current save state.
+        """Sync the window title to the current project and save state.
 
-        Treated as saved when autosave is enabled (autosave keeps disk in sync
-        on every image change) or when no edits are pending. Read-only
-        sessions are tagged with a ``(read-only)`` suffix so the user can
-        see at a glance that project-level edits won't persist.
+        The title names the open project (not the current image — the image
+        path lives in the viewer's breadcrumb). Treated as saved when autosave
+        is enabled (autosave keeps disk in sync on every image change) or when
+        no edits are pending. Read-only sessions are tagged with a
+        ``(read-only)`` suffix so the user can see at a glance that
+        project-level edits won't persist.
         """
         saved = self.project_store.autosave or not self.session.modified
         ro = " (read-only)" if self.project_store.read_only else ""
-        if 0 <= self.session.current_image_index < len(self.image_paths):
-            name = Path(self.image_paths[self.session.current_image_index]).name
-            self.setWindowTitle(f"EyE Annotation Tool - {name}{'' if saved else ' *'}{ro}")
+        project_name = strip_project_suffix(Path(self.project_store.path).name) if self.project_store.path else None
+        if project_name:
+            self.setWindowTitle(f"EyE Annotation Tool - {project_name}{'' if saved else ' *'}{ro}")
         else:
             self.setWindowTitle(f"EyE Annotation Tool{'' if saved else ' *'}{ro}")
 
@@ -456,7 +458,6 @@ class MainWindow(QMainWindow):
         self.refresh_image_tree()
         if self.image_paths:
             self.load_current_image()
-        self._refresh_save_state_indicator()
 
     def save_project(self) -> None:
         """Write the active project to disk; prompt for path if unsaved.
@@ -598,6 +599,7 @@ class MainWindow(QMainWindow):
         self.autosave_checkbox.blockSignals(True)
         self.autosave_checkbox.setChecked(self.project_store.autosave)
         self.autosave_checkbox.blockSignals(False)
+        self._refresh_save_state_indicator()
 
     # ----- File-menu action stubs (wired by MenuHandler) ---------------
 
@@ -724,11 +726,23 @@ class MainWindow(QMainWindow):
         if 0 <= self.session.current_image_index < len(self.image_paths):
             image_path = self.image_paths[self.session.current_image_index]
             if self.image_viewer.load_image(image_path):
-                self.setWindowTitle(f"EyE Annotation Tool - {Path(image_path).name}")
+                self.image_viewer.set_image_path_text(self._relative_image_path(image_path))
                 self.annotation_controller.load_annotations()
                 self.detection_controller.refresh_all_detections()
             else:
                 QMessageBox.critical(self, "Error", f"Failed to load image: {image_path}")
+        else:
+            self.image_viewer.set_image_path_text("")
+
+    def _relative_image_path(self, image_path: str) -> str:
+        """Path of ``image_path`` relative to the project folder, or absolute if outside it."""
+        root = self.project_store.project_root()
+        if root is None:
+            return Path(image_path).name
+        try:
+            return str(Path(image_path).relative_to(root))
+        except ValueError:
+            return image_path
 
     def on_annotation_changed(self) -> None:
         """Handle a manual-annotation edit: mark the project dirty."""
