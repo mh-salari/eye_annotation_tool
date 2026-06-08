@@ -133,6 +133,35 @@ class DetectionController(QObject):
                 out[kind] = dict(card.current_params())
         return out
 
+    def snapshot_selection(self) -> dict[str, str]:
+        """Return each kind's active detector id (Off / Manual / detector name) for undo/redo."""
+        out: dict[str, str] = {}
+        for kind in KINDS:
+            card = self.annotation_controls.card(kind)
+            if card is not None:
+                out[kind] = card.active_id()
+        return out
+
+    def apply_selection(self, selection: dict[str, str]) -> None:
+        """Restore each kind's detector selection for undo/redo.
+
+        Silent (``emit=False``) so it records no new undo step; stale overlays,
+        ROIs, and cached results for changed kinds are dropped and the enabled
+        set is refreshed. The caller re-runs detection afterwards (via
+        :meth:`apply_params`), so this does not run detectors itself.
+        """
+        for kind in KINDS:
+            slug = selection.get(kind)
+            card = self.annotation_controls.card(kind)
+            if card is None or slug is None or card.active_id() == slug:
+                continue
+            card.set_selection(slug, emit=False)
+            self.image_viewer.clear_detection_overlay(kind)
+            self.image_viewer.clear_target_roi(kind)
+            self.orchestrator.set_cached_result(kind, None)
+        self._refresh_orchestrator_enabled()
+        self._refresh_auto_managed_kinds()
+
     def apply_params(self, params_by_kind: dict[str, dict]) -> None:
         """Push ``params_by_kind`` onto the active eye's cards + state and re-run.
 
@@ -248,6 +277,10 @@ class DetectionController(QObject):
         self._persist_overlays(kind)
         self.annotation_modified.emit(True)
         self._kick_live_run(kind)
+        # A detector-type switch is a discrete edit: record it on the shared
+        # timeline so undo/redo steps through it like points and params.
+        if self.undo_coordinator is not None:
+            self.undo_coordinator.capture()
 
     def _on_card_params_changed(self, kind: str, params: dict) -> None:
         self.annotation_modified.emit(True)

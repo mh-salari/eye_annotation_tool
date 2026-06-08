@@ -350,14 +350,16 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage("Settings pasted.", 2000)
 
     def _build_undo_snapshot(self) -> dict:
-        """Combined undo snapshot: active-eye manual points + active-eye detector params."""
+        """Combined undo snapshot: detector selection + active-eye manual points + params."""
         return {
+            "selection": self.detection_controller.snapshot_selection(),
             "points": self.image_viewer.snapshot_points(),
             "params": self.detection_controller.snapshot_params(),
         }
 
     def _apply_undo_snapshot(self, snapshot: dict) -> None:
         """Restore a combined snapshot produced by :meth:`_build_undo_snapshot`."""
+        self.detection_controller.apply_selection(snapshot["selection"])
         self.image_viewer.apply_points_state(snapshot["points"])
         self.detection_controller.apply_params(snapshot["params"])
 
