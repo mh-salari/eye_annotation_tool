@@ -19,9 +19,10 @@ from PyQt5.QtCore import QPoint, QPointF
 class MouseDragState:
     """Mutable flags + coordinates spanning the three mouse handlers."""
 
-    # Middle-button panning ----------------------------------------------------
+    # Panning (middle-button, or Spacebar + left-button) -----------------------
     panning: bool = False
     last_pan_pos: QPoint | None = None
+    space_pressed: bool = False
 
     # Manual-point selection / move (left-button in Manual mode) ---------------
     selected_point: QPointF | None = None

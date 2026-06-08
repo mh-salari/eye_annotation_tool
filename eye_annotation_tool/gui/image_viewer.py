@@ -339,6 +339,10 @@ class ImageViewer(QWidget):
             self.delete_selected_point()
         elif event.key() == Qt.Key_Shift:
             self.mouse_state.shift_pressed = True
+        elif event.key() == Qt.Key_Space and not event.isAutoRepeat():
+            self.mouse_state.space_pressed = True
+            if not self.mouse_state.panning:
+                self.setCursor(Qt.OpenHandCursor)
         else:
             super().keyPressEvent(event)
 
@@ -346,6 +350,12 @@ class ImageViewer(QWidget):
         """Handle key release events."""
         if event.key() == Qt.Key_Shift:
             self.mouse_state.shift_pressed = False
+        elif event.key() == Qt.Key_Space and not event.isAutoRepeat():
+            self.mouse_state.space_pressed = False
+            # If a space-pan is mid-drag, keep the closed-hand cursor until the
+            # mouse is released; otherwise drop straight back to the arrow.
+            if not self.mouse_state.panning:
+                self.setCursor(Qt.ArrowCursor)
         super().keyReleaseEvent(event)
 
     def delete_selected_point(self) -> None:
@@ -471,6 +481,13 @@ class ImageViewer(QWidget):
             self.mouse_state.last_pan_pos = event.pos()
             self.setCursor(Qt.ClosedHandCursor)
         elif event.button() == Qt.LeftButton:
+            # Spacebar held turns left-drag into a pan (hand tool), taking
+            # priority over every annotation action below.
+            if self.mouse_state.space_pressed:
+                self.mouse_state.panning = True
+                self.mouse_state.last_pan_pos = event.pos()
+                self.setCursor(Qt.ClosedHandCursor)
+                return
             image_pos = self.get_image_position(event.pos())
             if image_pos:
                 # The binocular divider grabs the click before anything
@@ -560,6 +577,10 @@ class ImageViewer(QWidget):
             self.mouse_state.panning = False
             self.setCursor(Qt.ArrowCursor)
         elif event.button() == Qt.LeftButton:
+            if self.mouse_state.panning:
+                self.mouse_state.panning = False
+                self.setCursor(Qt.OpenHandCursor if self.mouse_state.space_pressed else Qt.ArrowCursor)
+                return
             if self.mouse_state.divider_drag_active:
                 self.mouse_state.divider_drag_active = False
                 self.setCursor(Qt.ArrowCursor)
