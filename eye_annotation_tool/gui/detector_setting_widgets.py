@@ -8,7 +8,7 @@ from collections.abc import Callable
 from typing import Any
 
 import qtawesome as qta
-from PyQt5.QtCore import Qt, pyqtSignal
+from PyQt5.QtCore import QSize, Qt, pyqtSignal
 from PyQt5.QtWidgets import (
     QAbstractSpinBox,
     QCheckBox,
@@ -448,6 +448,9 @@ class _SettingRow(QWidget):
         self._pin.setCheckable(True)
         self._pin.setChecked(pinned)
         self._pin.setAutoRaise(True)
+        # Fixed footprint so a near-zero row height can't yield a negative icon rect.
+        self._pin.setIconSize(QSize(16, 16))
+        self._pin.setFixedSize(QSize(24, 24))
         self._pin.setToolTip("Pin to quick settings")
         self._pin.toggled.connect(self._on_toggle)
         self._refresh_icon()
