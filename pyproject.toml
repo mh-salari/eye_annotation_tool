@@ -25,7 +25,7 @@ dependencies = [
     "qtawesome>=1.4.2",
     "pyqtdarktheme>=2.1",
     "scipy>=1.7.0",
-    "cheshm>=2.0.0",
+    "cheshm>=2.1.1",
     "darkdetect>=0.7.1",
 ]
 
