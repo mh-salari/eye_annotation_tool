@@ -506,6 +506,24 @@ class DetectionController(QObject):
         """Restore per-image detection blocks from a loaded annotation file."""
         self.image_viewer.pause_updates()
         try:
+            # Select each kind's detector from the image (saved id, else the
+            # project default) before its params/results, so they bind to the
+            # detector this image was annotated with.
+            project_detectors = self.project_store.project.get("detectors", {})
+            for kind in KINDS:
+                card = self.annotation_controls.card(kind)
+                if card is None:
+                    continue
+                block = detections.get(kind)
+                if isinstance(block, dict) and isinstance(block.get("id"), str):
+                    target_id = block["id"]
+                else:
+                    target_id = (project_detectors.get(kind) or {}).get("id", DETECTOR_OFF)
+                if target_id != card.active_id():
+                    card.set_selection(target_id, emit=False)
+            self._refresh_orchestrator_enabled()
+            self._refresh_auto_managed_kinds()
+
             active_slot = self._active_slot()
             for kind, block in detections.items():
                 det = self.enabled_detector(kind)
