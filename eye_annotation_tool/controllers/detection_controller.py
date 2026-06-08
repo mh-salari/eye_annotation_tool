@@ -325,16 +325,16 @@ class DetectionController(QObject):
             return
         pupil_card = self.annotation_controls.card("pupil")
         if pupil_card is not None and pupil_card.active_detector() is not None:
-            self._run_pupil_with_crop(image, pupil_card.current_params())
+            self._run_with_crop("pupil", image, pupil_card.current_params())
         else:
             self.orchestrator.set_cached_result("pupil", self._manual_pupil_result())
-        # Glint / limbus / eyelid run on the full image; pupil coords
-        # cached above are already in full-image space so downstream
-        # search regions hit the right eye.
+        # Glint / limbus / eyelid run on the active eye's half too, anchored on
+        # the pupil translated into that crop, so each kind stays on its side of
+        # the divider instead of latching onto the other eye or the face.
         for kind in ("glint", "limbus", "eyelid"):
             card = self.annotation_controls.card(kind)
             if card is not None and card.active_detector() is not None:
-                self.orchestrator.run_one(kind, image, card.current_params())
+                self._run_with_crop(kind, image, card.current_params())
 
     def refresh_all_detections(self) -> None:
         """Public hook: re-run every enabled detector top-down on the current image."""
@@ -374,27 +374,43 @@ class DetectionController(QObject):
     # Binocular pupil crop
     # ---------------------------------------------------------------------------
 
-    def _run_pupil_with_crop(self, image: np.ndarray, params: dict) -> None:
-        """Run the pupil detector on the active eye's half in binocular mode.
+    def _run_with_crop(self, kind: str, image: np.ndarray, params: dict) -> None:
+        """Run ``kind``'s detector on the active eye's half in binocular mode.
 
-        Without cropping the threshold detector sees both eyes and can
-        latch onto a contour that straddles the divider line.
+        Cropping to the eye's side keeps every detector on its own side of the
+        divider: without it a threshold detector sees both eyes and can latch
+        onto a contour that straddles the divider, or a glint with no pupil
+        anchor onto a bright spot anywhere on the face.
+
+        The detector's ROI is intersected with the crop, the cached pupil
+        (which glint/limbus/eyelid anchor on) is translated into the crop's
+        coordinates for the run, and the result is translated back to full-image
+        coordinates. In monocular mode the detector runs on the whole image.
         """
         bounds = self._active_eye_crop_bounds(image)
         if bounds is None:
-            self.orchestrator.run_one("pupil", image, params)
+            self.orchestrator.run_one(kind, image, params)
             return
         dx, dy, dw, dh = bounds
         cropped = image[dy : dy + dh, dx : dx + dw]
         cropped_params = dict(params)
-        if "pupil_roi" in cropped_params:
-            cropped_params["pupil_roi"] = _intersect_roi_with_crop(cropped_params["pupil_roi"], bounds)
-        self.orchestrator.run_one(
-            "pupil",
-            cropped,
-            cropped_params,
-            post_process=lambda r: _translate_result(r, dx, dy),
-        )
+        roi_name = _roi_setting_name(self.orchestrator.enabled_detector(kind))
+        if roi_name is not None and cropped_params.get(roi_name) is not None:
+            cropped_params[roi_name] = _intersect_roi_with_crop(cropped_params[roi_name], bounds)
+        full_pupil = self.orchestrator.cached_result("pupil")
+        anchors_on_pupil = kind in {"glint", "limbus", "eyelid"} and full_pupil is not None
+        if anchors_on_pupil:
+            self.orchestrator.set_cached_result("pupil", _translate_result(full_pupil, -dx, -dy))
+        try:
+            self.orchestrator.run_one(
+                kind,
+                cropped,
+                cropped_params,
+                post_process=lambda r: _translate_result(r, dx, dy),
+            )
+        finally:
+            if anchors_on_pupil:
+                self.orchestrator.set_cached_result("pupil", full_pupil)
 
     def _active_eye_crop_bounds(self, image: np.ndarray) -> tuple[int, int, int, int] | None:
         """Return ``(dx, dy, dw, dh)`` for the active eye's half, or ``None`` in monocular."""
