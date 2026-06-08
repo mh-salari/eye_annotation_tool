@@ -439,15 +439,37 @@ class DetectorCard(QFrame):
         self._values[det.name].update(params)
         self._settings_block.set_values(self._values[det.name])
 
-    def set_overlay_state(self, overlay_state: dict[str, dict[str, Any]]) -> None:
-        """Merge ``overlay_state`` into the active detector's overlay state."""
-        det = self.active_detector()
-        if det is None:
-            return
-        for key, fields in overlay_state.items():
-            if key in self._overlay_state[det.name]:
-                self._overlay_state[det.name][key].update(fields)
-        self._overlay_row.populate(self._overlay_state[det.name])
+    def all_overlay_states(self) -> dict[str, dict[str, dict[str, Any]]]:
+        """Return every detector's overlay state plus the manual state.
+
+        Keyed by detector id: the auto detector names, and ``MANUAL`` for the
+        manual-annotation overlays. This lets the project persist and restore
+        each detector type's overlays independently of which one is active.
+        """
+        states: dict[str, dict[str, dict[str, Any]]] = dict(self._overlay_state)
+        states[MANUAL] = self._manual_overlay_state
+        return states
+
+    def set_all_overlay_states(self, saved: dict[str, dict[str, dict[str, Any]]]) -> None:
+        """Restore per-detector overlay states saved by :meth:`all_overlay_states`.
+
+        Unknown detector ids and unknown overlay keys are ignored, and anything
+        the save omits keeps its default, so a new detector or overlay key stays
+        forward-compatible.
+        """
+        for det_id, state in saved.items():
+            if det_id == MANUAL:
+                target = self._manual_overlay_state
+            elif det_id in self._overlay_state:
+                target = self._overlay_state[det_id]
+            else:
+                continue
+            for key, fields in state.items():
+                if key in target:
+                    target[key].update(fields)
+        current = self.overlay_state()
+        if current is not None:
+            self._overlay_row.populate(current)
 
     def set_manual_host(self, widget: QWidget | None) -> None:
         """Register the widget shown when the user picks Manual."""

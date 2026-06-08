@@ -201,12 +201,12 @@ class DetectionController(QObject):
                 continue
             card.set_pinned(slug, entry.get("pinned") or [])
             card.set_selection(slug, emit=False)
+            overlays = entry.get("overlays")
+            if isinstance(overlays, dict):
+                card.set_all_overlay_states(_deserialize_overlays(overlays))
             det = card.active_detector()
             if det is not None:
                 self._restore_card_params(kind, det, params_by_slot)
-                overlays = entry.get("overlays")
-                if isinstance(overlays, dict):
-                    card.set_overlay_state(_deserialize_overlays(overlays))
         self._refresh_orchestrator_enabled()
         self._refresh_auto_managed_kinds()
         self._kick_live_run_for_all_enabled()
@@ -243,8 +243,8 @@ class DetectionController(QObject):
         # Switching detector (e.g. to Manual) must drop any active ROI edit so
         # clicks return to annotating instead of drawing an ROI.
         self.cancel_active_roi_edit()
-        # The new detector exposes its own overlay keys; persist its defaults
-        # as the project's overlays for this kind.
+        # Keep the project's per-detector overlay map in sync now that the
+        # active detector changed; each detector keeps its own overlays.
         self._persist_overlays(kind)
         self.annotation_modified.emit(True)
         self._kick_live_run(kind)
@@ -283,7 +283,7 @@ class DetectionController(QObject):
         kind_block["id"] = card.active_id()
         kind_block["params"] = {slot: dict(cleaned) for slot in slots}
         kind_block["pinned"] = card.current_pinned()
-        kind_block["overlays"] = _serialize_overlays(card.overlay_state())
+        kind_block["overlays"] = _serialize_overlays(card.all_overlay_states())
         self.project_store.persist()
         card.set_project_default(card.active_id(), cleaned)
         self.status_message.emit(f"{kind.capitalize()} default saved.", 3000)
@@ -612,7 +612,7 @@ class DetectionController(QObject):
             return
         detectors_block = self.project_store.project.setdefault("detectors", {})
         kind_block = detectors_block.setdefault(kind, {})
-        kind_block["overlays"] = _serialize_overlays(card.overlay_state())
+        kind_block["overlays"] = _serialize_overlays(card.all_overlay_states())
         self.project_store.persist()
 
     def _on_card_pins_changed(self, kind: str, pinned: list) -> None:
@@ -661,30 +661,47 @@ def _serialize_result(result: object) -> object:
     return result
 
 
-def _serialize_overlays(overlay_state: dict | None) -> dict:
-    """Convert a detector's overlay state to JSON form (QColor -> hex string)."""
-    if not overlay_state:
+def _serialize_overlays(states: dict | None) -> dict:
+    """Convert a per-detector overlay map to JSON form (QColor -> hex string).
+
+    ``states`` maps each detector id (plus ``manual``) to its overlay state,
+    whose inner dicts map overlay key to style fields.
+    """
+    if not states:
         return {}
     out: dict = {}
-    for key, fields in overlay_state.items():
-        entry = dict(fields)
-        color = entry.get("color")
-        if isinstance(color, QColor):
-            entry["color"] = color.name()
-        out[key] = entry
+    for det_id, state in states.items():
+        det_out: dict = {}
+        for key, fields in state.items():
+            entry = dict(fields)
+            color = entry.get("color")
+            if isinstance(color, QColor):
+                entry["color"] = color.name()
+            det_out[key] = entry
+        out[det_id] = det_out
     return out
 
 
 def _deserialize_overlays(saved: dict) -> dict:
-    """Convert a saved overlay block back to in-memory form (hex string -> QColor)."""
+    """Convert a saved per-detector overlay map back to in-memory form.
+
+    Hex colour strings become :class:`QColor`. Entries that are not the nested
+    ``{detector_id: {overlay_key: fields}}`` shape yield empty states, so an
+    older flat file simply falls back to the detectors' default overlays.
+    """
     out: dict = {}
-    for key, fields in saved.items():
-        if not isinstance(fields, dict):
+    for det_id, state in saved.items():
+        if not isinstance(state, dict):
             continue
-        entry = dict(fields)
-        if isinstance(entry.get("color"), str):
-            entry["color"] = QColor(entry["color"])
-        out[key] = entry
+        det_out: dict = {}
+        for key, fields in state.items():
+            if not isinstance(fields, dict):
+                continue
+            entry = dict(fields)
+            if isinstance(entry.get("color"), str):
+                entry["color"] = QColor(entry["color"])
+            det_out[key] = entry
+        out[det_id] = det_out
     return out
 
 

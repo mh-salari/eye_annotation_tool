@@ -19,7 +19,7 @@ Schema::
         "pupil":  {"id": "<cheshm-id>" | "off" | "manual",
                     "params": {"left": {...}|null, "right": {...}|null, "single": {...}|null},
                     "pinned": [...],
-                    "overlays": {"<key>": {"show": bool, "color": "#rrggbb", ...}}},
+                    "overlays": {"<detector-id>": {"<key>": {"show": bool, "color": "#rrggbb", ...}}}},
         "glint":  {...},
         "limbus": {...},
         "eyelid": {...}
@@ -208,8 +208,19 @@ def _parse_detector_entry(entry: dict) -> dict:
         "id": entry.get("id", DETECTOR_OFF),
         "params": _parse_params_per_eye(entry.get("params")),
         "pinned": [name for name in (entry.get("pinned") or []) if isinstance(name, str)],
-        "overlays": {k: dict(v) for k, v in (entry.get("overlays") or {}).items() if isinstance(v, dict)},
+        "overlays": _parse_overlays(entry.get("overlays")),
     }
+
+
+def _parse_overlays(overlays_in: object) -> dict:
+    """Normalise the nested overlay map: ``{detector_id: {overlay_key: fields}}``."""
+    out: dict = {}
+    if not isinstance(overlays_in, dict):
+        return out
+    for det_id, state in overlays_in.items():
+        if isinstance(state, dict):
+            out[det_id] = {k: dict(v) for k, v in state.items() if isinstance(v, dict)}
+    return out
 
 
 def _parse_params_per_eye(params_in: object) -> dict:
