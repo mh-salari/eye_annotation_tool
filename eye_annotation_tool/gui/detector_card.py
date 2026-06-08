@@ -232,12 +232,10 @@ class OverlayRow(QWidget):
 
 
 class _RoiRow(QWidget):
-    """ROI button + Clear + Carry checkbox + Override button."""
+    """ROI button + Clear."""
 
     roi_edit_requested = pyqtSignal(bool)
     clear_roi_requested = pyqtSignal()
-    carry_roi_toggled = pyqtSignal(bool)
-    override_roi_requested = pyqtSignal()
 
     def __init__(self, kind_label: str, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -248,31 +246,9 @@ class _RoiRow(QWidget):
         self.roi_button.toggled.connect(self.roi_edit_requested.emit)
         self.clear_button = MaterialButton("Clear", compact=True)
         self.clear_button.clicked.connect(self.clear_roi_requested.emit)
-        self.carry_check = QCheckBox("Carry")
-        self.carry_check.setToolTip(
-            "When on, this image's ROI is the carry-over source for other "
-            "images that have no saved ROI yet for this eye + kind.",
-        )
-        self.carry_check.toggled.connect(self.carry_roi_toggled.emit)
-        self.override_button = MaterialButton("Override", compact=True)
-        self.override_button.setToolTip(
-            "Replace this image's ROI with the stored carry-over rectangle, "
-            "even if the image already had its own saved ROI for the active eye.",
-        )
-        self.override_button.clicked.connect(self.override_roi_requested.emit)
         row.addWidget(self.roi_button)
         row.addWidget(self.clear_button)
-        row.addWidget(self.carry_check)
-        row.addWidget(self.override_button)
         self.setLayout(row)
-
-    def set_carry_enabled(self, enabled: bool) -> None:
-        self.carry_check.blockSignals(True)
-        self.carry_check.setChecked(bool(enabled))
-        self.carry_check.blockSignals(False)
-
-    def set_override_enabled(self, enabled: bool) -> None:
-        self.override_button.setEnabled(bool(enabled))
 
     def set_roi_button_checked(self, checked: bool) -> None:
         self.roi_button.blockSignals(True)
@@ -305,8 +281,6 @@ class DetectorCard(QFrame):
     # Re-emitted from the ROI affordance row.
     roi_edit_requested = pyqtSignal(bool)
     clear_roi_requested = pyqtSignal()
-    carry_roi_toggled = pyqtSignal(bool)
-    override_roi_requested = pyqtSignal()
 
     def __init__(
         self,
@@ -486,13 +460,6 @@ class DetectorCard(QFrame):
         self._manual_host = None
         return host
 
-    def set_carry_state(self, carry_enabled: bool, override_available: bool) -> None:
-        """Update the ROI row's Carry checkbox and Override button state."""
-        if self._roi_row is None:
-            return
-        self._roi_row.set_carry_enabled(carry_enabled)
-        self._roi_row.set_override_enabled(override_available)
-
     def set_roi_button_checked(self, checked: bool) -> None:
         """Set the ROI edit button's checked state."""
         if self._roi_row is not None:
@@ -594,12 +561,6 @@ class DetectorCard(QFrame):
     def _on_roi_clear(self) -> None:
         self.clear_roi_requested.emit()
 
-    def _on_roi_carry(self, enabled: bool) -> None:
-        self.carry_roi_toggled.emit(bool(enabled))
-
-    def _on_roi_override(self) -> None:
-        self.override_roi_requested.emit()
-
     # ----- content rebuild -----
 
     def _refresh_content(self) -> None:
@@ -656,8 +617,6 @@ class DetectorCard(QFrame):
             self._roi_row = _RoiRow(self.kind.capitalize())
             self._roi_row.roi_edit_requested.connect(self._on_roi_edit)
             self._roi_row.clear_roi_requested.connect(self._on_roi_clear)
-            self._roi_row.carry_roi_toggled.connect(self._on_roi_carry)
-            self._roi_row.override_roi_requested.connect(self._on_roi_override)
             self._content_layout.addWidget(self._roi_row)
 
 

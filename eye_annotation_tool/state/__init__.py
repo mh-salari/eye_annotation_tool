@@ -6,7 +6,6 @@ thin coordinators that read and write through these stores instead of
 managing the state themselves.
 """
 
-from .carry_roi_state import CarryRoiStore
 from .eye_data_store import EyeDataStore
 from .overlay_store import OverlayStore
 from .per_eye_state import PerEyeStateStore
@@ -17,7 +16,6 @@ from .undo_coordinator import UndoCoordinator
 from .undo_stack import UndoStack
 
 __all__ = [
-    "CarryRoiStore",
     "EyeDataStore",
     "OverlayStore",
     "PerEyeStateStore",

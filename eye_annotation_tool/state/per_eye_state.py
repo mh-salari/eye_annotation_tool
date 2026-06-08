@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING, Protocol
 if TYPE_CHECKING:
     from ..auto_detectors.orchestrator import DetectorOrchestrator
 
-CarryRoiSlot = str
+EyeSlot = str
 Target = str
 
 
@@ -42,7 +42,7 @@ class PerEyeStateStore:
     file round-trip relies on the distinction).
     """
 
-    SLOTS: tuple[CarryRoiSlot, ...] = ("left", "right", "single")
+    SLOTS: tuple[EyeSlot, ...] = ("left", "right", "single")
 
     def __init__(self, kinds: Iterable[Target]) -> None:
         """Build the three slot/kind tables for ``kinds``.
@@ -53,13 +53,13 @@ class PerEyeStateStore:
         one entry per (slot, kind) from construction.
         """
         self._targets: tuple[Target, ...] = tuple(kinds)
-        self.detection_cache: dict[CarryRoiSlot, dict[Target, dict | None]] = {
+        self.detection_cache: dict[EyeSlot, dict[Target, dict | None]] = {
             slot: dict.fromkeys(self._targets) for slot in self.SLOTS
         }
-        self.panel_params: dict[CarryRoiSlot, dict[Target, dict | None]] = {
+        self.panel_params: dict[EyeSlot, dict[Target, dict | None]] = {
             slot: dict.fromkeys(self._targets) for slot in self.SLOTS
         }
-        self.project_defaults: dict[Target, dict[CarryRoiSlot, dict | None]] = {
+        self.project_defaults: dict[Target, dict[EyeSlot, dict | None]] = {
             kind: dict.fromkeys(self.SLOTS) for kind in self._targets
         }
 
@@ -67,12 +67,12 @@ class PerEyeStateStore:
     # Orchestrator snapshot / restore
     # ---------------------------------------------------------------------------
 
-    def snapshot_orchestrator(self, slot: CarryRoiSlot, orchestrator: "DetectorOrchestrator") -> None:
+    def snapshot_orchestrator(self, slot: EyeSlot, orchestrator: "DetectorOrchestrator") -> None:
         """Copy the orchestrator's per-kind results into ``slot``."""
         for kind in self._targets:
             self.detection_cache[slot][kind] = orchestrator.cached_result(kind)
 
-    def restore_orchestrator(self, slot: CarryRoiSlot, orchestrator: "DetectorOrchestrator") -> None:
+    def restore_orchestrator(self, slot: EyeSlot, orchestrator: "DetectorOrchestrator") -> None:
         """Push the cached results for ``slot`` back into the orchestrator."""
         for kind in self._targets:
             orchestrator.set_cached_result(kind, self.detection_cache[slot][kind])
@@ -83,7 +83,7 @@ class PerEyeStateStore:
 
     def snapshot_panel(
         self,
-        slot: CarryRoiSlot,
+        slot: EyeSlot,
         panel_lookup_fn: Callable[[Target], _PluginPanel | None],
     ) -> None:
         """Mirror each live plugin panel's current params into ``slot``.
@@ -100,7 +100,7 @@ class PerEyeStateStore:
 
     def restore_panel(
         self,
-        slot: CarryRoiSlot,
+        slot: EyeSlot,
         panel_lookup_fn: Callable[[Target], _PluginPanel | None],
         plugin_default_fn: Callable[[Target], dict],
     ) -> None:
@@ -142,26 +142,26 @@ class PerEyeStateStore:
     # Direct accessors (used by per-image save/load + run handlers)
     # ---------------------------------------------------------------------------
 
-    def get_result(self, slot: CarryRoiSlot, kind: Target) -> dict | None:
+    def get_result(self, slot: EyeSlot, kind: Target) -> dict | None:
         """Return the cached detection result for ``(slot, kind)`` (``None`` if absent)."""
         return self.detection_cache[slot][kind]
 
-    def set_result(self, slot: CarryRoiSlot, kind: Target, value: dict | None) -> None:
+    def set_result(self, slot: EyeSlot, kind: Target, value: dict | None) -> None:
         """Replace the cached detection result for ``(slot, kind)``."""
         self.detection_cache[slot][kind] = value
 
-    def get_params(self, slot: CarryRoiSlot, kind: Target) -> dict | None:
+    def get_params(self, slot: EyeSlot, kind: Target) -> dict | None:
         """Return the mirrored panel params for ``(slot, kind)`` (``None`` if untouched)."""
         return self.panel_params[slot].get(kind)
 
-    def set_params(self, slot: CarryRoiSlot, kind: Target, value: dict | None) -> None:
+    def set_params(self, slot: EyeSlot, kind: Target, value: dict | None) -> None:
         """Replace the mirrored panel params for ``(slot, kind)``."""
         self.panel_params[slot][kind] = value
 
-    def get_project_default(self, kind: Target, slot: CarryRoiSlot) -> dict | None:
+    def get_project_default(self, kind: Target, slot: EyeSlot) -> dict | None:
         """Return the project-file default params for ``(kind, slot)`` (``None`` if absent)."""
         return self.project_defaults[kind].get(slot)
 
-    def set_project_default(self, kind: Target, slot: CarryRoiSlot, value: dict | None) -> None:
+    def set_project_default(self, kind: Target, slot: EyeSlot, value: dict | None) -> None:
         """Replace the project-file default params for ``(kind, slot)``."""
         self.project_defaults[kind][slot] = value

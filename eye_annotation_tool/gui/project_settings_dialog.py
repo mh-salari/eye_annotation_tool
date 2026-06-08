@@ -97,7 +97,6 @@ class ProjectSettingsDialog(QDialog):
             detectors[kind] = {
                 "id": slug,
                 "params": prev.get("params") or {"left": None, "right": None, "single": None},
-                "carry_roi": prev.get("carry_roi") or {},
             }
         return {
             "binocular_mode": self._binocular_radio.isChecked(),

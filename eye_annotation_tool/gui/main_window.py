@@ -32,7 +32,7 @@ from ..controllers.binocular_controller import BinocularController
 from ..controllers.detection_controller import DetectionController
 from ..controllers.navigation_controller import NavigationController
 from ..policy import CliOverridePolicy
-from ..state import CarryRoiStore, PerEyeStateStore, ProjectStore, SessionState, UndoCoordinator, recent_projects
+from ..state import PerEyeStateStore, ProjectStore, SessionState, UndoCoordinator, recent_projects
 from ..utils.project_settings import (
     KINDS,
     PROJECT_FILE_SUFFIX,
@@ -112,7 +112,6 @@ class MainWindow(QMainWindow):
         self.project_store = ProjectStore()
         self.project_store.set_error_handler(lambda exc: show_error(self, "Could Not Save Project", str(exc)))
         self.per_eye_state = PerEyeStateStore(KINDS)
-        self.carry_roi_state = CarryRoiStore(KINDS)
         self.session = SessionState(self)
         self.session.modified_changed.connect(self._refresh_save_state_indicator)
 
@@ -127,7 +126,6 @@ class MainWindow(QMainWindow):
         self.detection_controller = DetectionController(
             self.orchestrator,
             self.per_eye_state,
-            self.carry_roi_state,
             self.project_store,
             self.image_viewer,
             self.annotation_controls,

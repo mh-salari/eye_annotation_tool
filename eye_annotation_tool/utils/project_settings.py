@@ -18,7 +18,7 @@ Schema::
       "detectors": {
         "pupil":  {"id": "<cheshm-id>" | "off" | "manual",
                     "params": {"left": {...}|null, "right": {...}|null, "single": {...}|null},
-                    "carry_roi": {"enabled": {...}, "values": {...}},
+                    "pinned": [...],
                     "overlays": {"<key>": {"show": bool, "color": "#rrggbb", ...}}},
         "glint":  {...},
         "limbus": {...},
@@ -67,10 +67,9 @@ DEFAULT_ID_BY_KIND: dict[str, str] = {
 
 DEFAULT_DIVIDER_X_NORM = 0.5
 
-# Per-eye slots the carry-over ROI store keeps; "single" is used in
-# monocular mode where the eye selector is hidden, "left" / "right"
-# in binocular mode.
-CARRY_ROI_SLOTS = ("left", "right", "single")
+# Per-eye param slots; "single" is used in monocular mode where the eye
+# selector is hidden, "left" / "right" in binocular mode.
+EYE_SLOTS = ("left", "right", "single")
 
 
 def normalize_project_filename(path: str) -> str:
@@ -114,17 +113,9 @@ class ProjectSchemaError(RuntimeError):
     """Raised when a loaded project file uses an unsupported schema."""
 
 
-def _default_carry_roi() -> dict:
-    """Return a fresh carry-over block with every slot's gate off and no stored rect."""
-    return {
-        "enabled": dict.fromkeys(CARRY_ROI_SLOTS, False),
-        "values": dict.fromkeys(CARRY_ROI_SLOTS),
-    }
-
-
 def _default_params_per_eye() -> dict:
     """Return a fresh per-eye params block with every slot empty."""
-    return dict.fromkeys(CARRY_ROI_SLOTS)
+    return dict.fromkeys(EYE_SLOTS)
 
 
 def default_project() -> dict:
@@ -138,7 +129,6 @@ def default_project() -> dict:
             kind: {
                 "id": DEFAULT_ID_BY_KIND[kind],
                 "params": _default_params_per_eye(),
-                "carry_roi": _default_carry_roi(),
                 "pinned": [],
                 "overlays": {},
             }
@@ -217,7 +207,6 @@ def _parse_detector_entry(entry: dict) -> dict:
     return {
         "id": entry.get("id", DETECTOR_OFF),
         "params": _parse_params_per_eye(entry.get("params")),
-        "carry_roi": _parse_carry_roi(entry.get("carry_roi")),
         "pinned": [name for name in (entry.get("pinned") or []) if isinstance(name, str)],
         "overlays": {k: dict(v) for k, v in (entry.get("overlays") or {}).items() if isinstance(v, dict)},
     }
@@ -228,25 +217,8 @@ def _parse_params_per_eye(params_in: object) -> dict:
     out = _default_params_per_eye()
     if not isinstance(params_in, dict):
         return out
-    for slot in CARRY_ROI_SLOTS:
+    for slot in EYE_SLOTS:
         slot_value = params_in.get(slot)
         if isinstance(slot_value, dict):
             out[slot] = dict(slot_value)
     return out
-
-
-def _parse_carry_roi(carry_in: object) -> dict:
-    """Normalise a stored ``carry_roi`` block, dropping any malformed values."""
-    carry = _default_carry_roi()
-    if not isinstance(carry_in, dict):
-        return carry
-    enabled_in = carry_in.get("enabled")
-    if isinstance(enabled_in, dict):
-        for slot in CARRY_ROI_SLOTS:
-            carry["enabled"][slot] = bool(enabled_in.get(slot, False))
-    values_in = carry_in.get("values") or {}
-    if isinstance(values_in, dict):
-        for slot in CARRY_ROI_SLOTS:
-            v = values_in.get(slot)
-            carry["values"][slot] = tuple(int(c) for c in v) if isinstance(v, (list, tuple)) and len(v) == 4 else None
-    return carry

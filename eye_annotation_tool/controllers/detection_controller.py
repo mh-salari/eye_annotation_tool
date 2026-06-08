@@ -14,10 +14,10 @@ from ..auto_detectors.orchestrator import DetectorOrchestrator
 from ..gui.annotation_controls import AnnotationControlPanel
 from ..gui.detector_card import MANUAL, OFF
 from ..gui.image_viewer import ImageViewer
-from ..state import CarryRoiStore, PerEyeStateStore, ProjectStore
+from ..state import PerEyeStateStore, ProjectStore
 from ..utils.project_settings import (
-    CARRY_ROI_SLOTS,
     DETECTOR_OFF,
+    EYE_SLOTS,
     KINDS,
 )
 
@@ -54,7 +54,6 @@ class DetectionController(QObject):
         self,
         orchestrator: DetectorOrchestrator,
         per_eye_state: PerEyeStateStore,
-        carry_roi_state: CarryRoiStore,
         project_store: ProjectStore,
         image_viewer: ImageViewer,
         annotation_controls: AnnotationControlPanel,
@@ -64,7 +63,6 @@ class DetectionController(QObject):
         super().__init__(parent)
         self.orchestrator = orchestrator
         self.per_eye_state = per_eye_state
-        self.carry_roi_state = carry_roi_state
         self.project_store = project_store
         self.image_viewer = image_viewer
         self.annotation_controls = annotation_controls
@@ -184,12 +182,6 @@ class DetectionController(QObject):
             card.clear_roi_requested.connect(
                 lambda k=kind: self._on_clear_roi_requested(k),
             )
-            card.carry_roi_toggled.connect(
-                lambda enabled, k=kind: self._on_carry_roi_toggled(k, enabled),
-            )
-            card.override_roi_requested.connect(
-                lambda k=kind: self._on_override_roi_requested(k),
-            )
             card.detect_requested.connect(
                 lambda k=kind: self._kick_live_run_for_kind(k),
             )
@@ -215,14 +207,13 @@ class DetectionController(QObject):
                 overlays = entry.get("overlays")
                 if isinstance(overlays, dict):
                     card.set_overlay_state(_deserialize_overlays(overlays))
-            self.carry_roi_state.load_from_project_block(kind, entry.get("carry_roi") or {})
         self._refresh_orchestrator_enabled()
         self._refresh_auto_managed_kinds()
         self._kick_live_run_for_all_enabled()
 
     def _restore_card_params(self, kind: str, det: DetectorPlugin, params_by_slot: dict) -> None:
         active_slot = self._active_slot()
-        for slot in CARRY_ROI_SLOTS:
+        for slot in EYE_SLOTS:
             slot_params = params_by_slot.get(slot) if isinstance(params_by_slot, dict) else None
             if isinstance(slot_params, dict):
                 self.per_eye_state.set_project_default(kind, slot, dict(slot_params))
@@ -249,6 +240,9 @@ class DetectionController(QObject):
         self.image_viewer.clear_detection_overlay(kind)
         self.image_viewer.clear_target_roi(kind)
         self.orchestrator.set_cached_result(kind, None)
+        # Switching detector (e.g. to Manual) must drop any active ROI edit so
+        # clicks return to annotating instead of drawing an ROI.
+        self.cancel_active_roi_edit()
         # The new detector exposes its own overlay keys; persist its defaults
         # as the project's overlays for this kind.
         self._persist_overlays(kind)
@@ -288,7 +282,6 @@ class DetectionController(QObject):
         kind_block = detectors_block.setdefault(kind, {})
         kind_block["id"] = card.active_id()
         kind_block["params"] = {slot: dict(cleaned) for slot in slots}
-        kind_block["carry_roi"] = self.carry_roi_state.to_project_block(kind)
         kind_block["pinned"] = card.current_pinned()
         kind_block["overlays"] = _serialize_overlays(card.overlay_state())
         self.project_store.persist()
@@ -400,6 +393,13 @@ class DetectionController(QObject):
     # ---------------------------------------------------------------------------
 
     def _on_roi_edit_requested(self, kind: str, active: bool) -> None:
+        if active:
+            # Only one ROI edit at a time: deactivate the other kinds' buttons.
+            for other in KINDS:
+                if other != kind:
+                    card = self.annotation_controls.card(other)
+                    if card is not None:
+                        card.set_roi_button_checked(False)
         self.image_viewer.set_active_roi_target(kind if active else None)
 
     def _on_clear_roi_requested(self, kind: str) -> None:
@@ -416,11 +416,7 @@ class DetectionController(QObject):
             self._on_card_params_changed(kind, params)
 
     def _on_target_roi_changed(self, kind: str, roi: tuple | None) -> None:
-        """Push a canvas-drawn ROI into the card params and re-run the detector.
-
-        A canvas edit means the user is tuning this image's ROI specifically,
-        so Carry auto-disables for the active eye when a rectangle lands.
-        """
+        """Push a canvas-drawn ROI into the card params and re-run the detector."""
         card = self.annotation_controls.card(kind)
         det = card.active_detector() if card is not None else None
         if card is None or det is None:
@@ -430,37 +426,6 @@ class DetectionController(QObject):
             return
         card.set_params({roi_name: roi})
         self._on_card_params_changed(kind, card.current_params())
-        active_slot = self._active_slot()
-        if roi is not None and self.carry_roi_state.is_enabled(kind, active_slot):
-            self.carry_roi_state.set_enabled(kind, active_slot, False)
-            self._persist_carry_roi(kind)
-            self._refresh_carry_state_for(kind)
-
-    def _on_carry_roi_toggled(self, kind: str, enabled: bool) -> None:
-        active_slot = self._active_slot()
-        self.carry_roi_state.set_enabled(kind, active_slot, enabled)
-        if enabled:
-            current_roi = self.image_viewer.get_target_roi(kind)
-            if current_roi is not None:
-                self.carry_roi_state.set_value(kind, active_slot, current_roi)
-        self._persist_carry_roi(kind)
-        self._refresh_carry_state_for(kind)
-
-    def _on_override_roi_requested(self, kind: str) -> None:
-        active_slot = self._active_slot()
-        carry_value = self.carry_roi_state.get_value(kind, active_slot)
-        if carry_value is None:
-            return
-        card = self.annotation_controls.card(kind)
-        det = card.active_detector() if card is not None else None
-        if card is None or det is None:
-            return
-        self.image_viewer.set_target_roi(kind, tuple(carry_value), eye_slot=active_slot)
-        roi_name = _roi_setting_name(det)
-        if roi_name is not None:
-            card.set_params({roi_name: tuple(carry_value)})
-            self._on_card_params_changed(kind, card.current_params())
-        self._refresh_carry_state_for(kind)
 
     # ---------------------------------------------------------------------------
     # Per-image detection block round-trip
@@ -561,8 +526,6 @@ class DetectionController(QObject):
         """Re-apply per-eye saved params + repaint after the active eye switches."""
         active_slot = self._active_slot()
         self.per_eye_state.restore_panel(active_slot, self.panel_for_kind, self.detector_default_params)
-        for kind in KINDS:
-            self._refresh_carry_state_for(kind)
         self._kick_live_run_for_all_enabled()
         # Undo history is per (image, eye); seed it fresh for the new eye.
         if self.undo_coordinator is not None:
@@ -611,13 +574,6 @@ class DetectionController(QObject):
         kind_block = detectors_block.setdefault(kind, {})
         kind_block["id"] = slug
         kind_block.setdefault("params", {})
-        kind_block.setdefault("carry_roi", self.carry_roi_state.to_project_block(kind))
-        self.project_store.persist()
-
-    def _persist_carry_roi(self, kind: str) -> None:
-        detectors_block = self.project_store.project.setdefault("detectors", {})
-        kind_block = detectors_block.setdefault(kind, {})
-        kind_block["carry_roi"] = self.carry_roi_state.to_project_block(kind)
         self.project_store.persist()
 
     def _persist_overlays(self, kind: str) -> None:
@@ -634,15 +590,6 @@ class DetectionController(QObject):
         kind_block = detectors_block.setdefault(kind, {})
         kind_block["pinned"] = list(pinned)
         self.project_store.persist()
-
-    def _refresh_carry_state_for(self, kind: str) -> None:
-        card = self.annotation_controls.card(kind)
-        if card is None:
-            return
-        active_slot = self._active_slot()
-        carry_enabled = self.carry_roi_state.is_enabled(kind, active_slot)
-        carry_value = self.carry_roi_state.get_value(kind, active_slot)
-        card.set_carry_state(carry_enabled, carry_value is not None)
 
     def _active_slot(self) -> str:
         if self._binocular is None:
