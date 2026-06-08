@@ -56,6 +56,17 @@ class UndoStack(Generic[State]):
         self._index -= 1
         return self._stack[self._index]
 
+    def can_redo(self) -> bool:
+        """True when there's a later entry to step forward to."""
+        return self._index < len(self._stack) - 1
+
+    def redo(self) -> State | None:
+        """Step forward one entry and return its state, or ``None`` when at the tip."""
+        if not self.can_redo():
+            return None
+        self._index += 1
+        return self._stack[self._index]
+
     def current(self) -> State | None:
         """Return the state at the current index, or ``None`` when the stack is empty."""
         if self._index < 0:

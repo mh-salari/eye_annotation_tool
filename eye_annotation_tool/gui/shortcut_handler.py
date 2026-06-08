@@ -19,9 +19,13 @@ class ShortcutHandler:
 
     def setup_shortcuts(self) -> None:
         """Set up keyboard shortcuts for the application."""
-        # Undo shortcut — walks the image viewer's annotation-point history.
+        # Undo / redo — one shared history across manual points and detector
+        # settings. QKeySequence picks the platform-correct keys (Cmd+Z / Ctrl+Z,
+        # Cmd+Shift+Z / Ctrl+Y, etc.).
         undo_shortcut = QShortcut(QKeySequence.Undo, self.main_window)
-        undo_shortcut.activated.connect(self.main_window.image_viewer.undo)
+        undo_shortcut.activated.connect(self.main_window.undo_coordinator.undo)
+        redo_shortcut = QShortcut(QKeySequence.Redo, self.main_window)
+        redo_shortcut.activated.connect(self.main_window.undo_coordinator.redo)
 
         # Save shortcut
         save_shortcut = QShortcut(QKeySequence.Save, self.main_window)

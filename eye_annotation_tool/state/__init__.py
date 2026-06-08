@@ -13,6 +13,7 @@ from .per_eye_state import PerEyeStateStore
 from .project_store import ProjectStore
 from .session_state import SessionState
 from .target_roi_store import TargetRoiStore
+from .undo_coordinator import UndoCoordinator
 from .undo_stack import UndoStack
 
 __all__ = [
@@ -23,5 +24,6 @@ __all__ = [
     "ProjectStore",
     "SessionState",
     "TargetRoiStore",
+    "UndoCoordinator",
     "UndoStack",
 ]

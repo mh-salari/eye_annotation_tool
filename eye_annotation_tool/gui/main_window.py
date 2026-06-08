@@ -32,7 +32,7 @@ from ..controllers.binocular_controller import BinocularController
 from ..controllers.detection_controller import DetectionController
 from ..controllers.navigation_controller import NavigationController
 from ..policy import CliOverridePolicy
-from ..state import CarryRoiStore, PerEyeStateStore, ProjectStore, SessionState, recent_projects
+from ..state import CarryRoiStore, PerEyeStateStore, ProjectStore, SessionState, UndoCoordinator, recent_projects
 from ..utils.project_settings import (
     KINDS,
     PROJECT_FILE_SUFFIX,
@@ -136,6 +136,15 @@ class MainWindow(QMainWindow):
         self.detection_controller.annotation_modified.connect(self._mark_modified)
         self.detection_controller.status_message.connect(self.statusBar().showMessage)
         self.image_viewer.set_overlay_state_lookup(self.detection_controller.overlay_state_lookup)
+
+        # Shared undo/redo across manual points and detector settings.
+        self.undo_coordinator = UndoCoordinator(
+            build_snapshot=self._build_undo_snapshot,
+            apply_snapshot=self._apply_undo_snapshot,
+            parent=self,
+        )
+        self.image_viewer.undo_coordinator = self.undo_coordinator
+        self.detection_controller.undo_coordinator = self.undo_coordinator
 
         self.binocular_controller = BinocularController(
             self.image_viewer,
@@ -325,6 +334,18 @@ class MainWindow(QMainWindow):
     def image_paths(self) -> list[str]:
         """Ordered list of image paths in the current project."""
         return self.project_store.image_paths()
+
+    def _build_undo_snapshot(self) -> dict:
+        """Combined undo snapshot: active-eye manual points + active-eye detector params."""
+        return {
+            "points": self.image_viewer.snapshot_points(),
+            "params": self.detection_controller.snapshot_params(),
+        }
+
+    def _apply_undo_snapshot(self, snapshot: dict) -> None:
+        """Restore a combined snapshot produced by :meth:`_build_undo_snapshot`."""
+        self.image_viewer.apply_points_state(snapshot["points"])
+        self.detection_controller.apply_params(snapshot["params"])
 
     def _current_image_path(self) -> str | None:
         """Return the active image's path, or ``None`` when no image is loaded."""
@@ -729,10 +750,13 @@ class MainWindow(QMainWindow):
                 self.image_viewer.set_image_path_text(self._relative_image_path(image_path))
                 self.annotation_controller.load_annotations()
                 self.detection_controller.refresh_all_detections()
+                # Seed undo history once the image's points + params are loaded.
+                self.undo_coordinator.reset()
             else:
                 QMessageBox.critical(self, "Error", f"Failed to load image: {image_path}")
         else:
             self.image_viewer.set_image_path_text("")
+            self.undo_coordinator.reset()
 
     def _relative_image_path(self, image_path: str) -> str:
         """Path of ``image_path`` relative to the project folder, or absolute if outside it."""

@@ -69,6 +69,8 @@ class DetectionController(QObject):
         self.image_viewer = image_viewer
         self.annotation_controls = annotation_controls
         self._binocular: BinocularController | None = None
+        # Shared undo/redo timeline; injected by MainWindow after construction.
+        self.undo_coordinator = None
 
         self._detectors_by_kind_id: dict[tuple[str, str], DetectorPlugin] = {
             (d.kind, d.name): d for d in discover_plugins()
@@ -123,6 +125,31 @@ class DetectionController(QObject):
         if det is None:
             return {}
         return {s.name: s.default for s in det.settings}
+
+    def snapshot_params(self) -> dict[str, dict]:
+        """Return the active eye's current params for every enabled detector kind."""
+        out: dict[str, dict] = {}
+        for kind in KINDS:
+            card = self.annotation_controls.card(kind)
+            if card is not None and card.active_detector() is not None:
+                out[kind] = dict(card.current_params())
+        return out
+
+    def apply_params(self, params_by_kind: dict[str, dict]) -> None:
+        """Push ``params_by_kind`` onto the active eye's cards + state and re-run.
+
+        Used by undo/redo and by paste-settings. Does not record a new undo
+        step — :meth:`DetectorCard.set_params` is silent, so no param-change
+        signal fires back into the coordinator.
+        """
+        active_slot = self._active_slot()
+        for kind, params in params_by_kind.items():
+            card = self.annotation_controls.card(kind)
+            if card is None or card.active_detector() is None:
+                continue
+            card.set_params(dict(params))
+            self.per_eye_state.set_params(active_slot, kind, dict(params))
+        self._kick_live_run_for_all_enabled()
 
     # ---------------------------------------------------------------------------
     # Card signal wiring
@@ -231,6 +258,8 @@ class DetectionController(QObject):
     def _on_card_params_changed(self, kind: str, params: dict) -> None:
         self.annotation_modified.emit(True)
         self.per_eye_state.set_params(self._active_slot(), kind, dict(params))
+        if self.undo_coordinator is not None:
+            self.undo_coordinator.capture_debounced()
         # Single-shot 0 ms timer coalesces multiple slider events from
         # the same event-loop tick into one detection pass.
         self._pending_run_one = None
@@ -517,6 +546,9 @@ class DetectionController(QObject):
         for kind in KINDS:
             self._refresh_carry_state_for(kind)
         self._kick_live_run_for_all_enabled()
+        # Undo history is per (image, eye); seed it fresh for the new eye.
+        if self.undo_coordinator is not None:
+            self.undo_coordinator.reset()
 
     def cancel_active_roi_edit(self) -> None:
         """Drop any in-progress ROI drag-edit toggle (called when leaving a context)."""

@@ -8,7 +8,7 @@ from PyQt5.QtCore import QEvent, QPoint, QPointF, QSizeF, Qt, pyqtSignal
 from PyQt5.QtGui import QKeyEvent, QPixmap, QResizeEvent
 from PyQt5.QtWidgets import QLabel, QMessageBox, QScrollArea, QVBoxLayout, QWidget
 
-from ..state import EyeDataStore, OverlayStore, TargetRoiStore, UndoStack
+from ..state import EyeDataStore, OverlayStore, TargetRoiStore
 from ..state.eye_data_store import FIELDS_BY_ANNOTATION
 from ..utils.image_processing import find_closest_point, fit_ellipse
 from .brightness_controller import BrightnessController
@@ -194,8 +194,13 @@ class ImageViewer(QWidget):
         return self.zoom_state.factor
 
     def setup_undo_system(self) -> None:
-        """Initialise the undo stack."""
-        self.undo_stack = UndoStack[dict](maxlen=10)
+        """Prepare the undo hook.
+
+        The actual history lives in a shared :class:`UndoCoordinator` (manual
+        points and detector settings share one timeline); ``MainWindow``
+        injects it after construction. Until then point edits are not recorded.
+        """
+        self.undo_coordinator = None
 
     # ---------------------------------------------------------------------------
     # Active-eye annotation properties (forward to :class:`EyeDataStore`)
@@ -326,12 +331,8 @@ class ImageViewer(QWidget):
         self.eye_data_store.from_dict(eye_data)
         self.update_image()
 
-    def reset_undo_stack(self, initial_state: dict | None = None) -> None:
-        """Drop history and seed the stack with the current annotation state (or ``initial_state``)."""
-        self.undo_stack.reset(initial_state if initial_state is not None else self._snapshot_state())
-
-    def _snapshot_state(self) -> dict:
-        """Capture the active eye's annotation fields as an undo-stack entry."""
+    def snapshot_points(self) -> dict:
+        """Capture the active eye's manual annotation fields (for the undo coordinator)."""
         return {
             "pupil_points": self.pupil_points.copy(),
             "limbus_points": self.limbus_points.copy(),
@@ -341,19 +342,8 @@ class ImageViewer(QWidget):
             "limbus_ellipse": self.limbus_ellipse,
         }
 
-    def save_state(self) -> None:
-        """Push the current annotation state onto the undo stack."""
-        self.undo_stack.push(self._snapshot_state())
-
-    def can_undo(self) -> bool:
-        """True when there's a previous state to step back to."""
-        return self.undo_stack.can_undo()
-
-    def undo(self) -> None:
-        """Restore the previous annotation state (no-op when at the start of history)."""
-        state = self.undo_stack.undo()
-        if state is None:
-            return
+    def apply_points_state(self, state: dict) -> None:
+        """Restore a manual-annotation snapshot produced by :meth:`snapshot_points`."""
         self.pupil_points = state["pupil_points"].copy()
         self.limbus_points = state["limbus_points"].copy()
         self.eyelid_contour_points = state.get("eyelid_contour_points", []).copy()
@@ -361,6 +351,11 @@ class ImageViewer(QWidget):
         self.pupil_ellipse = state["pupil_ellipse"]
         self.limbus_ellipse = state["limbus_ellipse"]
         self.update_image()
+
+    def save_state(self) -> None:
+        """Record the current state as an undo step (manual-edit callers use this)."""
+        if self.undo_coordinator is not None:
+            self.undo_coordinator.capture()
         self.annotation_changed.emit()
 
     def keyPressEvent(self, event: QKeyEvent) -> None:  # noqa: N802
@@ -678,7 +673,6 @@ class ImageViewer(QWidget):
         # new image until the next plugin run.
         self.detection_overlays.clear_all()
         self.target_rois.clear_all()
-        self.reset_undo_stack()
         if not self.zoom_state.is_initialized():
             self.zoom_state.fit_to_viewport(self.scroll_area, self.original_pixmap)
             self.zoom_state.mark_initialized()
@@ -1047,7 +1041,6 @@ class ImageViewer(QWidget):
     def set_annotation_data(self, data: dict) -> None:
         """Set annotation data for both eyes."""
         self.set_all_eye_data(data)
-        self.reset_undo_stack()
 
     def fit_ellipse(self) -> bool:
         """Fit an ellipse to annotation points."""
