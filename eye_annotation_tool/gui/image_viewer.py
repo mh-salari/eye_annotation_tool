@@ -119,6 +119,10 @@ class ImageViewer(QWidget):
         self.eye_data_store = EyeDataStore()
 
         self.current_annotation = "pupil"
+        # Live re-fit of the manual pupil ellipse runs only after an explicit
+        # fit. Reset per image; turned off when points drop below the fit
+        # minimum, so it resumes only on the next manual fit.
+        self._pupil_live_fit = False
         self.original_pixmap = None
         self.pixmap = None
 
@@ -666,6 +670,7 @@ class ImageViewer(QWidget):
         self.limbus_points = []
         self.pupil_ellipse = None
         self.limbus_ellipse = None
+        self._pupil_live_fit = False
         # Per-image Auto Detect overlay state — cleared here so the next
         # image starts blank before the annotation controller restores
         # whatever the new image's saved annotation carries. Masks are
@@ -690,6 +695,7 @@ class ImageViewer(QWidget):
         self.limbus_points = []
         self.pupil_ellipse = None
         self.limbus_ellipse = None
+        self._pupil_live_fit = False
         self.image_label.clear()
 
     def zoom_in_centered(self) -> None:
@@ -1042,6 +1048,30 @@ class ImageViewer(QWidget):
         """Set annotation data for both eyes."""
         self.set_all_eye_data(data)
 
+    def refit_pupil_ellipse_live(self) -> bool:
+        """Silently re-fit the pupil ellipse from its points (no undo entry / signal).
+
+        Runs only after an explicit fit (``_pupil_live_fit``). If the points
+        drop below the fit minimum it stops live-fitting and keeps the last
+        ellipse (so glint/limbus still have a valid centre) until the next
+        manual fit. Returns whether the ellipse was updated.
+        """
+        if not self._pupil_live_fit:
+            return False
+        if len(self.pupil_points) < 5:
+            self._pupil_live_fit = False
+            return False
+        x = np.array([p.x() for p in self.pupil_points])
+        y = np.array([p.y() for p in self.pupil_points])
+        params = fit_ellipse(x, y)
+        self.pupil_ellipse = (
+            QPointF(params[0], params[1]),
+            QSizeF(2 * params[2], 2 * params[3]),
+            float(np.degrees(params[4])),
+        )
+        self.update_image()
+        return True
+
     def fit_ellipse(self) -> bool:
         """Fit an ellipse to annotation points."""
         points = self.pupil_points if self.current_annotation == "pupil" else self.limbus_points
@@ -1054,6 +1084,7 @@ class ImageViewer(QWidget):
             angle = np.degrees(params[4])
             if self.current_annotation == "pupil":
                 self.pupil_ellipse = (center, size, angle)
+                self._pupil_live_fit = True
             else:
                 self.limbus_ellipse = (center, size, angle)
             self.save_state()

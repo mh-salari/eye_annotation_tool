@@ -783,8 +783,9 @@ class MainWindow(QMainWindow):
             return image_path
 
     def on_annotation_changed(self) -> None:
-        """Handle a manual-annotation edit: mark the project dirty."""
+        """Handle a manual-annotation edit: mark dirty + live-update manual pupil."""
         self.session.modified = True
+        self.detection_controller.on_manual_pupil_edited()
 
     def _on_autosave_changed(self, enabled: bool) -> None:
         """Persist the autosave toggle in project settings."""

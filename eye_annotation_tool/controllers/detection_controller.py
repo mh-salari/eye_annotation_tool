@@ -327,7 +327,7 @@ class DetectionController(QObject):
         if pupil_card is not None and pupil_card.active_detector() is not None:
             self._run_pupil_with_crop(image, pupil_card.current_params())
         else:
-            self.orchestrator.set_cached_result("pupil", None)
+            self.orchestrator.set_cached_result("pupil", self._manual_pupil_result())
         # Glint / limbus / eyelid run on the full image; pupil coords
         # cached above are already in full-image space so downstream
         # search regions hit the right eye.
@@ -338,6 +338,36 @@ class DetectionController(QObject):
 
     def refresh_all_detections(self) -> None:
         """Public hook: re-run every enabled detector top-down on the current image."""
+        self._kick_live_run_for_all_enabled()
+
+    def _manual_pupil_result(self) -> dict | None:
+        """Pupil result from the manually-fitted pupil ellipse (or ``None``).
+
+        Lets glint/limbus anchor on a manual pupil exactly like an auto one, as
+        long as a valid ellipse (centre) exists.
+        """
+        pupil_card = self.annotation_controls.card("pupil")
+        if pupil_card is None or pupil_card.active_id() != MANUAL:
+            return None
+        ellipse = self.image_viewer.pupil_ellipse
+        if ellipse is None:
+            return None
+        center, size, angle = ellipse
+        cx = center.x() if hasattr(center, "x") else center[0]
+        cy = center.y() if hasattr(center, "y") else center[1]
+        w = size.width() if hasattr(size, "width") else size[0]
+        h = size.height() if hasattr(size, "height") else size[1]
+        return {"center": (round(cx), round(cy)), "ellipse": ((cx, cy), (w, h), angle)}
+
+    def on_manual_pupil_edited(self) -> None:
+        """Live-update on a manual pupil edit: re-fit its ellipse, re-run glint/limbus."""
+        pupil_card = self.annotation_controls.card("pupil")
+        if pupil_card is None or pupil_card.active_id() != MANUAL:
+            return
+        if self.image_viewer.current_annotation != "pupil":
+            return
+        if not self.image_viewer.refit_pupil_ellipse_live():
+            return
         self._kick_live_run_for_all_enabled()
 
     # ---------------------------------------------------------------------------

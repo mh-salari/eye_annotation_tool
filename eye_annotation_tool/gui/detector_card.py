@@ -568,6 +568,9 @@ class DetectorCard(QFrame):
         # and only moves in / out of the content layout.
         if self._manual_host is not None and self._manual_host.parent() is self:
             self._manual_host.setParent(None)
+            # A parentless QWidget is a top-level window; hide it so it never
+            # surfaces as a stray floating window while detached.
+            self._manual_host.hide()
         while self._content_layout.count():
             item = self._content_layout.takeAt(0)
             w = item.widget()
