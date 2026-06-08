@@ -27,6 +27,13 @@ class ShortcutHandler:
         redo_shortcut = QShortcut(QKeySequence.Redo, self.main_window)
         redo_shortcut.activated.connect(self.main_window.undo_coordinator.redo)
 
+        # Copy / paste the current eye's detector settings between images
+        # (Cmd+C / Cmd+V on macOS, Ctrl+C / Ctrl+V elsewhere).
+        copy_shortcut = QShortcut(QKeySequence.Copy, self.main_window)
+        copy_shortcut.activated.connect(self.main_window.copy_settings)
+        paste_shortcut = QShortcut(QKeySequence.Paste, self.main_window)
+        paste_shortcut.activated.connect(self.main_window.paste_settings)
+
         # Save shortcut
         save_shortcut = QShortcut(QKeySequence.Save, self.main_window)
         save_shortcut.activated.connect(self.main_window.annotation_controller.save_annotations)
