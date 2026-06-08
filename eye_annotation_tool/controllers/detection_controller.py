@@ -139,7 +139,9 @@ class DetectionController(QObject):
             card.params_changed.connect(
                 lambda params, k=kind: self._on_card_params_changed(k, params),
             )
-            card.overlay_changed.connect(self._on_overlay_changed)
+            card.overlay_changed.connect(
+                lambda key, field, value, k=kind: self._on_overlay_changed(k, key, field, value),
+            )
             card.reset_requested.connect(
                 lambda k=kind: self._on_card_reset(k),
             )
@@ -220,6 +222,9 @@ class DetectionController(QObject):
         self.image_viewer.clear_detection_overlay(kind)
         self.image_viewer.clear_target_roi(kind)
         self.orchestrator.set_cached_result(kind, None)
+        # The new detector exposes its own overlay keys; persist its defaults
+        # as the project's overlays for this kind.
+        self._persist_overlays(kind)
         self.annotation_modified.emit(True)
         self._kick_live_run(kind)
 
@@ -261,10 +266,10 @@ class DetectionController(QObject):
         card.set_project_default(card.active_id(), cleaned)
         self.status_message.emit(f"{kind.capitalize()} default saved.", 3000)
 
-    def _on_overlay_changed(self, _key: str, _field: str, _value: object) -> None:
-        # The card already mutated its overlay state; mark the project modified
-        # so autosave persists it, then repaint to reflect the change.
-        self.annotation_modified.emit(True)
+    def _on_overlay_changed(self, kind: str, _key: str, _field: str, _value: object) -> None:
+        # Overlays are a project-level display preference: persist the change to
+        # the project immediately, then repaint to reflect it.
+        self._persist_overlays(kind)
         self.image_viewer.update_image()
 
     # ---------------------------------------------------------------------------
@@ -466,10 +471,6 @@ class DetectionController(QObject):
                     "params": params,
                     "result": _serialize_result(result),
                 }
-            if kind in out:
-                card = self.annotation_controls.card(kind)
-                if card is not None:
-                    out[kind]["overlays"] = _serialize_overlays(card.overlay_state())
         return out
 
     def apply_loaded_detections(self, detections: dict) -> None:
@@ -493,11 +494,6 @@ class DetectionController(QObject):
                     self.per_eye_state.set_result(slot, kind, result)
                     if result is not None:
                         self.image_viewer.set_detection_overlay(kind, result, eye_slot=slot)
-                overlays = block.get("overlays")
-                if isinstance(overlays, dict):
-                    card = self.annotation_controls.card(kind)
-                    if card is not None:
-                        card.set_overlay_state(_deserialize_overlays(overlays))
                 active_params = per_eye_params.get(active_slot)
                 if active_params is not None:
                     card = self.annotation_controls.card(kind)
@@ -572,6 +568,15 @@ class DetectionController(QObject):
         detectors_block = self.project_store.project.setdefault("detectors", {})
         kind_block = detectors_block.setdefault(kind, {})
         kind_block["carry_roi"] = self.carry_roi_state.to_project_block(kind)
+        self.project_store.persist()
+
+    def _persist_overlays(self, kind: str) -> None:
+        card = self.annotation_controls.card(kind)
+        if card is None:
+            return
+        detectors_block = self.project_store.project.setdefault("detectors", {})
+        kind_block = detectors_block.setdefault(kind, {})
+        kind_block["overlays"] = _serialize_overlays(card.overlay_state())
         self.project_store.persist()
 
     def _on_card_pins_changed(self, kind: str, pinned: list) -> None:
