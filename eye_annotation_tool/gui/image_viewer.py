@@ -1,9 +1,11 @@
 """Image viewer widget for displaying and annotating eye images."""
 
+from collections.abc import Callable
 from typing import ClassVar
 
 import cv2
 import numpy as np
+from cheshm.shape import pupil_center, smoothing_spline
 from PyQt5.QtCore import QEvent, QPoint, QPointF, QSizeF, Qt, pyqtSignal
 from PyQt5.QtGui import QKeyEvent, QPixmap, QResizeEvent
 from PyQt5.QtWidgets import QLabel, QMessageBox, QScrollArea, QVBoxLayout, QWidget
@@ -119,10 +121,9 @@ class ImageViewer(QWidget):
         self.eye_data_store = EyeDataStore()
 
         self.current_annotation = "pupil"
-        # Live re-fit of the manual pupil ellipse runs only after an explicit
-        # fit. Reset per image; turned off when points drop below the fit
-        # minimum, so it resumes only on the next manual fit.
-        self._pupil_live_fit = False
+        # Supplies the active manual fit settings (mode / centre / smoothness)
+        # per kind; injected by MainWindow from the detector cards.
+        self._manual_fit_lookup = None
         self.original_pixmap = None
         self.pixmap = None
 
@@ -344,6 +345,8 @@ class ImageViewer(QWidget):
             "glint_points": self.glint_points.copy(),
             "pupil_ellipse": self.pupil_ellipse,
             "limbus_ellipse": self.limbus_ellipse,
+            "pupil_fit_curve": list(self.eye_data_store.get_field("pupil_fit_curve") or []),
+            "limbus_fit_curve": list(self.eye_data_store.get_field("limbus_fit_curve") or []),
         }
 
     def apply_points_state(self, state: dict) -> None:
@@ -354,6 +357,8 @@ class ImageViewer(QWidget):
         self.glint_points = state.get("glint_points", []).copy()
         self.pupil_ellipse = state["pupil_ellipse"]
         self.limbus_ellipse = state["limbus_ellipse"]
+        self.eye_data_store.set_field("pupil_fit_curve", list(state.get("pupil_fit_curve") or []))
+        self.eye_data_store.set_field("limbus_fit_curve", list(state.get("limbus_fit_curve") or []))
         self.update_image()
 
     def save_state(self) -> None:
@@ -670,7 +675,6 @@ class ImageViewer(QWidget):
         self.limbus_points = []
         self.pupil_ellipse = None
         self.limbus_ellipse = None
-        self._pupil_live_fit = False
         # Per-image Auto Detect overlay state — cleared here so the next
         # image starts blank before the annotation controller restores
         # whatever the new image's saved annotation carries. Masks are
@@ -695,7 +699,6 @@ class ImageViewer(QWidget):
         self.limbus_points = []
         self.pupil_ellipse = None
         self.limbus_ellipse = None
-        self._pupil_live_fit = False
         self.image_label.clear()
 
     def zoom_in_centered(self) -> None:
@@ -1005,6 +1008,8 @@ class ImageViewer(QWidget):
             self.eye_data_store.set_field(points_field, [])
         if ellipse_field is not None:
             self.eye_data_store.set_field(ellipse_field, None)
+        if annotation in {"pupil", "limbus"}:
+            self.eye_data_store.set_field(f"{annotation}_fit_curve", [])
         self.save_state()
         self.annotation_changed.emit()
         self.update_image()
@@ -1048,45 +1053,89 @@ class ImageViewer(QWidget):
         """Set annotation data for both eyes."""
         self.set_all_eye_data(data)
 
-    def refit_pupil_ellipse_live(self) -> bool:
-        """Silently re-fit the pupil ellipse from its points (no undo entry / signal).
+    def set_manual_fit_lookup(self, lookup: Callable[[str], dict]) -> None:
+        """Register ``lookup(kind) -> {mode, center_method, smoothness}`` for manual fits."""
+        self._manual_fit_lookup = lookup
 
-        Runs only after an explicit fit (``_pupil_live_fit``). If the points
-        drop below the fit minimum it stops live-fitting and keeps the last
-        ellipse (so glint/limbus still have a valid centre) until the next
-        manual fit. Returns whether the ellipse was updated.
+    def _manual_fit_params(self, kind: str) -> dict:
+        if self._manual_fit_lookup is None:
+            return {}
+        return self._manual_fit_lookup(kind) or {}
+
+    def _compute_manual_ellipse(self, kind: str, points: list) -> tuple:
+        """Fit the manual geometry for ``kind`` by its active mode.
+
+        Ellipse mode is the least-squares conic fit. Smooth-curve mode fits a
+        periodic smoothing spline (cheshm) through the points and reports its
+        bounding ellipse with the chosen centre estimator. Returns
+        ``(ellipse, curve)`` where ``curve`` is the smooth boundary points
+        (smooth mode) or ``None`` (ellipse mode); ``ellipse`` is ``None`` on
+        failure.
         """
-        if not self._pupil_live_fit:
+        params = self._manual_fit_params(kind)
+        if params.get("mode") == "smooth":
+            arr = np.array([[p.x(), p.y()] for p in points], dtype=float)
+            # Order the clicks by angle around their centroid so the closed
+            # spline follows the boundary instead of connecting them in the
+            # arbitrary order they were placed.
+            c0 = arr.mean(axis=0)
+            ordered = arr[np.argsort(np.arctan2(arr[:, 1] - c0[1], arr[:, 0] - c0[0]))]
+            curve = smoothing_spline(ordered, float(params.get("smoothness", 0.0)))
+            if curve is None or len(curve) < 5:
+                return None, None
+            center = pupil_center(ordered, params.get("center_method")) or (
+                float(curve[:, 0].mean()),
+                float(curve[:, 1].mean()),
+            )
+            (_c, (w, h), angle) = cv2.fitEllipse(curve.astype(np.float32))
+            curve_pts = [QPointF(float(px), float(py)) for px, py in curve]
+            return (QPointF(float(center[0]), float(center[1])), QSizeF(float(w), float(h)), float(angle)), curve_pts
+        x = np.array([p.x() for p in points])
+        y = np.array([p.y() for p in points])
+        prm = fit_ellipse(x, y)
+        return (QPointF(prm[0], prm[1]), QSizeF(2 * prm[2], 2 * prm[3]), float(np.degrees(prm[4]))), None
+
+    def refit_manual_live(self, kind: str) -> bool:
+        """Silently re-fit a manual kind's ellipse + smooth curve from its points.
+
+        Runs only once a fit already exists for the kind, so scattered points
+        before the first explicit fit don't auto-fit. Below the fit minimum it
+        keeps the last fit (downstream still has a valid centre). Also used to
+        rebuild the transient smooth curve after load / eye switch. Returns
+        whether it updated.
+        """
+        if kind not in {"pupil", "limbus"}:
             return False
-        if len(self.pupil_points) < 5:
-            self._pupil_live_fit = False
+        ellipse_field = "pupil_ellipse" if kind == "pupil" else "limbus_ellipse"
+        if self.eye_data_store.get_field(ellipse_field) is None:
             return False
-        x = np.array([p.x() for p in self.pupil_points])
-        y = np.array([p.y() for p in self.pupil_points])
-        params = fit_ellipse(x, y)
-        self.pupil_ellipse = (
-            QPointF(params[0], params[1]),
-            QSizeF(2 * params[2], 2 * params[3]),
-            float(np.degrees(params[4])),
-        )
+        points = self.pupil_points if kind == "pupil" else self.limbus_points
+        if len(points) < 5:
+            return False
+        ellipse, curve = self._compute_manual_ellipse(kind, points)
+        if ellipse is None:
+            return False
+        if kind == "pupil":
+            self.pupil_ellipse = ellipse
+        else:
+            self.limbus_ellipse = ellipse
+        self.eye_data_store.set_field(f"{kind}_fit_curve", curve or [])
         self.update_image()
         return True
 
     def fit_ellipse(self) -> bool:
-        """Fit an ellipse to annotation points."""
-        points = self.pupil_points if self.current_annotation == "pupil" else self.limbus_points
+        """Fit the active annotation's points by its mode (Ellipse or Smooth curve)."""
+        kind = self.current_annotation
+        points = self.pupil_points if kind == "pupil" else self.limbus_points
         if len(points) >= 5:
-            x = np.array([p.x() for p in points])
-            y = np.array([p.y() for p in points])
-            params = fit_ellipse(x, y)
-            center = QPointF(params[0], params[1])
-            size = QSizeF(2 * params[2], 2 * params[3])
-            angle = np.degrees(params[4])
-            if self.current_annotation == "pupil":
-                self.pupil_ellipse = (center, size, angle)
-                self._pupil_live_fit = True
+            ellipse, curve = self._compute_manual_ellipse(kind, points)
+            if ellipse is None:
+                return False
+            if kind == "pupil":
+                self.pupil_ellipse = ellipse
             else:
-                self.limbus_ellipse = (center, size, angle)
+                self.limbus_ellipse = ellipse
+            self.eye_data_store.set_field(f"{kind}_fit_curve", curve or [])
             self.save_state()
             self.annotation_changed.emit()
             self.update_image()
@@ -1095,7 +1144,7 @@ class ImageViewer(QWidget):
             QMessageBox.warning(
                 self,
                 "Warning",
-                f"At least 5 points are required to fit the {self.current_annotation} ellipse.",
+                f"At least 5 points are required to fit the {kind} ellipse.",
             )
         return False
 

@@ -5,8 +5,10 @@ from PyQt5.QtWidgets import (
     QAbstractSpinBox,
     QButtonGroup,
     QCheckBox,
+    QComboBox,
     QGroupBox,
     QHBoxLayout,
+    QLabel,
     QPushButton,
     QRadioButton,
     QSlider,
@@ -54,20 +56,27 @@ class AnnotationGroup(QWidget):
     selected = pyqtSignal()
     fit_requested = pyqtSignal()
     clear_requested = pyqtSignal()
+    params_changed = pyqtSignal()  # manual fit mode / centre method / harmonics changed
 
     def __init__(
         self,
         title: str,  # noqa: ARG002 - kept for API compatibility; the card owns the title
         has_fit: bool = True,
+        center_methods: tuple[str, ...] = (),
         parent: QWidget | None = None,
     ) -> None:
-        """Build the click-active radio + Fit / Clear button row."""
+        """Build the click-active radio, fit-mode controls, and Fit / Clear row.
+
+        ``center_methods`` lists the smooth-curve centre estimators to offer
+        (empty for kinds without an ellipse fit, where the mode controls hide).
+        """
         super().__init__(parent)
         self.has_fit = has_fit
+        self._center_methods = tuple(center_methods)
         self.setup_ui()
 
     def setup_ui(self) -> None:
-        """Set up the radio + button row."""
+        """Set up the radio, fit-mode controls, and button row."""
         layout = QVBoxLayout()
         layout.setContentsMargins(0, 0, 0, 0)
 
@@ -78,11 +87,14 @@ class AnnotationGroup(QWidget):
         self.radio.clicked.connect(self.selected.emit)
         layout.addWidget(self.radio)
 
+        if self.has_fit:
+            self._build_fit_mode_controls(layout)
+
         button_layout = QHBoxLayout()
         button_layout.setSpacing(4)
 
         if self.has_fit:
-            self.fit_button = IconButton("fit ellipse", "Fit Ellipse")
+            self.fit_button = IconButton("fit ellipse", "Fit")
             self.fit_button.clicked.connect(self.fit_requested.emit)
             button_layout.addWidget(self.fit_button)
 
@@ -94,6 +106,81 @@ class AnnotationGroup(QWidget):
 
         layout.addLayout(button_layout)
         self.setLayout(layout)
+
+    # Smoothness slider (0..100) maps to the spline penalty; squared for fine
+    # control near 0, scaled so the top of the slider is heavily smoothed.
+    _SMOOTH_SCALE = 0.02
+
+    def _build_fit_mode_controls(self, layout: QVBoxLayout) -> None:
+        """Mode selector (Ellipse | Smooth curve) plus the smooth-curve centre + smoothness."""
+        mode_row = QHBoxLayout()
+        mode_row.setContentsMargins(0, 0, 0, 0)
+        mode_row.setSpacing(4)
+        mode_row.addWidget(QLabel("fit"))
+        self.mode_combo = QComboBox()
+        self.mode_combo.addItem("Ellipse", "ellipse")
+        self.mode_combo.addItem("Smooth curve", "smooth")
+        self.mode_combo.currentIndexChanged.connect(self._on_mode_changed)
+        mode_row.addWidget(self.mode_combo, 1)
+        layout.addLayout(mode_row)
+
+        # Smooth-curve-only row: centre estimator + smoothness slider
+        # (0 = through every point, higher = smoother).
+        self._smooth_row = QWidget()
+        sr = QVBoxLayout(self._smooth_row)
+        sr.setContentsMargins(0, 0, 0, 0)
+        sr.setSpacing(2)
+        self.center_combo = QComboBox()
+        for method in self._center_methods:
+            self.center_combo.addItem(method, method)
+        self.center_combo.currentIndexChanged.connect(lambda _i: self.params_changed.emit())
+        sr.addWidget(self.center_combo)
+        slider_row = QHBoxLayout()
+        slider_row.setContentsMargins(0, 0, 0, 0)
+        slider_row.setSpacing(4)
+        slider_row.addWidget(QLabel("smooth"))
+        self.smooth_slider = QSlider(Qt.Horizontal)
+        self.smooth_slider.setRange(0, 100)
+        self.smooth_slider.setValue(0)
+        self.smooth_slider.valueChanged.connect(lambda _v: self.params_changed.emit())
+        slider_row.addWidget(self.smooth_slider, 1)
+        sr.addLayout(slider_row)
+        layout.addWidget(self._smooth_row)
+        self._smooth_row.setVisible(False)
+
+    def _on_mode_changed(self, _index: int) -> None:
+        self._smooth_row.setVisible(self.mode_combo.currentData() == "smooth")
+        self.params_changed.emit()
+
+    def manual_params(self) -> dict:
+        """Return the manual fit settings (empty for kinds without an ellipse fit)."""
+        if not self.has_fit:
+            return {}
+        frac = self.smooth_slider.value() / 100.0
+        return {
+            "mode": self.mode_combo.currentData(),
+            "center_method": self.center_combo.currentData(),
+            "smoothness": frac * frac * self._SMOOTH_SCALE,
+        }
+
+    def set_manual_params(self, params: dict) -> None:
+        """Apply saved manual fit settings without re-emitting ``params_changed``."""
+        if not self.has_fit or not isinstance(params, dict):
+            return
+        for widget in (self.mode_combo, self.center_combo, self.smooth_slider):
+            widget.blockSignals(True)
+        mode_idx = self.mode_combo.findData(params.get("mode", "ellipse"))
+        self.mode_combo.setCurrentIndex(max(mode_idx, 0))
+        center_idx = self.center_combo.findData(params.get("center_method"))
+        if center_idx >= 0:
+            self.center_combo.setCurrentIndex(center_idx)
+        smoothness = params.get("smoothness")
+        if isinstance(smoothness, (int, float)) and smoothness >= 0:
+            frac = (max(0.0, smoothness) / self._SMOOTH_SCALE) ** 0.5
+            self.smooth_slider.setValue(round(min(1.0, frac) * 100))
+        for widget in (self.mode_combo, self.center_combo, self.smooth_slider):
+            widget.blockSignals(False)
+        self._smooth_row.setVisible(self.mode_combo.currentData() == "smooth")
 
     def is_checked(self) -> bool:
         """Return whether this kind is currently the click target."""

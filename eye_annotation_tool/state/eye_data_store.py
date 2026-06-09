@@ -19,6 +19,10 @@ POINT_FIELDS: tuple[str, ...] = (
     "glint_points",
 )
 ELLIPSE_FIELDS: tuple[str, ...] = ("pupil_ellipse", "limbus_ellipse")
+# Smooth-curve boundary points for the manual "smooth" fit mode. Transient:
+# recomputed from points + smoothness on each fit, not persisted (the
+# annotation save owns the canonical result).
+CURVE_FIELDS: tuple[str, ...] = ("pupil_fit_curve", "limbus_fit_curve")
 ALL_FIELDS: tuple[str, ...] = POINT_FIELDS + ELLIPSE_FIELDS
 EYES: tuple[str, ...] = ("left", "right")
 
@@ -40,7 +44,11 @@ EyeField = list | tuple | None
 
 def _empty_eye() -> dict[str, EyeField]:
     """Return the canonical empty annotation dict for one eye."""
-    return {**{field: [] for field in POINT_FIELDS}, **dict.fromkeys(ELLIPSE_FIELDS)}
+    return {
+        **{field: [] for field in POINT_FIELDS},
+        **dict.fromkeys(ELLIPSE_FIELDS),
+        **{field: [] for field in CURVE_FIELDS},
+    }
 
 
 class EyeDataStore:
@@ -100,5 +108,15 @@ class EyeDataStore:
         return {eye: dict(data) for eye, data in self.eye_data.items()}
 
     def from_dict(self, data: dict[str, dict[str, EyeField]]) -> None:
-        """Replace the full store from a serialised payload (e.g. annotation JSON)."""
-        self.eye_data = {eye: dict(payload) for eye, payload in data.items()}
+        """Replace the full store from a serialised payload (e.g. annotation JSON).
+
+        Each eye starts from the empty template so transient fields (the smooth
+        curve) always exist even though the payload never carries them.
+        """
+        self.eye_data = {}
+        for eye in EYES:
+            block = _empty_eye()
+            loaded = data.get(eye)
+            if isinstance(loaded, dict):
+                block.update(loaded)
+            self.eye_data[eye] = block

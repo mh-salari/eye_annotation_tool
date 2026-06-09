@@ -383,7 +383,9 @@ class DetectorCard(QFrame):
         return self._detector_by_id.get(self._active_id)
 
     def current_params(self) -> dict[str, Any]:
-        """Return the active detector's current setting values."""
+        """Return the active detector's (or Manual host's) current setting values."""
+        if self._active_id == MANUAL and self._manual_host is not None and hasattr(self._manual_host, "manual_params"):
+            return self._manual_host.manual_params()
         if self._settings_block is None:
             return {}
         return self._settings_block.current_values()
@@ -432,7 +434,11 @@ class DetectorCard(QFrame):
             self.selection_changed.emit(self._active_id)
 
     def set_params(self, params: dict[str, Any]) -> None:
-        """Push params into the active detector's settings widgets silently."""
+        """Push params into the active detector's (or Manual host's) settings silently."""
+        if self._active_id == MANUAL:
+            if self._manual_host is not None and hasattr(self._manual_host, "set_manual_params"):
+                self._manual_host.set_manual_params(params)
+            return
         det = self.active_detector()
         if det is None or self._settings_block is None:
             return
@@ -474,7 +480,14 @@ class DetectorCard(QFrame):
     def set_manual_host(self, widget: QWidget | None) -> None:
         """Register the widget shown when the user picks Manual."""
         self._manual_host = widget
+        if widget is not None and hasattr(widget, "params_changed"):
+            widget.params_changed.connect(self._on_manual_params_changed)
         self._refresh_content()
+
+    def _on_manual_params_changed(self) -> None:
+        """Re-emit a Manual host's fit-setting change as a card param change."""
+        if self._active_id == MANUAL:
+            self.params_changed.emit(self.current_params())
 
     def attach_manual_host(self) -> QWidget | None:
         """Detach the manual host so the caller can re-parent it elsewhere."""

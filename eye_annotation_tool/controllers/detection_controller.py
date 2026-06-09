@@ -294,10 +294,23 @@ class DetectionController(QObject):
         self.per_eye_state.set_params(self._active_slot(), kind, dict(params))
         if self.undo_coordinator is not None:
             self.undo_coordinator.capture_debounced()
+        card = self.annotation_controls.card(kind)
+        if card is not None and card.active_id() == MANUAL:
+            # Manual fit-setting change (mode / centre / smoothness): re-fit now.
+            if self.image_viewer.refit_manual_live(kind):
+                self._kick_live_run_for_all_enabled()
+            return
         # Single-shot 0 ms timer coalesces multiple slider events from
         # the same event-loop tick into one detection pass.
         self._pending_run_one = None
         self._auto_detect_debounce.start()
+
+    def manual_fit_params(self, kind: str) -> dict:
+        """Active manual fit settings for ``kind`` (empty unless that kind is Manual)."""
+        card = self.annotation_controls.card(kind)
+        if card is None or card.active_id() != MANUAL:
+            return {}
+        return card.current_params()
 
     def _on_card_reset(self, kind: str) -> None:
         card = self.annotation_controls.card(kind)
@@ -399,16 +412,29 @@ class DetectionController(QObject):
         h = size.height() if hasattr(size, "height") else size[1]
         return {"center": (round(cx), round(cy)), "ellipse": ((cx, cy), (w, h), angle)}
 
-    def on_manual_pupil_edited(self) -> None:
-        """Live-update on a manual pupil edit: re-fit its ellipse, re-run glint/limbus."""
-        pupil_card = self.annotation_controls.card("pupil")
-        if pupil_card is None or pupil_card.active_id() != MANUAL:
+    def on_manual_edited(self) -> None:
+        """Live-update on a manual point edit: re-fit the active kind, re-run dependents.
+
+        Re-fits only once a fit already exists for the kind (so editing before
+        the first explicit fit doesn't auto-fit). Applies to manual pupil and
+        limbus alike.
+        """
+        kind = self.image_viewer.current_annotation
+        if kind not in {"pupil", "limbus"}:
             return
-        if self.image_viewer.current_annotation != "pupil":
+        card = self.annotation_controls.card(kind)
+        if card is None or card.active_id() != MANUAL:
             return
-        if not self.image_viewer.refit_pupil_ellipse_live():
+        if not self.image_viewer.refit_manual_live(kind):
             return
         self._kick_live_run_for_all_enabled()
+
+    def refit_manual_curves(self) -> None:
+        """Rebuild the active eye's manual ellipse + smooth curve after load / eye switch."""
+        for kind in ("pupil", "limbus"):
+            card = self.annotation_controls.card(kind)
+            if card is not None and card.active_id() == MANUAL:
+                self.image_viewer.refit_manual_live(kind)
 
     # ---------------------------------------------------------------------------
     # Binocular pupil crop
@@ -548,6 +574,10 @@ class DetectionController(QObject):
                         s.name: s.default for s in det.settings
                     }
                     entry["result"] = _serialize_result(result) if result is not None else None
+                elif slug == MANUAL:
+                    manual_params = self.per_eye_state.get_params(slot, kind)
+                    if manual_params:
+                        entry["params"] = dict(manual_params)
                 kind_block[slot] = entry
             if kind_block:
                 out[kind] = kind_block
@@ -604,6 +634,7 @@ class DetectionController(QObject):
                 if active_result is not None:
                     self.orchestrator.set_cached_result(kind, active_result)
             self.per_eye_state.restore_panel(active_slot, self.panel_for_kind, self.detector_default_params)
+            self.refit_manual_curves()
         finally:
             self.image_viewer.resume_updates()
 
@@ -616,6 +647,7 @@ class DetectionController(QObject):
         active_slot = self._active_slot()
         self._restore_selection_for_slot(active_slot)
         self.per_eye_state.restore_panel(active_slot, self.panel_for_kind, self.detector_default_params)
+        self.refit_manual_curves()
         self._kick_live_run_for_all_enabled()
         # Undo history is per (image, eye); seed it fresh for the new eye.
         if self.undo_coordinator is not None:

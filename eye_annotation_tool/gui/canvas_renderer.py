@@ -223,24 +223,37 @@ class CanvasRenderer:
                     painter.drawText(text_pos, eye_label)
 
     def _draw_ellipses_for_eye(self, painter: QPainter, eye_data: dict, geometry: CanvasGeometry) -> None:
-        """Render the fitted pupil + limbus ellipses (with centre markers) for one eye."""
-        for annotation_type, ellipse_field, default_outline, default_center in (
-            ("pupil", "pupil_ellipse", self.colors.pupil_ellipse, self.colors.pupil_center),
-            ("limbus", "limbus_ellipse", self.colors.limbus_ellipse, self.colors.limbus_ellipse),
+        """Render the fitted pupil + limbus geometry (smooth curve or ellipse) for one eye."""
+        for annotation_type, ellipse_field, curve_field, default_outline, default_center in (
+            ("pupil", "pupil_ellipse", "pupil_fit_curve", self.colors.pupil_ellipse, self.colors.pupil_center),
+            ("limbus", "limbus_ellipse", "limbus_fit_curve", self.colors.limbus_ellipse, self.colors.limbus_ellipse),
         ):
             if annotation_type in geometry.auto_managed_annotations:
                 continue
             ellipse = eye_data.get(ellipse_field)
-            if not ellipse:
+            curve = eye_data.get(curve_field)
+            if not ellipse and not curve:
                 continue
             outline_color, outline_thickness = self._manual_line_style(annotation_type, "ellipse", default_outline)
             if outline_color is not None:
                 painter.setPen(QPen(outline_color, outline_thickness, Qt.SolidLine))
                 painter.setBrush(Qt.NoBrush)
-                self._draw_single_ellipse(painter, ellipse)
+                # Smooth-curve mode draws the actual boundary through the points;
+                # ellipse mode draws the fitted conic.
+                if curve:
+                    self._draw_closed_curve(painter, curve)
+                elif ellipse:
+                    self._draw_single_ellipse(painter, ellipse)
             center_color, center_size = self._manual_center_style(annotation_type, default_center)
-            if center_color is not None:
+            if center_color is not None and ellipse:
                 self._draw_ellipse_center(painter, ellipse, center_color, center_size)
+
+    def _draw_closed_curve(self, painter: QPainter, curve: list) -> None:
+        """Render a closed boundary polyline at the current zoom factor."""
+        if len(curve) < 2:
+            return
+        poly = QPolygonF([QPointF(p.x() * self.zoom.factor, p.y() * self.zoom.factor) for p in curve])
+        painter.drawPolygon(poly)
 
     def _draw_single_ellipse(self, painter: QPainter, ellipse: tuple | None) -> None:
         """Render one rotated ellipse outline at the current zoom factor."""

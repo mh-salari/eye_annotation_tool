@@ -134,6 +134,7 @@ class MainWindow(QMainWindow):
         self.detection_controller.annotation_modified.connect(self._mark_modified)
         self.detection_controller.status_message.connect(self.statusBar().showMessage)
         self.image_viewer.set_overlay_state_lookup(self.detection_controller.overlay_state_lookup)
+        self.image_viewer.set_manual_fit_lookup(self.detection_controller.manual_fit_params)
 
         # Shared undo/redo across manual points and detector settings.
         self.undo_coordinator = UndoCoordinator(
@@ -787,7 +788,7 @@ class MainWindow(QMainWindow):
     def on_annotation_changed(self) -> None:
         """Handle a manual-annotation edit: mark dirty + live-update manual pupil."""
         self.session.modified = True
-        self.detection_controller.on_manual_pupil_edited()
+        self.detection_controller.on_manual_edited()
 
     def _on_autosave_changed(self, enabled: bool) -> None:
         """Persist the autosave toggle in project settings."""

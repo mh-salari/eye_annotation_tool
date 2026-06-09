@@ -7,6 +7,7 @@ and (for Manual) the per-kind manual annotation group widget. Clear
 All sits at the bottom and dispatches to the image viewer.
 """
 
+from cheshm.shape import CENTER_METHODS
 from PyQt5.QtCore import pyqtSignal
 from PyQt5.QtWidgets import (
     QButtonGroup,
@@ -64,13 +65,13 @@ class AnnotationControlPanel(QWidget):
         self.eye_selector.binocular_toggled.connect(self.binocular_toggled.emit)
         layout.addWidget(self.eye_selector)
 
-        self.pupil_group = AnnotationGroup("Pupil", has_fit=True)
+        self.pupil_group = AnnotationGroup("Pupil", has_fit=True, center_methods=CENTER_METHODS)
         self.pupil_group.selected.connect(lambda: self.annotation_changed.emit("pupil"))
         self.pupil_group.fit_requested.connect(self.fit_annotation_requested.emit)
         self.pupil_group.clear_requested.connect(self.clear_pupil_requested.emit)
         self.pupil_group.set_checked(True)
 
-        self.limbus_group = AnnotationGroup("Limbus", has_fit=True)
+        self.limbus_group = AnnotationGroup("Limbus", has_fit=True, center_methods=CENTER_METHODS)
         self.limbus_group.selected.connect(lambda: self.annotation_changed.emit("limbus"))
         self.limbus_group.fit_requested.connect(self.fit_annotation_requested.emit)
         self.limbus_group.clear_requested.connect(self.clear_limbus_requested.emit)
