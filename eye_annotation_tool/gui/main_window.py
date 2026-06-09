@@ -902,22 +902,25 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event: QCloseEvent) -> None:  # noqa: N802
         """Handle the window close event with autosave + unsaved-changes prompt."""
+        if self.project_store.autosave:
+            # Mirror navigation: save the current image silently on exit so the
+            # last image is persisted just like every one the user navigated past.
+            self.annotation_controller.save_current_annotations(silent=True)
+            event.accept()
+            return
         if self.session.modified:
-            if self.project_store.autosave:
+            reply = QMessageBox.question(
+                self,
+                "Unsaved Changes",
+                "You have unsaved changes. Do you want to save before exiting?",
+                QMessageBox.Save | QMessageBox.Discard | QMessageBox.Cancel,
+                QMessageBox.Save,
+            )
+            if reply == QMessageBox.Save:
                 self.annotation_controller.save_annotations()
-            else:
-                reply = QMessageBox.question(
-                    self,
-                    "Unsaved Changes",
-                    "You have unsaved changes. Do you want to save before exiting?",
-                    QMessageBox.Save | QMessageBox.Discard | QMessageBox.Cancel,
-                    QMessageBox.Save,
-                )
-                if reply == QMessageBox.Save:
-                    self.annotation_controller.save_annotations()
-                elif reply == QMessageBox.Cancel:
-                    event.ignore()
-                    return
+            elif reply == QMessageBox.Cancel:
+                event.ignore()
+                return
         event.accept()
 
     def show_about_dialog(self) -> None:
