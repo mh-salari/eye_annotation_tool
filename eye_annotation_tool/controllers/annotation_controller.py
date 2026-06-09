@@ -79,7 +79,6 @@ class AnnotationController:
         ):
             save_annotations(
                 annotation_path,
-                self.image_viewer.get_annotation_data(),
                 binocular_mode=self.binocular_controller.is_binocular,
                 divider_x_norm=self.binocular_controller.divider_override_for_current_image(),
                 detections=self.detection_controller.collect_detections_for_save(),
@@ -98,7 +97,6 @@ class AnnotationController:
                 binocular_mode=payload["binocular_mode"],
                 divider_x_norm=payload["divider_x_norm"],
             )
-            self.image_viewer.set_annotation_data(payload["eye_data"])
             self.detection_controller.apply_loaded_detections(payload["detections"])
             self.session.modified = False
 

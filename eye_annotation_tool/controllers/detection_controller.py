@@ -1,9 +1,10 @@
 """DetectorPlugin lifecycle: wire DetectorCards to the orchestrator + persistence."""
 
+from itertools import starmap
 from typing import TYPE_CHECKING
 
 import numpy as np
-from PyQt5.QtCore import QObject, QTimer, pyqtSignal
+from PyQt5.QtCore import QObject, QPointF, QSizeF, QTimer, pyqtSignal
 from PyQt5.QtGui import QColor
 from PyQt5.QtWidgets import QWidget
 
@@ -25,6 +26,41 @@ if TYPE_CHECKING:
     from .binocular_controller import BinocularController
 
 AUTO_DETECT_DEBOUNCE_MS = 0
+
+# Manual annotation fields per kind, mirrored between the image viewer's eye
+# data and the unified per-eye detections blocks.
+_MANUAL_POINTS_FIELD = {
+    "pupil": "pupil_points",
+    "limbus": "limbus_points",
+    "glint": "glint_points",
+    "eyelid": "eyelid_contour_points",
+}
+_MANUAL_ELLIPSE_FIELD = {"pupil": "pupil_ellipse", "limbus": "limbus_ellipse"}
+_MANUAL_CURVE_FIELD = {"pupil": "pupil_fit_curve", "limbus": "limbus_fit_curve"}
+
+
+def _manual_result(kind: str, eye_block: dict) -> dict | None:
+    """Canonical manual result for ``kind``: ellipse (+ smooth curve) or ``None``.
+
+    Pupil and limbus report the fitted ellipse and, when present, the smooth
+    boundary curve; points-only kinds (glint / eyelid) have no derived result —
+    their annotation is the points stored in ``params``.
+    """
+    field = _MANUAL_ELLIPSE_FIELD.get(kind)
+    if field is None:
+        return None
+    ellipse = eye_block.get(field)
+    if not ellipse:
+        return None
+    center, size, angle = ellipse
+    result = {
+        "center": [center.x(), center.y()],
+        "ellipse": [[center.x(), center.y()], [size.width(), size.height()], float(angle)],
+    }
+    curve = eye_block.get(_MANUAL_CURVE_FIELD[kind])
+    if curve:
+        result["boundary"] = [[p.x(), p.y()] for p in curve]
+    return result
 
 
 def _roi_setting_name(detector: DetectorPlugin) -> str | None:
@@ -555,7 +591,10 @@ class DetectionController(QObject):
         self.per_eye_state.snapshot_orchestrator(active_slot, self.orchestrator)
         self.per_eye_state.snapshot_panel(active_slot, self.panel_for_kind)
         project_detectors = self.project_store.project.get("detectors", {})
-        slots = ("left", "right") if self.binocular.is_binocular else ("single",)
+        bino = self.binocular.is_binocular
+        slots = ("left", "right") if bino else ("single",)
+        slot_to_eye = {"left": "left", "right": "right"} if bino else {"single": "left"}
+        eye_data = self.image_viewer.get_annotation_data()
         out: dict = {}
         for kind in KINDS:
             default_id = (project_detectors.get(kind) or {}).get("id", DETECTOR_OFF)
@@ -564,37 +603,75 @@ class DetectionController(QObject):
                 slug = self.per_eye_state.get_selection(slot, kind)
                 if slug is None:
                     continue
-                result = self.per_eye_state.get_result(slot, kind)
-                if slug == default_id and result is None:
-                    continue
                 entry: dict = {"id": slug}
                 det = self._detectors_by_kind_id.get((kind, slug))
                 if det is not None:
+                    result = self.per_eye_state.get_result(slot, kind)
+                    if slug == default_id and result is None:
+                        continue
                     entry["params"] = self.per_eye_state.get_params(slot, kind) or {
                         s.name: s.default for s in det.settings
                     }
                     entry["result"] = _serialize_result(result) if result is not None else None
                 elif slug == MANUAL:
-                    manual_params = self.per_eye_state.get_params(slot, kind)
-                    if manual_params:
-                        entry["params"] = dict(manual_params)
+                    block = eye_data.get(slot_to_eye[slot], {})
+                    points = block.get(_MANUAL_POINTS_FIELD[kind]) or []
+                    if not points and slug == default_id:
+                        continue
+                    params = dict(self.per_eye_state.get_params(slot, kind) or {})
+                    params["points"] = [[p.x(), p.y()] for p in points]
+                    entry["params"] = params
+                    entry["result"] = _manual_result(kind, block)
+                elif slug == default_id:
+                    continue
                 kind_block[slot] = entry
             if kind_block:
                 out[kind] = kind_block
         return out
 
+    def _restore_loaded_slot(
+        self,
+        kind: str,
+        slot: str,
+        slot_to_eye: dict[str, str],
+        params: dict | None,
+        result: dict | None,
+        eye_data: dict,
+    ) -> None:
+        """Restore one (kind, slot): manual -> eye data + fit params; detector -> params + result."""
+        slug = self.per_eye_state.get_selection(slot, kind)
+        if slug == MANUAL:
+            eye = slot_to_eye.get(slot)
+            if eye is None or params is None:
+                return
+            eye_data[eye][_MANUAL_POINTS_FIELD[kind]] = list(starmap(QPointF, params.get("points") or []))
+            ellipse = (result or {}).get("ellipse")
+            if ellipse and kind in _MANUAL_ELLIPSE_FIELD:
+                (cx, cy), (w, h), angle = ellipse
+                eye_data[eye][_MANUAL_ELLIPSE_FIELD[kind]] = (QPointF(cx, cy), QSizeF(w, h), angle)
+            self.per_eye_state.set_params(slot, kind, {k: v for k, v in params.items() if k != "points"})
+        elif slug != DETECTOR_OFF:
+            if params is not None:
+                self.per_eye_state.set_params(slot, kind, dict(params))
+            if result is not None:
+                self.per_eye_state.set_result(slot, kind, result)
+
     def apply_loaded_detections(self, detections: dict) -> None:
-        """Restore per-image detection blocks from a loaded annotation file."""
+        """Restore per-image state from a loaded annotation's detections blocks.
+
+        Detector slots restore their params + cached result; manual slots
+        restore their points + ellipse into the image viewer's eye data and
+        their fit settings into the per-eye params. Per-eye ids come from the
+        saved block, falling back to the project default when absent.
+        """
         self.image_viewer.pause_updates()
         try:
             project_detectors = self.project_store.project.get("detectors", {})
             active_slot = self._active_slot()
+            bino = self.binocular.is_binocular
+            slot_to_eye = {"left": "left", "right": "right"} if bino else {"single": "left"}
+            eye_data: dict = {"left": {}, "right": {}}
 
-            # Restore each eye's detector choice + params + results from the
-            # image. Per-eye ids come from the saved block; an older file with a
-            # single top-level id maps that id onto both eyes (handled by
-            # _extract_loaded_blob), and anything absent falls back to the
-            # project default. Done for every eye, not just the active one.
             for kind in KINDS:
                 card = self.annotation_controls.card(kind)
                 if card is None:
@@ -606,20 +683,20 @@ class DetectionController(QObject):
                 default_id = (project_detectors.get(kind) or {}).get("id", DETECTOR_OFF)
                 for slot in EYE_SLOTS:
                     self.per_eye_state.set_selection(slot, kind, ids.get(slot) or default_id)
-                for slot, params in per_eye_params.items():
-                    if params is not None:
-                        self.per_eye_state.set_params(slot, kind, dict(params))
-                for slot, result in per_eye_results.items():
-                    if result is not None:
-                        self.per_eye_state.set_result(slot, kind, result)
+                for slot in EYE_SLOTS:
+                    self._restore_loaded_slot(
+                        kind, slot, slot_to_eye, per_eye_params.get(slot), per_eye_results.get(slot), eye_data
+                    )
                 active_slug = self.per_eye_state.get_selection(active_slot, kind)
                 if active_slug != card.active_id():
                     card.set_selection(active_slug, emit=False)
+
+            self.image_viewer.set_annotation_data(eye_data)
             self._refresh_orchestrator_enabled()
             self._refresh_auto_managed_kinds()
 
-            # Paint every eye's saved result + ROI, then bind the active eye's
-            # cached result into the orchestrator for live re-runs.
+            # Paint every eye's saved detector result + ROI, then bind the active
+            # eye's cached result into the orchestrator for live re-runs.
             for kind in KINDS:
                 det = self.enabled_detector(kind)
                 roi_name = _roi_setting_name(det) if det is not None else None
