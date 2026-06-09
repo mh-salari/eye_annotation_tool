@@ -49,11 +49,11 @@ class AnnotationGroup(QWidget):
 
     Embedded inside a :class:`DetectorCard` when the card is in Manual,
     so the surrounding card already shows the kind title. The widget
-    here only carries the click-active radio and the Fit / Clear
+    here only carries the Add-points toggle and the Fit / Clear
     buttons.
     """
 
-    selected = pyqtSignal()
+    points_active_toggled = pyqtSignal(bool)
     fit_requested = pyqtSignal()
     clear_requested = pyqtSignal()
     params_changed = pyqtSignal()  # manual fit mode / centre method / harmonics changed
@@ -80,12 +80,14 @@ class AnnotationGroup(QWidget):
         layout = QVBoxLayout()
         layout.setContentsMargins(0, 0, 0, 0)
 
-        # The radio decides which kind canvas clicks go to. The card
-        # title already names the kind; the label here just says what
-        # the toggle does.
-        self.radio = QRadioButton("Active for clicks")
-        self.radio.clicked.connect(self.selected.emit)
-        layout.addWidget(self.radio)
+        # The Add-points toggle decides whether canvas clicks place points for
+        # this kind. It mirrors the ROI button: checkable, mutually exclusive
+        # with every other ROI / Add-points toggle (the controller enforces
+        # that), and cleared by Escape.
+        self.points_button = MaterialButton("Add points", compact=True)
+        self.points_button.setCheckable(True)
+        self.points_button.toggled.connect(self.points_active_toggled.emit)
+        layout.addWidget(self.points_button)
 
         if self.has_fit:
             self._build_fit_mode_controls(layout)
@@ -183,12 +185,14 @@ class AnnotationGroup(QWidget):
         self._smooth_row.setVisible(self.mode_combo.currentData() == "smooth")
 
     def is_checked(self) -> bool:
-        """Return whether this kind is currently the click target."""
-        return self.radio.isChecked()
+        """Return whether point-adding is active for this kind."""
+        return self.points_button.isChecked()
 
     def set_checked(self, checked: bool) -> None:
-        """Set whether this kind is the click target."""
-        self.radio.setChecked(checked)
+        """Set the Add-points toggle without emitting (controller-driven sync)."""
+        self.points_button.blockSignals(True)
+        self.points_button.setChecked(bool(checked))
+        self.points_button.blockSignals(False)
 
 
 class EyeSelector(QGroupBox):

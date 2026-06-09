@@ -10,7 +10,6 @@ All sits at the bottom and dispatches to the image viewer.
 from cheshm.shape import CENTER_METHODS
 from PyQt5.QtCore import pyqtSignal
 from PyQt5.QtWidgets import (
-    QButtonGroup,
     QVBoxLayout,
     QWidget,
 )
@@ -34,7 +33,7 @@ _MANUAL_ANNOTATION_BY_KIND = {
 class AnnotationControlPanel(QWidget):
     """Right-panel widget hosting the eye selector and per-kind detector cards."""
 
-    annotation_changed = pyqtSignal(str)
+    points_active_toggled = pyqtSignal(str, bool)
     eye_changed = pyqtSignal(str)
     binocular_toggled = pyqtSignal(bool)
     fit_annotation_requested = pyqtSignal()
@@ -66,29 +65,22 @@ class AnnotationControlPanel(QWidget):
         layout.addWidget(self.eye_selector)
 
         self.pupil_group = AnnotationGroup("Pupil", has_fit=True, center_methods=CENTER_METHODS)
-        self.pupil_group.selected.connect(lambda: self.annotation_changed.emit("pupil"))
+        self.pupil_group.points_active_toggled.connect(lambda a: self.points_active_toggled.emit("pupil", a))
         self.pupil_group.fit_requested.connect(self.fit_annotation_requested.emit)
         self.pupil_group.clear_requested.connect(self.clear_pupil_requested.emit)
-        self.pupil_group.set_checked(True)
 
         self.limbus_group = AnnotationGroup("Limbus", has_fit=True, center_methods=CENTER_METHODS)
-        self.limbus_group.selected.connect(lambda: self.annotation_changed.emit("limbus"))
+        self.limbus_group.points_active_toggled.connect(lambda a: self.points_active_toggled.emit("limbus", a))
         self.limbus_group.fit_requested.connect(self.fit_annotation_requested.emit)
         self.limbus_group.clear_requested.connect(self.clear_limbus_requested.emit)
 
         self.eyelid_group = AnnotationGroup("Eyelid Contour", has_fit=False)
-        self.eyelid_group.selected.connect(lambda: self.annotation_changed.emit("eyelid_contour"))
+        self.eyelid_group.points_active_toggled.connect(lambda a: self.points_active_toggled.emit("eyelid", a))
         self.eyelid_group.clear_requested.connect(self.clear_eyelid_points_requested.emit)
 
         self.glint_group = AnnotationGroup("Glint", has_fit=False)
-        self.glint_group.selected.connect(lambda: self.annotation_changed.emit("glint"))
+        self.glint_group.points_active_toggled.connect(lambda a: self.points_active_toggled.emit("glint", a))
         self.glint_group.clear_requested.connect(self.clear_glint_points_requested.emit)
-
-        # Radio-button group ties the per-card AnnotationGroup radios
-        # together so only one annotation type is the click target at a time.
-        self._radio_group = QButtonGroup(self)
-        for group in (self.pupil_group, self.limbus_group, self.eyelid_group, self.glint_group):
-            self._radio_group.addButton(group.radio)
 
         self._manual_group_by_kind: dict[str, AnnotationGroup] = {
             "pupil": self.pupil_group,
@@ -130,26 +122,12 @@ class AnnotationControlPanel(QWidget):
         """Return the manual annotation group widget for ``kind``."""
         return self._manual_group_by_kind.get(kind)
 
-    def set_current_annotation(self, annotation_type: str) -> None:
-        """Tick the radio for ``annotation_type`` (pupil/limbus/eyelid_contour/glint)."""
-        if annotation_type == "pupil":
-            self.pupil_group.set_checked(True)
-        elif annotation_type == "limbus":
-            self.limbus_group.set_checked(True)
-        elif annotation_type == "eyelid_contour":
-            self.eyelid_group.set_checked(True)
-        else:
-            self.glint_group.set_checked(True)
-
-    def get_current_annotation_type(self) -> str:
-        """Return the radio-selected annotation type slug."""
-        if self.pupil_group.is_checked():
-            return "pupil"
-        if self.limbus_group.is_checked():
-            return "limbus"
-        if self.eyelid_group.is_checked():
-            return "eyelid_contour"
-        return "glint"
+    def active_points_kind(self) -> str | None:
+        """Return the kind whose Add-points toggle is on, or ``None``."""
+        for kind, group in self._manual_group_by_kind.items():
+            if group.is_checked():
+                return kind
+        return None
 
     def get_current_eye(self) -> str:
         """Return the currently selected eye."""

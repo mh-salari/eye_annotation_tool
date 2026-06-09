@@ -51,14 +51,9 @@ class ShortcutHandler:
         toggle_shortcut.activated.connect(self.toggle_annotation_type)
 
     def toggle_annotation_type(self) -> None:
-        """Toggle between different annotation types."""
-        current_type = self.main_window.annotation_controls.get_current_annotation_type()
-        if current_type == "pupil":
-            new_type = "limbus"
-        elif current_type == "limbus":
-            new_type = "eyelid_contour"
-        else:
-            new_type = "pupil"
-
-        self.main_window.annotation_controls.set_current_annotation(new_type)
-        self.main_window.annotation_controls.annotation_changed.emit(new_type)
+        """Cycle the active Add-points kind: pupil -> limbus -> eyelid -> pupil."""
+        controls = self.main_window.annotation_controls
+        order = ("pupil", "limbus", "eyelid")
+        active = controls.active_points_kind()
+        new_kind = "pupil" if active not in order else order[(order.index(active) + 1) % len(order)]
+        controls.points_active_toggled.emit(new_kind, True)

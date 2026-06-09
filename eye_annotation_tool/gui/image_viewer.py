@@ -58,9 +58,16 @@ class ImageViewer(QWidget):
         "eyelid": "eyelid_contour",
         "glint": "glint",
     }
+    # Inverse: canvas annotation slug -> detector kind (for activating a kind
+    # from a clicked point, whose type is reported as an annotation slug).
+    _ANNOTATION_TO_PLUGIN_TARGET: ClassVar[dict[str, str]] = {
+        "pupil": "pupil",
+        "limbus": "limbus",
+        "eyelid_contour": "eyelid",
+        "glint": "glint",
+    }
 
     annotation_changed = pyqtSignal()
-    annotation_type_changed = pyqtSignal(str)
     # Emitted after a new image is loaded; the orchestrator listens to clear
     # its per-image detection cache.
     image_loaded = pyqtSignal()
@@ -68,6 +75,19 @@ class ImageViewer(QWidget):
     # per-kind Auto Detect ROI on the canvas. Payload is the kind slug
     # ("pupil", ...) and the new ``(x, y, w, h)`` tuple or ``None``.
     target_roi_changed = pyqtSignal(str, object)
+    # Emitted when the user presses Delete while a kind's ROI edit mode is
+    # active and that kind has a rectangle on the current eye. Payload is the
+    # kind slug; the detection controller clears the ROI + records undo.
+    active_roi_delete_requested = pyqtSignal(str)
+    # Emitted when a direct click on a drawn ROI / an existing point activates
+    # that interaction while nothing was active. Payload is the detector kind;
+    # the controller checks the matching button + sets the viewer's active state.
+    roi_edit_activated = pyqtSignal(str)
+    points_activated = pyqtSignal(str)
+    # Emitted when Escape leaves the active interaction (ROI edit or point
+    # adding). The detection controller clears every ROI / Add-points button
+    # and the viewer's active state.
+    interaction_deactivated = pyqtSignal()
     # Emitted when the user finishes dragging the binocular divider line.
     # Payload is the new normalised x position in [0, 1]. MainWindow
     # persists the value as the current image's per-image override.
@@ -121,6 +141,10 @@ class ImageViewer(QWidget):
         self.eye_data_store = EyeDataStore()
 
         self.current_annotation = "pupil"
+        # Whether canvas clicks place/edit points for ``current_annotation``.
+        # Off until a kind's Add-points toggle (or a direct point click) makes
+        # it active; mutually exclusive with ROI edit mode. Controller-driven.
+        self.points_active = False
         # Supplies the active manual fit settings (mode / centre / smoothness)
         # per kind; injected by MainWindow from the detector cards.
         self._manual_fit_lookup = None
@@ -373,8 +397,11 @@ class ImageViewer(QWidget):
             self.zoom(True, self.rect().center())
         elif event.key() == Qt.Key_Minus:
             self.zoom(False, self.rect().center())
+        elif event.key() == Qt.Key_Escape:
+            self._deactivate_interaction()
         elif event.key() == Qt.Key_Delete:
-            self.delete_selected_point()
+            if not self._request_active_roi_delete():
+                self.delete_selected_point()
         elif event.key() == Qt.Key_Shift:
             self.mouse_state.shift_pressed = True
         elif event.key() == Qt.Key_Space and not event.isAutoRepeat():
@@ -395,6 +422,40 @@ class ImageViewer(QWidget):
             if not self.mouse_state.panning:
                 self.setCursor(Qt.ArrowCursor)
         super().keyReleaseEvent(event)
+
+    def set_points_active(self, active: bool, kind: str | None = None) -> None:
+        """Toggle manual point editing; optionally aim clicks at ``kind``.
+
+        Controller-driven. ``kind`` is a canvas annotation slug
+        (``pupil`` / ``limbus`` / ``eyelid_contour`` / ``glint``).
+        """
+        self.points_active = bool(active)
+        if kind is not None:
+            self.current_annotation = kind
+        self.update_image()
+
+    def _deactivate_interaction(self) -> None:
+        """Leave the active interaction (Escape): ROI edit or point adding.
+
+        No-op when nothing is active. The controller clears the viewer state
+        and unchecks the buttons; this only signals the intent.
+        """
+        if self.target_rois.active_target is None and not self.points_active:
+            return
+        self.interaction_deactivated.emit()
+
+    def _request_active_roi_delete(self) -> bool:
+        """Ask the controller to delete the active-target ROI on the current eye.
+
+        Returns True when an ROI was targeted, so the caller skips point
+        deletion. Only fires while a kind's ROI edit mode is active (its ROI
+        button toggled on) and that kind has a rectangle on the current eye.
+        """
+        kind = self.target_rois.active_target
+        if kind is None or self.get_target_roi(kind) is None:
+            return False
+        self.active_roi_delete_requested.emit(kind)
+        return True
 
     def delete_selected_point(self) -> None:
         """Delete the currently selected point from the active annotation's list."""
@@ -471,13 +532,29 @@ class ImageViewer(QWidget):
                 w = new_pos.x() - x
             self._set_active_drag_roi((x, y, max(10, w), max(10, h)))
 
-    def _try_begin_roi_drag(self, image_pos: QPointF, current: tuple | None) -> bool:
-        """Convert a click on or near ``current`` into a resize/move/draw state.
+    def _roi_kind_at(self, image_pos: QPointF) -> str | None:
+        """Return the kind whose ROI lies under ``image_pos`` on the active eye.
 
-        Returns True — the click is always consumed by ROI-drag mode. A
-        click on the inactive eye's half in binocular mode is consumed
-        without starting a fresh draw, so the user can't accidentally
-        annotate the wrong side; switch eyes first.
+        A corner handle or the interior fill both count. Only the active eye's
+        rectangles are considered (matching drag behaviour). Returns None when
+        the click misses every stored ROI.
+        """
+        slot = self.active_eye_slot()
+        for kind, slots in self.target_rois.rois.items():
+            roi = slots.get(slot)
+            if roi is not None and (
+                self.get_roi_handle_at_pos(image_pos, roi) or self.is_point_in_roi(image_pos, roi)
+            ):
+                return kind
+        return None
+
+    def _try_begin_roi_drag(self, image_pos: QPointF, current: tuple | None) -> None:
+        """Turn a click in the active ROI into a resize or a fresh draw.
+
+        A corner handle resizes; a plain click inside an existing rectangle
+        does nothing (moving is Space+drag); a click outside it — or anywhere
+        when no rectangle exists yet — starts a fresh draw. A click on the
+        inactive eye's half in binocular mode is consumed without drawing.
         """
         if current:
             handle = self.get_roi_handle_at_pos(image_pos, current)
@@ -485,20 +562,18 @@ class ImageViewer(QWidget):
                 self.mouse_state.resizing_roi = True
                 self.mouse_state.roi_resize_handle = handle
                 self.mouse_state.roi_start_pos = image_pos
-                return True
+                return
             if self.is_point_in_roi(image_pos, current):
-                self.mouse_state.moving_roi = True
-                self.mouse_state.roi_start_pos = image_pos
-                return True
+                # Plain click inside an existing ROI does nothing — move it with
+                # Space+drag, resize via the corner handles.
+                return
         if not self._point_on_active_side(image_pos):
-            return True
-        # Begin a fresh draw, but keep the previous rectangle in place
-        # until the user actually drags past the threshold — a stray
-        # click without movement leaves the existing ROI untouched.
+            return
+        # Begin a fresh draw, but keep the previous rectangle in place until the
+        # user drags past the threshold — a stray click leaves it untouched.
         self.mouse_state.drawing_roi = True
         self.mouse_state.drawing_roi_committed = False
         self.mouse_state.roi_start_pos = image_pos
-        return True
 
     # Half-width of the hot zone for grabbing the binocular divider, in
     # image coordinates. 6px reads as "wide enough to grab" without
@@ -518,64 +593,101 @@ class ImageViewer(QWidget):
             self.mouse_state.panning = True
             self.mouse_state.last_pan_pos = event.pos()
             self.setCursor(Qt.ClosedHandCursor)
-        elif event.button() == Qt.LeftButton:
-            # Spacebar held turns left-drag into a pan (hand tool), taking
-            # priority over every annotation action below.
-            if self.mouse_state.space_pressed:
-                self.mouse_state.panning = True
-                self.mouse_state.last_pan_pos = event.pos()
-                self.setCursor(Qt.ClosedHandCursor)
-                return
+            return
+        if event.button() != Qt.LeftButton:
+            return
+
+        # Spacebar is the grab tool: a drag started inside the active ROI moves
+        # it; everywhere else (and when no ROI is active) it pans the image.
+        if self.mouse_state.space_pressed:
             image_pos = self.get_image_position(event.pos())
-            if image_pos:
-                # The binocular divider grabs the click before anything
-                # else so the user can always retarget the line even when
-                # it overlaps an ROI handle or an annotation point.
-                if self._hit_divider(image_pos):
-                    self.mouse_state.divider_drag_active = True
-                    self.setCursor(Qt.SizeHorCursor)
-                    return
+            if (
+                image_pos is not None
+                and self.target_rois.active_target is not None
+                and self.is_point_in_roi(image_pos, self._active_drag_roi())
+            ):
+                self.mouse_state.moving_roi = True
+                self.mouse_state.roi_start_pos = image_pos
+                return
+            self.mouse_state.panning = True
+            self.mouse_state.last_pan_pos = event.pos()
+            self.setCursor(Qt.ClosedHandCursor)
+            return
 
-                # A per-kind ROI in drag-edit mode consumes the click
-                # before any Manual-mode click-to-place flow runs. Drag
-                # operates on the active eye's slot for that kind —
-                # the inactive eye's rectangle paints but isn't grabbable.
-                if self.target_rois.active_target is not None:
-                    self._try_begin_roi_drag(image_pos, self._active_drag_roi())
-                    return
+        image_pos = self.get_image_position(event.pos())
+        if not image_pos:
+            return
 
-                self.mouse_state.selected_point, selected_annotation = self.find_closest_point_and_type(image_pos)
+        # The binocular divider grabs the click before anything else.
+        if self._hit_divider(image_pos):
+            self.mouse_state.divider_drag_active = True
+            self.setCursor(Qt.SizeHorCursor)
+            return
 
-                if self.mouse_state.selected_point:
-                    self.mouse_state.moving_point = True
-                    self.mouse_state.last_mouse_pos = image_pos
-                    self.mouse_state.moving_all_points = self.mouse_state.shift_pressed
+        # ROI edit mode active: resize via handles / draw a fresh one; a plain
+        # click inside does nothing (move is Space+drag).
+        if self.target_rois.active_target is not None:
+            self._try_begin_roi_drag(image_pos, self._active_drag_roi())
+            return
 
-                    if selected_annotation != self.current_annotation:
-                        self.current_annotation = selected_annotation
-                        self.annotation_type_changed.emit(self.current_annotation)
-                elif self.current_annotation in self._auto_managed_annotations:
-                    # The current kind is owned by an auto detector; manual
-                    # click-to-place is disabled so the auto overlay stays the
-                    # single source of truth for this kind.
-                    return
-                elif not self._point_on_active_side(image_pos):
-                    # In binocular mode clicks on the inactive eye's half
-                    # are ignored — the user should switch eyes first
-                    # rather than accidentally annotate the wrong side.
-                    return
-                elif self.current_annotation == "pupil":
-                    self.pupil_points.append(image_pos)
-                elif self.current_annotation == "limbus":
-                    self.limbus_points.append(image_pos)
-                elif self.current_annotation == "eyelid_contour":
-                    self.eyelid_contour_points.append(image_pos)
-                else:  # glint
-                    self.glint_points.append(image_pos)
+        # Add-points mode active: place or grab points for the active kind.
+        if self.points_active:
+            self._handle_point_press(image_pos)
+            return
 
-                self.save_state()
-                self.annotation_changed.emit()
-                self.update_image()
+        # Nothing active: a direct click activates what's under the cursor — an
+        # existing point first (so points inside a rectangle stay reachable),
+        # then a drawn ROI. An empty click stays inert.
+        point, annotation = self.find_closest_point_and_type(image_pos)
+        if point is not None:
+            self.points_activated.emit(self._ANNOTATION_TO_PLUGIN_TARGET[annotation])
+            self.mouse_state.selected_point = point
+            self.mouse_state.moving_point = True
+            self.mouse_state.last_mouse_pos = image_pos
+            self.mouse_state.moving_all_points = self.mouse_state.shift_pressed
+            self.save_state()
+            self.annotation_changed.emit()
+            self.update_image()
+            return
+        hit_kind = self._roi_kind_at(image_pos)
+        if hit_kind is not None:
+            self.roi_edit_activated.emit(hit_kind)
+
+    def _handle_point_press(self, image_pos: QPointF) -> None:
+        """Place a new point, or grab an existing one, for the active kind.
+
+        Grabbing a point of a different manual kind switches the active
+        Add-points kind to follow it (the controller checks the matching
+        button + repoints the canvas).
+        """
+        self.mouse_state.selected_point, selected_annotation = self.find_closest_point_and_type(image_pos)
+        if self.mouse_state.selected_point:
+            self.mouse_state.moving_point = True
+            self.mouse_state.last_mouse_pos = image_pos
+            self.mouse_state.moving_all_points = self.mouse_state.shift_pressed
+            if selected_annotation != self.current_annotation:
+                self.points_activated.emit(self._ANNOTATION_TO_PLUGIN_TARGET[selected_annotation])
+        elif self.current_annotation in self._auto_managed_annotations:
+            # The current kind is owned by an auto detector; manual click-to-
+            # place is disabled so the auto overlay stays the single source of
+            # truth for this kind.
+            return
+        elif not self._point_on_active_side(image_pos):
+            # In binocular mode clicks on the inactive eye's half are ignored —
+            # switch eyes first rather than annotate the wrong side.
+            return
+        elif self.current_annotation == "pupil":
+            self.pupil_points.append(image_pos)
+        elif self.current_annotation == "limbus":
+            self.limbus_points.append(image_pos)
+        elif self.current_annotation == "eyelid_contour":
+            self.eyelid_contour_points.append(image_pos)
+        else:  # glint
+            self.glint_points.append(image_pos)
+
+        self.save_state()
+        self.annotation_changed.emit()
+        self.update_image()
 
     def mouseMoveEvent(self, event: QEvent) -> None:  # noqa: N802
         """Handle mouse move events."""
@@ -638,8 +750,9 @@ class ImageViewer(QWidget):
                     self.target_roi_changed.emit(kind, self.target_rois.get(kind, self.active_eye_slot()))
                 return
 
+            was_moving = self.mouse_state.moving_point
             self.mouse_state.moving_point = False
-            if self.mouse_state.selected_point:
+            if was_moving and self.mouse_state.selected_point:
                 self.save_state()
                 self.annotation_changed.emit()
 
@@ -987,13 +1100,6 @@ class ImageViewer(QWidget):
             ):
                 return scaled_pos
         return None
-
-    def set_current_annotation(self, annotation_type: str) -> None:
-        """Set the current annotation type."""
-        if self.current_annotation != annotation_type:
-            self.current_annotation = annotation_type
-            self.annotation_type_changed.emit(self.current_annotation)  # Emit the new signal
-        self.annotation_changed.emit()
 
     def _clear_annotation(self, annotation: str, *, ellipse_only: bool = False) -> None:
         """Clear ``annotation``'s ellipse, and (unless ``ellipse_only``) its point list.

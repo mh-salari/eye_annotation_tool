@@ -411,7 +411,6 @@ class MainWindow(QMainWindow):
         self.image_tree.remove_requested.connect(self.remove_images)
         theme.changed.connect(self._apply_theme_chrome)
 
-        self.annotation_controls.annotation_changed.connect(self.image_viewer.set_current_annotation)
         self.annotation_controls.fit_annotation_requested.connect(self.image_viewer.fit_annotation)
         self.annotation_controls.clear_selected_annotation_requested.connect(self.image_viewer.clear_selected_ellipse)
         self.annotation_controls.clear_pupil_requested.connect(self.image_viewer.clear_pupil_points)
@@ -421,7 +420,6 @@ class MainWindow(QMainWindow):
         self.annotation_controls.clear_all_requested.connect(self._on_clear_all)
 
         self.image_viewer.annotation_changed.connect(self.on_annotation_changed)
-        self.image_viewer.annotation_type_changed.connect(self.annotation_controls.set_current_annotation)
         # On image change: drop both the orchestrator's per-image cache
         # AND the per-eye snapshot before the annotation_controller
         # restores whatever the new image's saved annotation carries.

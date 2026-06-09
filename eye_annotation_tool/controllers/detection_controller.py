@@ -38,6 +38,9 @@ _MANUAL_POINTS_FIELD = {
 _MANUAL_ELLIPSE_FIELD = {"pupil": "pupil_ellipse", "limbus": "limbus_ellipse"}
 _MANUAL_CURVE_FIELD = {"pupil": "pupil_fit_curve", "limbus": "limbus_fit_curve"}
 
+# Detector kind -> the canvas annotation slug clicks place points for.
+_ANNOTATION_SLUG = {"pupil": "pupil", "limbus": "limbus", "glint": "glint", "eyelid": "eyelid_contour"}
+
 
 def _manual_result(kind: str, eye_block: dict) -> dict | None:
     """Canonical manual result for ``kind``: ellipse (+ smooth curve) or ``None``.
@@ -119,6 +122,11 @@ class DetectionController(QObject):
         self.orchestrator.detector_ready.connect(self._on_detector_ready)
         self.orchestrator.detector_failed.connect(self._on_detector_failed)
         self.image_viewer.target_roi_changed.connect(self._on_target_roi_changed)
+        self.image_viewer.active_roi_delete_requested.connect(self._on_roi_delete_requested)
+        self.image_viewer.roi_edit_activated.connect(self._on_roi_edit_activated)
+        self.image_viewer.points_activated.connect(self._on_points_activated)
+        self.image_viewer.interaction_deactivated.connect(self._on_interaction_deactivated)
+        self.annotation_controls.points_active_toggled.connect(self._on_points_edit_requested)
 
         self._wire_card_signals()
 
@@ -208,10 +216,17 @@ class DetectionController(QObject):
         active_slot = self._active_slot()
         for kind, params in params_by_kind.items():
             card = self.annotation_controls.card(kind)
-            if card is None or card.active_detector() is None:
+            det = card.active_detector() if card is not None else None
+            if card is None or det is None:
                 continue
             card.set_params(dict(params))
             self.per_eye_state.set_params(active_slot, kind, dict(params))
+            # The visual ROI rectangle lives outside the undo snapshot, so mirror
+            # it from the restored param value; otherwise an undone ROI draw would
+            # revert the detector crop but leave the rectangle on the canvas.
+            roi_name = _roi_setting_name(det)
+            if roi_name is not None:
+                self.image_viewer.set_target_roi(kind, params.get(roi_name), eye_slot=active_slot)
         self._kick_live_run_for_all_enabled()
 
     # ---------------------------------------------------------------------------
@@ -243,9 +258,6 @@ class DetectionController(QObject):
             )
             card.roi_edit_requested.connect(
                 lambda active, k=kind: self._on_roi_edit_requested(k, active),
-            )
-            card.clear_roi_requested.connect(
-                lambda k=kind: self._on_clear_roi_requested(k),
             )
             card.detect_requested.connect(
                 lambda k=kind: self._kick_live_run_for_kind(k),
@@ -537,20 +549,49 @@ class DetectionController(QObject):
         self.status_message.emit(f"Auto Detect: {kind} failed at current parameters.", 5000)
 
     # ---------------------------------------------------------------------------
-    # ROI affordance handlers
+    # Interaction-mode handlers (one active: a kind's ROI, a kind's points, or none)
     # ---------------------------------------------------------------------------
 
-    def _on_roi_edit_requested(self, kind: str, active: bool) -> None:
-        if active:
-            # Only one ROI edit at a time: deactivate the other kinds' buttons.
-            for other in KINDS:
-                if other != kind:
-                    card = self.annotation_controls.card(other)
-                    if card is not None:
-                        card.set_roi_button_checked(False)
-        self.image_viewer.set_active_roi_target(kind if active else None)
+    def _set_active_interaction(self, kind: str | None, kind_type: str | None) -> None:
+        """Make ``(kind, kind_type)`` the single active interaction; turn off the rest.
 
-    def _on_clear_roi_requested(self, kind: str) -> None:
+        ``kind_type`` is ``"roi"``, ``"points"`` or ``None``. Exactly one ROI
+        button or Add-points button ends up checked (none when ``kind_type`` is
+        ``None``), and the image viewer's ROI target + point-edit flag are set
+        to match. A points activation also points the canvas at that kind.
+        """
+        for k in KINDS:
+            card = self.annotation_controls.card(k)
+            if card is not None:
+                card.set_roi_button_checked(k == kind and kind_type == "roi")
+            group = self.annotation_controls.manual_group_for_kind(k)
+            if group is not None:
+                group.set_checked(k == kind and kind_type == "points")
+        self.image_viewer.set_active_roi_target(kind if kind_type == "roi" else None)
+        if kind_type == "points" and kind is not None:
+            self.image_viewer.set_points_active(True, _ANNOTATION_SLUG[kind])
+        else:
+            self.image_viewer.set_points_active(False)
+
+    def _on_roi_edit_requested(self, kind: str, active: bool) -> None:
+        self._set_active_interaction(kind if active else None, "roi" if active else None)
+
+    def _on_points_edit_requested(self, kind: str, active: bool) -> None:
+        self._set_active_interaction(kind if active else None, "points" if active else None)
+
+    def _on_roi_edit_activated(self, kind: str) -> None:
+        """A direct click on a drawn ROI activated it; sync buttons + viewer state."""
+        self._set_active_interaction(kind, "roi")
+
+    def _on_points_activated(self, kind: str) -> None:
+        """A direct click on a point activated that kind's points; sync state."""
+        self._set_active_interaction(kind, "points")
+
+    def _on_interaction_deactivated(self) -> None:
+        """Escape left the active interaction; clear every ROI / Add-points button."""
+        self._set_active_interaction(None, None)
+
+    def _on_roi_delete_requested(self, kind: str) -> None:
         self.image_viewer.set_target_roi(kind, None)
         card = self.annotation_controls.card(kind)
         det = card.active_detector() if card is not None else None
@@ -571,6 +612,11 @@ class DetectionController(QObject):
             return
         roi_name = _roi_setting_name(det)
         if roi_name is None:
+            return
+        # A plain select/activate click lands in ROI drag mode and emits on
+        # release even when nothing moved; skip the unchanged value so it
+        # doesn't mark the image modified or re-run the detector for nothing.
+        if card.current_params().get(roi_name) == roi:
             return
         card.set_params({roi_name: roi})
         self._on_card_params_changed(kind, card.current_params())
