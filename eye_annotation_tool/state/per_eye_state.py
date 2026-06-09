@@ -59,6 +59,12 @@ class PerEyeStateStore:
         self.panel_params: dict[EyeSlot, dict[Target, dict | None]] = {
             slot: dict.fromkeys(self._targets) for slot in self.SLOTS
         }
+        # Active detector id per (slot, kind). Each eye picks its own detector
+        # (or Manual / Off) independently; ``None`` means "fall back to the
+        # project default" until a selection is restored or made.
+        self.selection: dict[EyeSlot, dict[Target, str | None]] = {
+            slot: dict.fromkeys(self._targets) for slot in self.SLOTS
+        }
         self.project_defaults: dict[Target, dict[EyeSlot, dict | None]] = {
             kind: dict.fromkeys(self.SLOTS) for kind in self._targets
         }
@@ -137,6 +143,7 @@ class PerEyeStateStore:
             for kind in self._targets:
                 self.detection_cache[slot][kind] = None
                 self.panel_params[slot][kind] = None
+                self.selection[slot][kind] = None
 
     # ---------------------------------------------------------------------------
     # Direct accessors (used by per-image save/load + run handlers)
@@ -157,6 +164,14 @@ class PerEyeStateStore:
     def set_params(self, slot: EyeSlot, kind: Target, value: dict | None) -> None:
         """Replace the mirrored panel params for ``(slot, kind)``."""
         self.panel_params[slot][kind] = value
+
+    def get_selection(self, slot: EyeSlot, kind: Target) -> str | None:
+        """Return the active detector id for ``(slot, kind)`` (``None`` if unset)."""
+        return self.selection[slot][kind]
+
+    def set_selection(self, slot: EyeSlot, kind: Target, value: str | None) -> None:
+        """Set the active detector id for ``(slot, kind)``."""
+        self.selection[slot][kind] = value
 
     def get_project_default(self, kind: Target, slot: EyeSlot) -> dict | None:
         """Return the project-file default params for ``(kind, slot)`` (``None`` if absent)."""

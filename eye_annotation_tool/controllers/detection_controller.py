@@ -229,6 +229,10 @@ class DetectionController(QObject):
             if card is None:
                 continue
             card.set_pinned(slug, entry.get("pinned") or [])
+            # Seed every eye with the project default; per-image loads then
+            # override per eye where the saved annotation says otherwise.
+            for slot in EYE_SLOTS:
+                self.per_eye_state.set_selection(slot, kind, slug)
             card.set_selection(slug, emit=False)
             overlays = entry.get("overlays")
             if isinstance(overlays, dict):
@@ -261,7 +265,10 @@ class DetectionController(QObject):
     # ---------------------------------------------------------------------------
 
     def _on_card_selection_changed(self, kind: str, slug: str) -> None:
-        self._persist_kind_id(kind, slug)
+        # Record the choice for the active eye only — each eye picks its own
+        # detector. The project default is left untouched (it changes only via
+        # Project Settings / save-as-default).
+        self.per_eye_state.set_selection(self._active_slot(), kind, slug)
         self._refresh_orchestrator_enabled()
         self._refresh_auto_managed_kinds()
         # Switching the kind's detector invalidates whatever overlay /
@@ -511,86 +518,89 @@ class DetectionController(QObject):
     # ---------------------------------------------------------------------------
 
     def collect_detections_for_save(self) -> dict:
-        """Build the per-image ``detections`` dict from cached per-eye results."""
+        """Build the per-image ``detections`` dict, one block per eye.
+
+        Each block carries its own detector id, params and result. A slot is
+        recorded when it has a detection result or its detector differs
+        from the project default; otherwise it is omitted and falls back to the
+        project default on load. This keeps each eye's choice independent.
+        """
         active_slot = self._active_slot()
         self.per_eye_state.snapshot_orchestrator(active_slot, self.orchestrator)
         self.per_eye_state.snapshot_panel(active_slot, self.panel_for_kind)
-        binocular = self.binocular.is_binocular
+        project_detectors = self.project_store.project.get("detectors", {})
+        slots = ("left", "right") if self.binocular.is_binocular else ("single",)
         out: dict = {}
         for kind in KINDS:
-            det = self.enabled_detector(kind)
-            if det is None:
-                continue
-            if binocular:
-                per_eye_block: dict = {}
-                for slot in ("left", "right"):
-                    result = self.per_eye_state.get_result(slot, kind)
-                    if result is None:
-                        continue
-                    params = self.per_eye_state.get_params(slot, kind) or {s.name: s.default for s in det.settings}
-                    per_eye_block[slot] = {
-                        "params": params,
-                        "result": _serialize_result(result),
-                    }
-                if per_eye_block:
-                    out[kind] = {"id": det.name, **per_eye_block}
-            else:
-                result = self.per_eye_state.get_result("single", kind)
-                if result is None:
+            default_id = (project_detectors.get(kind) or {}).get("id", DETECTOR_OFF)
+            kind_block: dict = {}
+            for slot in slots:
+                slug = self.per_eye_state.get_selection(slot, kind)
+                if slug is None:
                     continue
-                params = self.per_eye_state.get_params("single", kind) or {s.name: s.default for s in det.settings}
-                out[kind] = {
-                    "id": det.name,
-                    "params": params,
-                    "result": _serialize_result(result),
-                }
+                result = self.per_eye_state.get_result(slot, kind)
+                if slug == default_id and result is None:
+                    continue
+                entry: dict = {"id": slug}
+                det = self._detectors_by_kind_id.get((kind, slug))
+                if det is not None:
+                    entry["params"] = self.per_eye_state.get_params(slot, kind) or {
+                        s.name: s.default for s in det.settings
+                    }
+                    entry["result"] = _serialize_result(result) if result is not None else None
+                kind_block[slot] = entry
+            if kind_block:
+                out[kind] = kind_block
         return out
 
     def apply_loaded_detections(self, detections: dict) -> None:
         """Restore per-image detection blocks from a loaded annotation file."""
         self.image_viewer.pause_updates()
         try:
-            # Select each kind's detector from the image (saved id, else the
-            # project default) before its params/results, so they bind to the
-            # detector this image was annotated with.
             project_detectors = self.project_store.project.get("detectors", {})
+            active_slot = self._active_slot()
+
+            # Restore each eye's detector choice + params + results from the
+            # image. Per-eye ids come from the saved block; an older file with a
+            # single top-level id maps that id onto both eyes (handled by
+            # _extract_loaded_blob), and anything absent falls back to the
+            # project default. Done for every eye, not just the active one.
             for kind in KINDS:
                 card = self.annotation_controls.card(kind)
                 if card is None:
                     continue
                 block = detections.get(kind)
-                if isinstance(block, dict) and isinstance(block.get("id"), str):
-                    target_id = block["id"]
-                else:
-                    target_id = (project_detectors.get(kind) or {}).get("id", DETECTOR_OFF)
-                if target_id != card.active_id():
-                    card.set_selection(target_id, emit=False)
+                ids, per_eye_params, per_eye_results = (
+                    _extract_loaded_blob(block) if isinstance(block, dict) else ({}, {}, {})
+                )
+                default_id = (project_detectors.get(kind) or {}).get("id", DETECTOR_OFF)
+                for slot in EYE_SLOTS:
+                    self.per_eye_state.set_selection(slot, kind, ids.get(slot) or default_id)
+                for slot, params in per_eye_params.items():
+                    if params is not None:
+                        self.per_eye_state.set_params(slot, kind, dict(params))
+                for slot, result in per_eye_results.items():
+                    if result is not None:
+                        self.per_eye_state.set_result(slot, kind, result)
+                active_slug = self.per_eye_state.get_selection(active_slot, kind)
+                if active_slug != card.active_id():
+                    card.set_selection(active_slug, emit=False)
             self._refresh_orchestrator_enabled()
             self._refresh_auto_managed_kinds()
 
-            active_slot = self._active_slot()
-            for kind, block in detections.items():
+            # Paint every eye's saved result + ROI, then bind the active eye's
+            # cached result into the orchestrator for live re-runs.
+            for kind in KINDS:
                 det = self.enabled_detector(kind)
-                if det is None or not isinstance(block, dict):
-                    continue
-                per_eye_params, per_eye_results = _extract_loaded_blob(block)
-                roi_name = _roi_setting_name(det)
-                for slot, params in per_eye_params.items():
-                    if params is None:
-                        continue
-                    self.per_eye_state.set_params(slot, kind, dict(params))
-                    if roi_name is not None and params.get(roi_name) is not None:
+                roi_name = _roi_setting_name(det) if det is not None else None
+                for slot in EYE_SLOTS:
+                    params = self.per_eye_state.get_params(slot, kind)
+                    if roi_name is not None and params is not None and params.get(roi_name) is not None:
                         self.image_viewer.set_target_roi(kind, tuple(params[roi_name]), eye_slot=slot)
-                for slot, result in per_eye_results.items():
-                    self.per_eye_state.set_result(slot, kind, result)
+                    result = self.per_eye_state.get_result(slot, kind)
                     if result is not None:
                         self.image_viewer.set_detection_overlay(kind, result, eye_slot=slot)
-                active_params = per_eye_params.get(active_slot)
-                if active_params is not None:
-                    card = self.annotation_controls.card(kind)
-                    if card is not None:
-                        card.set_params(active_params)
-                active_result = per_eye_results.get(active_slot)
+                active_result = self.per_eye_state.get_result(active_slot, kind)
                 if active_result is not None:
                     self.orchestrator.set_cached_result(kind, active_result)
             self.per_eye_state.restore_panel(active_slot, self.panel_for_kind, self.detector_default_params)
@@ -602,13 +612,29 @@ class DetectionController(QObject):
     # ---------------------------------------------------------------------------
 
     def on_active_eye_changed(self) -> None:
-        """Re-apply per-eye saved params + repaint after the active eye switches."""
+        """Re-bind each card to the new eye's detector + params, then repaint."""
         active_slot = self._active_slot()
+        self._restore_selection_for_slot(active_slot)
         self.per_eye_state.restore_panel(active_slot, self.panel_for_kind, self.detector_default_params)
         self._kick_live_run_for_all_enabled()
         # Undo history is per (image, eye); seed it fresh for the new eye.
         if self.undo_coordinator is not None:
             self.undo_coordinator.reset()
+
+    def _restore_selection_for_slot(self, slot: str) -> None:
+        """Point every card at the detector ``slot`` chose (project default if unset)."""
+        project_detectors = self.project_store.project.get("detectors", {})
+        for kind in KINDS:
+            card = self.annotation_controls.card(kind)
+            if card is None:
+                continue
+            slug = self.per_eye_state.get_selection(slot, kind)
+            if slug is None:
+                slug = (project_detectors.get(kind) or {}).get("id", DETECTOR_OFF)
+            if slug != card.active_id():
+                card.set_selection(slug, emit=False)
+        self._refresh_orchestrator_enabled()
+        self._refresh_auto_managed_kinds()
 
     def cancel_active_roi_edit(self) -> None:
         """Drop any in-progress ROI drag-edit toggle (called when leaving a context)."""
@@ -647,13 +673,6 @@ class DetectionController(QObject):
             if card.active_id() not in {OFF, MANUAL}:
                 auto_kinds.add(kind)
         self.image_viewer.set_auto_managed_targets(auto_kinds)
-
-    def _persist_kind_id(self, kind: str, slug: str) -> None:
-        detectors_block = self.project_store.project.setdefault("detectors", {})
-        kind_block = detectors_block.setdefault(kind, {})
-        kind_block["id"] = slug
-        kind_block.setdefault("params", {})
-        self.project_store.persist()
 
     def _persist_overlays(self, kind: str) -> None:
         card = self.annotation_controls.card(kind)
@@ -802,18 +821,21 @@ def _translate_result(result: dict, dx: int, dy: int) -> dict:
     return out
 
 
-def _extract_loaded_blob(blob: dict) -> tuple[dict[str, dict | None], dict[str, dict | None]]:
-    """Normalise an on-disk per-kind detection block to per-eye ``(params, results)`` maps."""
-    if "params" in blob or "result" in blob:
-        params = blob.get("params") or None
-        result = blob.get("result") or None
-        return {"single": params}, {"single": result}
-    per_eye_params: dict[str, dict | None] = {}
-    per_eye_results: dict[str, dict | None] = {}
-    for slot in ("left", "right"):
+def _extract_loaded_blob(
+    blob: dict,
+) -> tuple[dict[str, str | None], dict[str, dict | None], dict[str, dict | None]]:
+    """Normalise an on-disk per-kind detection block to per-eye ``(ids, params, results)``.
+
+    Each eye slot maps to its own ``{id, params, result}``.
+    """
+    ids: dict[str, str | None] = {}
+    params: dict[str, dict | None] = {}
+    results: dict[str, dict | None] = {}
+    for slot in ("left", "right", "single"):
         entry = blob.get(slot)
         if not isinstance(entry, dict):
             continue
-        per_eye_params[slot] = entry.get("params") or None
-        per_eye_results[slot] = entry.get("result") or None
-    return per_eye_params, per_eye_results
+        ids[slot] = entry.get("id")
+        params[slot] = entry.get("params") or None
+        results[slot] = entry.get("result") or None
+    return ids, params, results
