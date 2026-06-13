@@ -145,7 +145,7 @@ class MainWindow(QMainWindow):
         self.image_viewer.undo_coordinator = self.undo_coordinator
         self.detection_controller.undo_coordinator = self.undo_coordinator
         # In-app clipboard for copy/paste of detector settings (current eye).
-        self._settings_clipboard: dict[str, dict] | None = None
+        self._settings_clipboard: dict | None = None
 
         self.binocular_controller = BinocularController(
             self.image_viewer,
@@ -337,15 +337,24 @@ class MainWindow(QMainWindow):
         return self.project_store.image_paths()
 
     def copy_settings(self) -> None:
-        """Copy the current eye's live detector settings into the in-app clipboard."""
-        self._settings_clipboard = self.detection_controller.snapshot_params()
+        """Copy the current eye's detector selection + settings into the in-app clipboard."""
+        self._settings_clipboard = {
+            "selection": self.detection_controller.snapshot_selection(),
+            "params": self.detection_controller.snapshot_params(),
+        }
         self.statusBar().showMessage("Settings copied.", 2000)
 
     def paste_settings(self) -> None:
-        """Apply the clipboard settings onto the current image's current eye and re-run."""
+        """Apply the clipboard's detector selection + settings onto the current eye and re-run.
+
+        The selection is applied first so each kind switches to the copied
+        detector, then its params land on that detector (not whatever happened
+        to be selected).
+        """
         if not self._settings_clipboard:
             return
-        self.detection_controller.apply_params(self._settings_clipboard)
+        self.detection_controller.apply_selection(self._settings_clipboard["selection"])
+        self.detection_controller.apply_params(self._settings_clipboard["params"])
         self.undo_coordinator.capture()
         self._mark_modified(True)
         self.statusBar().showMessage("Settings pasted.", 2000)
