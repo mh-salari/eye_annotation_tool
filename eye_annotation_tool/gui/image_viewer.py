@@ -532,21 +532,53 @@ class ImageViewer(QWidget):
                 w = new_pos.x() - x
             self._set_active_drag_roi((x, y, max(10, w), max(10, h)))
 
-    def _roi_kind_at(self, image_pos: QPointF) -> str | None:
-        """Return the kind whose ROI lies under ``image_pos`` on the active eye.
+    # Screen-space tolerance (px) for selecting a ROI by clicking near its
+    # outline. ROIs paint as thin unfilled rectangles, so a band around the
+    # border makes them grabbable without pixel-perfect aim.
+    ROI_SELECT_MARGIN_PX = 10.0
 
-        A corner handle or the interior fill both count. Only the active eye's
-        rectangles are considered (matching drag behaviour). Returns None when
-        the click misses every stored ROI.
+    @staticmethod
+    def _dist_to_roi_border(image_pos: QPointF, roi: tuple) -> float:
+        """Distance (image px) from ``image_pos`` to the rectangle's perimeter.
+
+        Zero on the border; for a point inside, the distance to the nearest
+        edge; for a point outside, the straight-line distance to the rectangle.
+        """
+        x, y, w, h = roi
+        px, py = image_pos.x(), image_pos.y()
+        dx = max(x - px, 0.0, px - (x + w))
+        dy = max(y - py, 0.0, py - (y + h))
+        if dx or dy:
+            return (dx * dx + dy * dy) ** 0.5
+        return min(px - x, x + w - px, py - y, y + h - py)
+
+    def _roi_kind_at(self, image_pos: QPointF) -> str | None:
+        """Return the kind whose ROI ``image_pos`` selects, on the active eye.
+
+        The ROI whose outline is nearest the click wins, within a tolerance
+        band (so an inner rectangle doesn't steal a click aimed at an outer
+        one's border). A click well inside, near no outline, falls back to the
+        smallest rectangle containing it. Returns None when the click misses
+        every stored ROI.
         """
         slot = self.active_eye_slot()
+        margin = self.ROI_SELECT_MARGIN_PX / self.factor
+        near: tuple[float, str] | None = None
+        contained: tuple[float, str] | None = None
         for kind, slots in self.target_rois.rois.items():
             roi = slots.get(slot)
-            if roi is not None and (
-                self.get_roi_handle_at_pos(image_pos, roi) or self.is_point_in_roi(image_pos, roi)
-            ):
-                return kind
-        return None
+            if roi is None:
+                continue
+            dist = self._dist_to_roi_border(image_pos, roi)
+            if dist <= margin and (near is None or dist < near[0]):
+                near = (dist, kind)
+            if self.is_point_in_roi(image_pos, roi):
+                area = roi[2] * roi[3]
+                if contained is None or area < contained[0]:
+                    contained = (area, kind)
+        if near is not None:
+            return near[1]
+        return contained[1] if contained is not None else None
 
     def _try_begin_roi_drag(self, image_pos: QPointF, current: tuple | None) -> None:
         """Turn a click in the active ROI into a resize or a fresh draw.
