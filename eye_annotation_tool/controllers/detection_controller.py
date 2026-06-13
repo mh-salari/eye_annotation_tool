@@ -43,12 +43,18 @@ _ANNOTATION_SLUG = {"pupil": "pupil", "limbus": "limbus", "glint": "glint", "eye
 
 
 def _manual_result(kind: str, eye_block: dict) -> dict | None:
-    """Canonical manual result for ``kind``: ellipse (+ smooth curve) or ``None``.
+    """Canonical manual result for ``kind``.
 
     Pupil and limbus report the fitted ellipse and, when present, the smooth
-    boundary curve; points-only kinds (glint / eyelid) have no derived result —
-    their annotation is the points stored in ``params``.
+    boundary curve. Glint reports one ``{center}`` entry per clicked point, so a
+    manual glint and a detector glint are both read from ``result.glints``.
+    Eyelid stays points-only — its annotation is the points stored in ``params``.
     """
+    if kind == "glint":
+        points = eye_block.get(_MANUAL_POINTS_FIELD["glint"]) or []
+        if not points:
+            return None
+        return {"glints": [{"center": [p.x(), p.y()]} for p in points], "search_area": None}
     field = _MANUAL_ELLIPSE_FIELD.get(kind)
     if field is None:
         return None
