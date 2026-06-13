@@ -5,7 +5,7 @@
 [![License](https://img.shields.io/pypi/l/eye_annotation_tool)](https://github.com/mh-salari/eye_annotation_tool/blob/main/LICENSE)
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.18723470.svg)](https://doi.org/10.5281/zenodo.18723470)
 
-A Qt-based desktop tool for annotating pupil, limbus (iris), eyelid, and glints in eye images. Supports monocular and binocular projects, auto-detectors for each annotation type, and per-eye carry-across-frames workflows. Auto-detectors come from [cheshm](https://github.com/mh-salari/cheshm).
+A Qt-based desktop tool for annotating pupil, limbus (iris), eyelid, and glints in eye images. Supports monocular and binocular projects with per-eye detector selection and annotations, and auto-detectors for each annotation type. Auto-detectors come from [cheshm](https://github.com/mh-salari/cheshm).
 
 <p align="center">
 <img src="https://raw.githubusercontent.com/mh-salari/eye_annotation_tool/main/eye_annotation_tool/resources/main_page.png" alt="EyE Annotation Tool Main Page" width="800">
@@ -13,7 +13,7 @@ A Qt-based desktop tool for annotating pupil, limbus (iris), eyelid, and glints 
 
 ## Features
 
-- Monocular and binocular projects; per-eye overrides for ROI, carry, and defaults.
+- Monocular and binocular projects; detector selection, ROIs, and annotations stored per eye.
 - Manual annotation of pupil ellipse, limbus ellipse, eyelid mask, and glints.
 - Live auto-detection that re-runs on image load and detector swap.
 - Auto-detectors are every pupil / glint / limbus detector cheshm exposes (`Simple`, `ElSe`, `ExCuSe`, `PuRe`, `PuReST`, `PupilLabs2D`, `Starburst`, `Swirski2D` for pupil; `Simple` for glint; `active_contour`, `integro_differential`, `pupil_guided` for limbus). See [cheshm's detector list](https://github.com/mh-salari/cheshm#detectors) for licences.
