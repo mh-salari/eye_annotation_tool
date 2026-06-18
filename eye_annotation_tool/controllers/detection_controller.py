@@ -422,7 +422,7 @@ class DetectionController(QObject):
         if image is None:
             return
         if kind == "pupil":
-            self._run_pupil_with_crop(image, card.current_params())
+            self._run_with_crop("pupil", image, card.current_params())
             return
         self.orchestrator.run_one(kind, image, card.current_params())
 
