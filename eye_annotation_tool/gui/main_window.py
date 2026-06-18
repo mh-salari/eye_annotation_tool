@@ -345,23 +345,25 @@ class MainWindow(QMainWindow):
         return self.project_store.image_paths()
 
     def copy_settings(self) -> None:
-        """Copy the current eye's detector selection + settings into the in-app clipboard."""
+        """Copy the active eye's detector selection, manual points and settings into the in-app clipboard."""
         self._settings_clipboard = {
             "selection": self.detection_controller.snapshot_selection(),
+            "points": self.image_viewer.snapshot_points(),
             "params": self.detection_controller.snapshot_params(),
         }
         self.statusBar().showMessage("Settings copied.", 2000)
 
     def paste_settings(self) -> None:
-        """Apply the clipboard's detector selection + settings onto the current eye and re-run.
+        """Apply the clipboard's selection, manual points and settings onto the active eye and re-run.
 
         The selection is applied first so each kind switches to the copied
-        detector, then its params land on that detector (not whatever happened
-        to be selected).
+        detector; the manual points and params then follow so they land on that
+        detector rather than on whatever was selected before.
         """
         if not self._settings_clipboard:
             return
         self.detection_controller.apply_selection(self._settings_clipboard["selection"])
+        self.image_viewer.apply_points_state(self._settings_clipboard["points"])
         self.detection_controller.apply_params(self._settings_clipboard["params"])
         self.undo_coordinator.capture()
         self._mark_modified(True)
