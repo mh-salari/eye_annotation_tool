@@ -179,6 +179,20 @@ class ProjectStore:
         self.persist()
 
     @property
+    def auto_detect_on_load(self) -> bool:
+        """When True, opening an image runs the enabled auto-detectors live.
+
+        When False the canvas shows only the saved-from-file detections and the
+        user runs detection on demand via each detector card's Detect button.
+        """
+        return bool(self.project.get("auto_detect_on_load", False))
+
+    @auto_detect_on_load.setter
+    def auto_detect_on_load(self, value: bool) -> None:
+        self.project["auto_detect_on_load"] = bool(value)
+        self.persist()
+
+    @property
     def divider_x_norm(self) -> float:
         """Project-wide default divider position (per-image overrides live elsewhere)."""
         return float(self.project.get("divider_x_norm", 0.5))

@@ -15,6 +15,7 @@ Schema::
       "binocular_mode": true,
       "divider_x_norm": 0.5,
       "autosave": false,
+      "auto_detect_on_load": false,
       "detectors": {
         "pupil":  {"id": "<cheshm-id>" | "off" | "manual",
                     "params": {"left": {...}|null, "right": {...}|null, "single": {...}|null},
@@ -125,6 +126,7 @@ def default_project() -> dict:
         "binocular_mode": True,
         "divider_x_norm": DEFAULT_DIVIDER_X_NORM,
         "autosave": False,
+        "auto_detect_on_load": False,
         "detectors": {
             kind: {
                 "id": DEFAULT_ID_BY_KIND[kind],

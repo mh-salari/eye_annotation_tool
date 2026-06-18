@@ -166,3 +166,5 @@ lint.ignore = [
 "eye_annotation_tool/gui/image_viewer.py" = ["PLR0904"]
 "eye_annotation_tool/gui/main_window.py" = ["PLR0904"]
 "eye_annotation_tool/controllers/detection_controller.py" = ["PLR0904"]
+# State container of small project-setting accessors — one method per field.
+"eye_annotation_tool/state/project_store.py" = ["PLR0904"]

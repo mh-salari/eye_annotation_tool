@@ -82,6 +82,10 @@ class ProjectSettingsDialog(QDialog):
         self._autosave_checkbox.setChecked(bool(self._project.get("autosave", False)))
         layout.addWidget(self._autosave_checkbox)
 
+        self._auto_detect_checkbox = QCheckBox("Auto-detect on image load")
+        self._auto_detect_checkbox.setChecked(bool(self._project.get("auto_detect_on_load", False)))
+        layout.addWidget(self._auto_detect_checkbox)
+
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
@@ -101,5 +105,6 @@ class ProjectSettingsDialog(QDialog):
         return {
             "binocular_mode": self._binocular_radio.isChecked(),
             "autosave": self._autosave_checkbox.isChecked(),
+            "auto_detect_on_load": self._auto_detect_checkbox.isChecked(),
             "detectors": detectors,
         }

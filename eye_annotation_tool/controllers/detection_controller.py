@@ -296,7 +296,7 @@ class DetectionController(QObject):
                 self._restore_card_params(kind, det, params_by_slot)
         self._refresh_orchestrator_enabled()
         self._refresh_auto_managed_kinds()
-        self._kick_live_run_for_all_enabled()
+        self.refresh_all_detections()
 
     def _restore_card_params(self, kind: str, det: DetectorPlugin, params_by_slot: dict) -> None:
         active_slot = self._active_slot()
@@ -444,7 +444,17 @@ class DetectionController(QObject):
                 self._run_with_crop(kind, image, card.current_params())
 
     def refresh_all_detections(self) -> None:
-        """Public hook: re-run every enabled detector top-down on the current image."""
+        """Re-run every enabled detector on the current image when auto-detect is on.
+
+        Shared hook for the automatic context-change runs (image load, project
+        open, eye switch). The project's ``auto_detect_on_load`` flag gates it:
+        when off, a freshly shown image keeps its saved-from-file overlays and
+        the user triggers detection explicitly via each card's Detect button.
+        The live paths (slider edits, the Detect button, paste-settings) bypass
+        this gate and always run.
+        """
+        if not self.project_store.auto_detect_on_load:
+            return
         self._kick_live_run_for_all_enabled()
 
     def _manual_pupil_result(self) -> dict | None:
@@ -777,7 +787,7 @@ class DetectionController(QObject):
         self._restore_selection_for_slot(active_slot)
         self.per_eye_state.restore_panel(active_slot, self.panel_for_kind, self.detector_default_params)
         self.refit_manual_curves()
-        self._kick_live_run_for_all_enabled()
+        self.refresh_all_detections()
         # Undo history is per (image, eye); seed it fresh for the new eye.
         if self.undo_coordinator is not None:
             self.undo_coordinator.reset()

@@ -237,6 +237,13 @@ class MainWindow(QMainWindow):
         self.save_annotations_button = MaterialButton("Save Annotations")
         self.autosave_checkbox = QCheckBox("Autosave on image change")
         self.autosave_checkbox.toggled.connect(self._on_autosave_changed)
+        self.auto_detect_checkbox = QCheckBox("Auto-detect on image load")
+        self.auto_detect_checkbox.setToolTip(
+            "On: opening an image runs the enabled detectors live.\n"
+            "Off: the image shows only its saved detections; run detection "
+            "with each card's Detect button."
+        )
+        self.auto_detect_checkbox.toggled.connect(self._on_auto_detect_changed)
 
         left_layout.addWidget(self.load_images_button)
         left_layout.addWidget(self.load_folder_button)
@@ -245,6 +252,7 @@ class MainWindow(QMainWindow):
         left_layout.addWidget(self.next_image_button)
         left_layout.addWidget(self.save_annotations_button)
         left_layout.addWidget(self.autosave_checkbox)
+        left_layout.addWidget(self.auto_detect_checkbox)
 
         # Image list header: title plus expand-all / collapse-all controls.
         tree_header = QHBoxLayout()
@@ -644,6 +652,9 @@ class MainWindow(QMainWindow):
         self.autosave_checkbox.blockSignals(True)
         self.autosave_checkbox.setChecked(self.project_store.autosave)
         self.autosave_checkbox.blockSignals(False)
+        self.auto_detect_checkbox.blockSignals(True)
+        self.auto_detect_checkbox.setChecked(self.project_store.auto_detect_on_load)
+        self.auto_detect_checkbox.blockSignals(False)
         self._refresh_save_state_indicator()
 
     # ----- File-menu action stubs (wired by MenuHandler) ---------------
@@ -801,6 +812,17 @@ class MainWindow(QMainWindow):
         """Persist the autosave toggle in project settings."""
         self.project_store.autosave = enabled
         self._refresh_save_state_indicator()
+
+    def _on_auto_detect_changed(self, enabled: bool) -> None:
+        """Persist the auto-detect-on-load toggle and apply it to the current image.
+
+        Turning it on runs the enabled detectors now so the effect is visible
+        without navigating away; turning it off leaves the current overlays in
+        place and only stops future automatic runs.
+        """
+        self.project_store.auto_detect_on_load = enabled
+        if enabled:
+            self.detection_controller.refresh_all_detections()
 
     def _apply_theme_chrome(self) -> None:
         """Re-colour the toolbar icons for the active theme (live theme switch)."""
