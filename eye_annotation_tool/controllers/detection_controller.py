@@ -322,13 +322,15 @@ class DetectionController(QObject):
         # Record the choice for the active eye only — each eye picks its own
         # detector. The project default is left untouched (it changes only via
         # Project Settings / save-as-default).
-        self.per_eye_state.set_selection(self._active_slot(), kind, slug)
+        active = self._active_slot()
+        self.per_eye_state.set_selection(active, kind, slug)
         self._refresh_orchestrator_enabled()
         self._refresh_auto_managed_kinds()
-        # Switching the kind's detector invalidates whatever overlay /
-        # ROI / cached result was being shown for it.
-        self.image_viewer.clear_detection_overlay(kind)
-        self.image_viewer.clear_target_roi(kind)
+        # The new detector invalidates the active eye's overlay, ROI and cached
+        # result for this kind. The other eye holds its own detector and result,
+        # so the clears stay scoped to the active eye.
+        self.image_viewer.clear_detection_overlay(kind, eye_slot=active)
+        self.image_viewer.clear_target_roi(kind, eye_slot=active)
         self.orchestrator.set_cached_result(kind, None)
         # Switching detector (e.g. to Manual) must drop any active ROI edit so
         # clicks return to annotating instead of drawing an ROI.
