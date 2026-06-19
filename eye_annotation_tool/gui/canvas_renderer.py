@@ -19,6 +19,7 @@ from PyQt5.QtCore import QPointF, QSizeF, Qt
 from PyQt5.QtGui import QColor, QPainter, QPen, QPixmap, QPolygonF
 
 from ..state import EyeDataStore, OverlayStore, TargetRoiStore
+from ..utils.project_settings import DETECTOR_MANUAL, DETECTOR_OFF
 from .brightness_controller import BrightnessController
 from .zoom_controller import ZoomController
 
@@ -73,7 +74,6 @@ class CanvasGeometry:
     binocular_mode: bool
     divider_x_image: float
     current_annotation: str
-    auto_managed_annotations: set[str]
     selected_point: QPointF | None
 
 
@@ -95,9 +95,11 @@ _KIND_BY_ANNOTATION: dict[str, str] = {
 }
 
 
-# Lookup callable: maps a kind slug to ``{overlay_key: {show, color, alpha,
-# thickness, type}}`` or ``None`` when that kind's card has no auto detector.
-OverlayStateLookup = Callable[[str], dict[str, dict] | None]
+# Maps ``(kind, detector_id)`` to that detector's overlay state
+# (``{overlay_key: {show, color, alpha, thickness, type}}``), or ``None``.
+OverlayStateLookup = Callable[[str, str], dict[str, dict] | None]
+# Maps ``(eye slot, kind)`` to the detector id that eye uses for the kind.
+SelectionLookup = Callable[[str, str], str]
 
 
 class CanvasRenderer:
@@ -110,6 +112,7 @@ class CanvasRenderer:
         overlay_store: OverlayStore,
         roi_store: TargetRoiStore,
         overlay_state_lookup: OverlayStateLookup,
+        selection_lookup: SelectionLookup,
         brightness: BrightnessController,
         zoom: ZoomController,
     ) -> None:
@@ -119,6 +122,7 @@ class CanvasRenderer:
         self.overlay_store = overlay_store
         self.roi_store = roi_store
         self.overlay_state_lookup = overlay_state_lookup
+        self.selection_lookup = selection_lookup
         self.brightness = brightness
         self.zoom = zoom
         # Cache the zoom-scaled source pixmap so a slider drag (which
@@ -182,7 +186,7 @@ class CanvasRenderer:
         """Paint the manual point + ellipse layers for ``eye``."""
         eye_data = self.eye_data_store.eye_data[eye]
         self._draw_points_for_eye(painter, eye_data, eye, geometry)
-        self._draw_ellipses_for_eye(painter, eye_data, geometry)
+        self._draw_ellipses_for_eye(painter, eye_data, eye, geometry)
 
     def _draw_points_for_eye(
         self,
@@ -193,6 +197,7 @@ class CanvasRenderer:
     ) -> None:
         """Render every manual point list for one eye, with selection highlight on the active eye."""
         is_active = eye == geometry.current_eye
+        slot = self._slot_for_eye(eye, geometry)
         eye_label = "L" if eye == "left" else "R"
         defaults = (
             (eye_data["pupil_points"], self.colors.pupil, self.colors.pupil_select, "pupil"),
@@ -201,7 +206,7 @@ class CanvasRenderer:
             (eye_data["glint_points"], self.colors.glint, self.colors.glint_select, "glint"),
         )
         for points, default_color, select_color, annotation_type in defaults:
-            if annotation_type in geometry.auto_managed_annotations:
+            if not self._is_manual(slot, _KIND_BY_ANNOTATION[annotation_type]):
                 continue
             color, size, alpha_color = self._manual_point_style(annotation_type, default_color)
             if color is None:  # "points" overlay hidden in the card
@@ -222,13 +227,14 @@ class CanvasRenderer:
                     text_pos = QPointF(scaled_point.x() + 6, scaled_point.y() - 4)
                     painter.drawText(text_pos, eye_label)
 
-    def _draw_ellipses_for_eye(self, painter: QPainter, eye_data: dict, geometry: CanvasGeometry) -> None:
+    def _draw_ellipses_for_eye(self, painter: QPainter, eye_data: dict, eye: str, geometry: CanvasGeometry) -> None:
         """Render the fitted pupil + limbus geometry (smooth curve or ellipse) for one eye."""
+        slot = self._slot_for_eye(eye, geometry)
         for annotation_type, ellipse_field, curve_field, default_outline, default_center in (
             ("pupil", "pupil_ellipse", "pupil_fit_curve", self.colors.pupil_ellipse, self.colors.pupil_center),
             ("limbus", "limbus_ellipse", "limbus_fit_curve", self.colors.limbus_ellipse, self.colors.limbus_ellipse),
         ):
-            if annotation_type in geometry.auto_managed_annotations:
+            if not self._is_manual(slot, annotation_type):
                 continue
             ellipse = eye_data.get(ellipse_field)
             curve = eye_data.get(curve_field)
@@ -346,7 +352,7 @@ class CanvasRenderer:
         kind = _KIND_BY_ANNOTATION.get(annotation_type)
         if kind is None:
             return None
-        overlay_state = self.overlay_state_lookup(kind)
+        overlay_state = self.overlay_state_lookup(kind, DETECTOR_MANUAL)
         if not overlay_state:
             return None
         return overlay_state.get(key)
@@ -356,9 +362,12 @@ class CanvasRenderer:
     # ---------------------------------------------------------------------------
 
     def _draw_detection_overlays(self, painter: QPainter) -> None:
-        """Render every per-kind Auto Detect overlay using the active card's state."""
-        for kind, result in self.overlay_store.items_for_paint():
-            overlay_state = self.overlay_state_lookup(kind)
+        """Render each eye's Auto Detect overlay styled by that eye's own detector."""
+        for kind, slot, result in self.overlay_store.items_for_paint():
+            detector_id = self.selection_lookup(slot, kind)
+            if detector_id in {DETECTOR_OFF, DETECTOR_MANUAL}:
+                continue
+            overlay_state = self.overlay_state_lookup(kind, detector_id)
             if overlay_state is None:
                 continue
             self._draw_one_result(painter, kind, result, overlay_state)
@@ -573,13 +582,13 @@ class CanvasRenderer:
         active_slot = self._active_eye_slot(geometry)
         active_target = self.roi_store.active_target
         for kind, slot, roi in self.roi_store.items_for_paint():
-            color = self._roi_color(kind)
+            color = self._roi_color(kind, slot)
             is_active = kind == active_target and slot == active_slot
             self._draw_target_roi_box(painter, roi, color, active=is_active)
 
-    def _roi_color(self, kind: str) -> QColor:
-        """Pick a colour for a kind's ROI rectangle: first visible line/point overlay, or fallback."""
-        overlay_state = self.overlay_state_lookup(kind)
+    def _roi_color(self, kind: str, slot: str) -> QColor:
+        """Colour ``slot``'s ROI rectangle from its detector's first line/point overlay, or the fallback."""
+        overlay_state = self.overlay_state_lookup(kind, self.selection_lookup(slot, kind))
         if not overlay_state:
             return self.colors.fallback_roi
         for entry in overlay_state.values():
@@ -658,3 +667,12 @@ class CanvasRenderer:
     def _active_eye_slot(geometry: CanvasGeometry) -> str:
         """Map the binocular flag + current eye to the slot key used by the stores."""
         return geometry.current_eye if geometry.binocular_mode else "single"
+
+    @staticmethod
+    def _slot_for_eye(eye: str, geometry: CanvasGeometry) -> str:
+        """Map an eye to its store slot key (``"single"`` in monocular)."""
+        return eye if geometry.binocular_mode else "single"
+
+    def _is_manual(self, slot: str, kind: str) -> bool:
+        """Whether ``slot``'s detector for ``kind`` is the manual annotator."""
+        return self.selection_lookup(slot, kind) == DETECTOR_MANUAL

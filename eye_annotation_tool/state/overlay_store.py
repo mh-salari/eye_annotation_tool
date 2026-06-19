@@ -46,14 +46,13 @@ class OverlayStore:
         self.overlays.clear()
         return had_any
 
-    def items_for_paint(self) -> Iterator[tuple[str, dict]]:
-        """Yield ``(target, result)`` for every non-``None`` stored result.
+    def items_for_paint(self) -> Iterator[tuple[str, str, dict]]:
+        """Yield ``(target, slot, result)`` for every non-``None`` stored result.
 
-        Slots are flattened — the renderer paints both eyes' stored
-        results in a single pass and the per-slot key is irrelevant
-        once the result has been written to the right viewer half.
+        The slot tells the renderer which eye produced the result so it can
+        style it with that eye's detector overlay state.
         """
         for target, by_slot in self.overlays.items():
-            for result in by_slot.values():
+            for slot, result in by_slot.items():
                 if result is not None:
-                    yield target, result
+                    yield target, slot, result

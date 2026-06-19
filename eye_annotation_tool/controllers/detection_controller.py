@@ -151,12 +151,20 @@ class DetectionController(QObject):
     # Public callable surface used by image_viewer + tests
     # ---------------------------------------------------------------------------
 
-    def overlay_state_lookup(self, kind: str) -> dict[str, dict] | None:
-        """Return the active detector's overlay state for ``kind`` (None when off / manual)."""
+    def overlay_state_lookup(self, kind: str, detector_id: str) -> dict[str, dict] | None:
+        """Return ``detector_id``'s overlay state for ``kind`` (None when the card or id is unknown)."""
         card = self.annotation_controls.card(kind)
         if card is None:
             return None
-        return card.overlay_state()
+        return card.all_overlay_states().get(detector_id)
+
+    def selection_for(self, slot: str, kind: str) -> str:
+        """Return the detector id ``slot`` uses for ``kind``, falling back to the project default."""
+        selected = self.per_eye_state.get_selection(slot, kind)
+        if selected is not None:
+            return selected
+        project_detectors = self.project_store.project.get("detectors", {})
+        return (project_detectors.get(kind) or {}).get("id", DETECTOR_OFF)
 
     def enabled_detector(self, kind: str) -> DetectorPlugin | None:
         """Return the active detector for ``kind``, or ``None``."""

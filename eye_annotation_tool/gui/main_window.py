@@ -134,6 +134,7 @@ class MainWindow(QMainWindow):
         self.detection_controller.annotation_modified.connect(self._mark_modified)
         self.detection_controller.status_message.connect(self.statusBar().showMessage)
         self.image_viewer.set_overlay_state_lookup(self.detection_controller.overlay_state_lookup)
+        self.image_viewer.set_selection_lookup(self.detection_controller.selection_for)
         self.image_viewer.set_manual_fit_lookup(self.detection_controller.manual_fit_params)
 
         # Shared undo/redo across manual points and detector settings.

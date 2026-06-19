@@ -14,7 +14,7 @@ from ..state import EyeDataStore, OverlayStore, TargetRoiStore
 from ..state.eye_data_store import FIELDS_BY_ANNOTATION
 from ..utils.image_processing import find_closest_point, fit_ellipse
 from .brightness_controller import BrightnessController
-from .canvas_renderer import AnnotationColors, CanvasGeometry, CanvasRenderer, OverlayStateLookup
+from .canvas_renderer import AnnotationColors, CanvasGeometry, CanvasRenderer, OverlayStateLookup, SelectionLookup
 from .mouse_drag_state import MouseDragState
 from .zoom_controller import ZoomController
 
@@ -100,13 +100,15 @@ class ImageViewer(QWidget):
         self.setup_variables()
         self.setup_undo_system()
         self.colors = AnnotationColors.default()
-        self._overlay_state_lookup = lambda _target: None
+        self._overlay_state_lookup = lambda _kind, _detector_id: None
+        self._selection_lookup = lambda _slot, _kind: None
         self.renderer = CanvasRenderer(
             self.colors,
             self.eye_data_store,
             self.detection_overlays,
             self.target_rois,
             self._overlay_state_lookup,
+            self._selection_lookup,
             self.brightness,
             self.zoom_state,
         )
@@ -901,9 +903,15 @@ class ImageViewer(QWidget):
     # ----- Auto Detect overlays -----
 
     def set_overlay_state_lookup(self, lookup: OverlayStateLookup) -> None:
-        """Wire the callable that maps a kind slug to its DetectorCard overlay state."""
+        """Wire the callable mapping ``(kind, detector_id)`` to that detector's overlay state."""
         self._overlay_state_lookup = lookup
         self.renderer.overlay_state_lookup = lookup
+        self.update_image()
+
+    def set_selection_lookup(self, lookup: SelectionLookup) -> None:
+        """Wire the callable mapping ``(eye slot, kind)`` to that eye's detector id."""
+        self._selection_lookup = lookup
+        self.renderer.selection_lookup = lookup
         self.update_image()
 
     def set_auto_managed_targets(self, kinds: set[str]) -> None:
@@ -1073,7 +1081,6 @@ class ImageViewer(QWidget):
             binocular_mode=self.binocular_mode,
             divider_x_image=self._divider_x_image(),
             current_annotation=self.current_annotation,
-            auto_managed_annotations=self._auto_managed_annotations,
             selected_point=self.mouse_state.selected_point,
         )
         pixmap = self.renderer.render(self.original_pixmap, geometry)
