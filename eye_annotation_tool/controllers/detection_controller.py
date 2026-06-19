@@ -200,14 +200,21 @@ class DetectionController(QObject):
         set is refreshed. The caller re-runs detection afterwards (via
         :meth:`apply_params`), so this does not run detectors itself.
         """
+        active = self._active_slot()
         for kind in KINDS:
             slug = selection.get(kind)
             card = self.annotation_controls.card(kind)
             if card is None or slug is None or card.active_id() == slug:
                 continue
             card.set_selection(slug, emit=False)
-            self.image_viewer.clear_detection_overlay(kind)
-            self.image_viewer.clear_target_roi(kind)
+            # The save path reads each kind's detector id from the active eye's
+            # per-eye state; record the applied id there so the kind persists
+            # under the detector just applied, not the one it replaced.
+            self.per_eye_state.set_selection(active, kind, slug)
+            # The stale overlay and ROI for the switched kind belong to the
+            # active eye; the other eye keeps its own detector and result.
+            self.image_viewer.clear_detection_overlay(kind, eye_slot=active)
+            self.image_viewer.clear_target_roi(kind, eye_slot=active)
             self.orchestrator.set_cached_result(kind, None)
         self._refresh_orchestrator_enabled()
         self._refresh_auto_managed_kinds()
