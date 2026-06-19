@@ -794,6 +794,10 @@ class DetectionController(QObject):
         """Re-bind each card to the new eye's detector + params, then repaint."""
         active_slot = self._active_slot()
         self._restore_selection_for_slot(active_slot)
+        # The orchestrator's result cache is shared across eyes; re-point it at the
+        # active eye on each switch so a live re-run anchors on this eye's pupil and
+        # a save snapshots this eye's results.
+        self.per_eye_state.restore_orchestrator(active_slot, self.orchestrator)
         self.per_eye_state.restore_panel(active_slot, self.panel_for_kind, self.detector_default_params)
         self.refit_manual_curves()
         self.refresh_all_detections()
