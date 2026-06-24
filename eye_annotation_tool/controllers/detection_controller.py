@@ -34,12 +34,19 @@ _MANUAL_POINTS_FIELD = {
     "limbus": "limbus_points",
     "glint": "glint_points",
     "eyelid": "eyelid_contour_points",
+    "purkinje_iv": "purkinje_iv_points",
 }
 _MANUAL_ELLIPSE_FIELD = {"pupil": "pupil_ellipse", "limbus": "limbus_ellipse"}
 _MANUAL_CURVE_FIELD = {"pupil": "pupil_fit_curve", "limbus": "limbus_fit_curve"}
 
 # Detector kind -> the canvas annotation slug clicks place points for.
-_ANNOTATION_SLUG = {"pupil": "pupil", "limbus": "limbus", "glint": "glint", "eyelid": "eyelid_contour"}
+_ANNOTATION_SLUG = {
+    "pupil": "pupil",
+    "limbus": "limbus",
+    "glint": "glint",
+    "eyelid": "eyelid_contour",
+    "purkinje_iv": "purkinje_iv",
+}
 
 
 def _manual_result(kind: str, eye_block: dict) -> dict | None:
@@ -55,6 +62,11 @@ def _manual_result(kind: str, eye_block: dict) -> dict | None:
         if not points:
             return None
         return {"glints": [{"center": [p.x(), p.y()]} for p in points], "search_area": None}
+    if kind == "purkinje_iv":
+        points = eye_block.get(_MANUAL_POINTS_FIELD["purkinje_iv"]) or []
+        if not points:
+            return None
+        return {"points": [{"center": [p.x(), p.y()]} for p in points]}
     field = _MANUAL_ELLIPSE_FIELD.get(kind)
     if field is None:
         return None

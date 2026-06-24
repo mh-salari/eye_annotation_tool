@@ -58,6 +58,7 @@ class ImageViewer(QWidget):
         "limbus": "limbus",
         "eyelid": "eyelid_contour",
         "glint": "glint",
+        "purkinje_iv": "purkinje_iv",
     }
     # Inverse: canvas annotation slug -> detector kind (for activating a kind
     # from a clicked point, whose type is reported as an annotation slug).
@@ -66,6 +67,7 @@ class ImageViewer(QWidget):
         "limbus": "limbus",
         "eyelid_contour": "eyelid",
         "glint": "glint",
+        "purkinje_iv": "purkinje_iv",
     }
 
     annotation_changed = pyqtSignal()
@@ -293,6 +295,15 @@ class ImageViewer(QWidget):
         self.eye_data_store.set_field("glint_points", value)
 
     @property
+    def purkinje_iv_points(self) -> list:
+        """Live Purkinje-IV point list for the active eye."""
+        return self.eye_data_store.get_field("purkinje_iv_points")
+
+    @purkinje_iv_points.setter
+    def purkinje_iv_points(self, value: list) -> None:
+        self.eye_data_store.set_field("purkinje_iv_points", value)
+
+    @property
     def pupil_ellipse(self) -> tuple | None:
         """Fitted pupil ellipse for the active eye (``None`` when unset)."""
         return self.eye_data_store.get_field("pupil_ellipse")
@@ -378,6 +389,7 @@ class ImageViewer(QWidget):
             "limbus_points": self.limbus_points.copy(),
             "eyelid_contour_points": self.eyelid_contour_points.copy(),
             "glint_points": self.glint_points.copy(),
+            "purkinje_iv_points": self.purkinje_iv_points.copy(),
             "pupil_ellipse": self.pupil_ellipse,
             "limbus_ellipse": self.limbus_ellipse,
             "pupil_fit_curve": list(self.eye_data_store.get_field("pupil_fit_curve") or []),
@@ -390,6 +402,7 @@ class ImageViewer(QWidget):
         self.limbus_points = state["limbus_points"].copy()
         self.eyelid_contour_points = state.get("eyelid_contour_points", []).copy()
         self.glint_points = state.get("glint_points", []).copy()
+        self.purkinje_iv_points = state.get("purkinje_iv_points", []).copy()
         self.pupil_ellipse = state["pupil_ellipse"]
         self.limbus_ellipse = state["limbus_ellipse"]
         self.eye_data_store.set_field("pupil_fit_curve", list(state.get("pupil_fit_curve") or []))
@@ -725,6 +738,8 @@ class ImageViewer(QWidget):
             self.limbus_points.append(image_pos)
         elif self.current_annotation == "eyelid_contour":
             self.eyelid_contour_points.append(image_pos)
+        elif self.current_annotation == "purkinje_iv":
+            self.purkinje_iv_points.append(image_pos)
         else:  # glint
             self.glint_points.append(image_pos)
 
@@ -996,6 +1011,7 @@ class ImageViewer(QWidget):
             "limbus": ("limbus_points", "limbus_ellipse"),
             "eyelid_contour": ("eyelid_contour_points", None),
             "glint": ("glint_points", None),
+            "purkinje_iv": ("purkinje_iv_points", None),
         }
         points_field, ellipse_field = field_map[annotation]
         if not self.eye_data_store.clear_target_across_eyes(points_field, ellipse_field):
@@ -1157,6 +1173,7 @@ class ImageViewer(QWidget):
         limbus_point = find_closest_point(self.limbus_points, pos, self.factor)
         eyelid_point = find_closest_point(self.eyelid_contour_points, pos, self.factor)
         glint_point = find_closest_point(self.glint_points, pos, self.factor)
+        purkinje_iv_point = find_closest_point(self.purkinje_iv_points, pos, self.factor)
 
         closest_point = None
         closest_type = None
@@ -1167,6 +1184,7 @@ class ImageViewer(QWidget):
             (limbus_point, "limbus"),
             (eyelid_point, "eyelid_contour"),
             (glint_point, "glint"),
+            (purkinje_iv_point, "purkinje_iv"),
         ]:
             if point and point_type not in self._auto_managed_annotations:
                 dist = (point.x() - pos.x()) ** 2 + (point.y() - pos.y()) ** 2
@@ -1233,12 +1251,17 @@ class ImageViewer(QWidget):
         """Clear all glint points."""
         self._clear_annotation("glint")
 
+    def clear_purkinje_iv_points(self) -> None:
+        """Clear all Purkinje-IV points."""
+        self._clear_annotation("purkinje_iv")
+
     def clear_all(self) -> None:
         """Clear all annotations."""
         self.clear_pupil_points()
         self.clear_limbus_points()
         self.clear_eyelid_points()
         self.clear_glint_points()
+        self.clear_purkinje_iv_points()
 
     def get_annotation_data(self) -> dict:
         """Get all annotation data for both eyes."""

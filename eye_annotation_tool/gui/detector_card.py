@@ -75,6 +75,7 @@ MANUAL_OVERLAYS_BY_KIND: dict[str, tuple[tuple[str, str], ...]] = {
     "limbus": (("points", "point"), ("ellipse", "line"), ("center", "point")),
     "eyelid": (("points", "point"),),
     "glint": (("points", "point"),),
+    "purkinje_iv": (("points", "point"),),
 }
 
 # RGB defaults for the manual overlay rows. Match the original
@@ -89,7 +90,11 @@ _DEFAULT_MANUAL_COLOR_BY_KIND_KEY: dict[tuple[str, str], tuple[int, int, int]] =
     ("limbus", "center"): (139, 122, 162),
     ("eyelid", "points"): (0, 155, 201),
     ("glint", "points"): (255, 165, 0),
+    ("purkinje_iv", "points"): (0, 220, 220),
 }
+
+# Display labels for kinds whose slug isn't presentable upper-cased.
+_KIND_LABEL: dict[str, str] = {"purkinje_iv": "Purkinje IV"}
 
 
 def _bgr_to_qcolor(bgr: tuple[int, int, int]) -> QColor:
@@ -312,7 +317,7 @@ class DetectorCard(QFrame):
 
         layout = QVBoxLayout()
         layout.setContentsMargins(8, 8, 8, 8)
-        title = QLabel(kind.upper())
+        title = QLabel(_KIND_LABEL.get(kind, kind.upper()))
         layout.addWidget(title)
 
         picker_row = QHBoxLayout()

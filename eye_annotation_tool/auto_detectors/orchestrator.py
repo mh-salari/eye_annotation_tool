@@ -33,11 +33,10 @@ from collections.abc import Callable
 import numpy as np
 from PyQt5.QtCore import QObject, pyqtSignal
 
+from ..utils.project_settings import KINDS
 from .plugin import DetectorPlugin
 
 PostProcess = Callable[[dict], dict]
-
-KINDS = ("pupil", "glint", "limbus", "eyelid")
 
 
 class DetectorOrchestrator(QObject):

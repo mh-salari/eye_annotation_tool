@@ -548,6 +548,7 @@ class MainWindow(QMainWindow):
         self.annotation_controls.clear_limbus_requested.connect(self.image_viewer.clear_limbus_points)
         self.annotation_controls.clear_eyelid_points_requested.connect(self.image_viewer.clear_eyelid_points)
         self.annotation_controls.clear_glint_points_requested.connect(self.image_viewer.clear_glint_points)
+        self.annotation_controls.clear_purkinje_iv_points_requested.connect(self.image_viewer.clear_purkinje_iv_points)
         self.annotation_controls.clear_all_requested.connect(self._on_clear_all)
 
         self.image_viewer.annotation_changed.connect(self.on_annotation_changed)

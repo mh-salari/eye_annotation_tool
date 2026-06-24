@@ -40,6 +40,8 @@ class AnnotationColors:
     eyelid_ellipse: QColor
     glint: QColor
     glint_select: QColor
+    purkinje_iv: QColor
+    purkinje_iv_select: QColor
     divider: QColor
     inactive_eye_dim: QColor
     fallback_roi: QColor
@@ -60,6 +62,8 @@ class AnnotationColors:
             eyelid_ellipse=QColor(0, 118, 195, 255),
             glint=QColor(255, 165, 0, 255),
             glint_select=QColor(255, 215, 0, 255),
+            purkinje_iv=QColor(0, 220, 220, 255),
+            purkinje_iv_select=QColor(120, 255, 255, 255),
             divider=QColor(255, 255, 255, 230),
             inactive_eye_dim=QColor(0, 0, 0, 120),
             fallback_roi=QColor(255, 255, 255, 200),
@@ -82,6 +86,7 @@ _POINT_FIELD_BY_ANNOTATION: dict[str, str] = {
     "limbus": "limbus_points",
     "eyelid_contour": "eyelid_contour_points",
     "glint": "glint_points",
+    "purkinje_iv": "purkinje_iv_points",
 }
 
 # Manual annotation slug to the detector kind the card lives under.
@@ -92,6 +97,7 @@ _KIND_BY_ANNOTATION: dict[str, str] = {
     "limbus": "limbus",
     "eyelid_contour": "eyelid",
     "glint": "glint",
+    "purkinje_iv": "purkinje_iv",
 }
 
 
@@ -204,6 +210,12 @@ class CanvasRenderer:
             (eye_data["limbus_points"], self.colors.limbus, self.colors.limbus_select, "limbus"),
             (eye_data["eyelid_contour_points"], self.colors.eyelid, self.colors.eyelid_select, "eyelid_contour"),
             (eye_data["glint_points"], self.colors.glint, self.colors.glint_select, "glint"),
+            (
+                eye_data["purkinje_iv_points"],
+                self.colors.purkinje_iv,
+                self.colors.purkinje_iv_select,
+                "purkinje_iv",
+            ),
         )
         for points, default_color, select_color, annotation_type in defaults:
             if not self._is_manual(slot, _KIND_BY_ANNOTATION[annotation_type]):

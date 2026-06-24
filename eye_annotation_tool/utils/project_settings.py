@@ -46,7 +46,8 @@ PROJECT_FILE_SUFFIX = ".eye_annotation_project.json"
 # Detector kinds the project can configure. Order is the dependency
 # order at run time: pupil first, then glint / limbus / eyelid which
 # may consume the pupil result.
-KINDS = ("pupil", "glint", "limbus", "eyelid")
+# "purkinje_iv" is the 4th Purkinje image (posterior-lens reflection).
+KINDS = ("pupil", "glint", "limbus", "eyelid", "purkinje_iv")
 
 # Sentinel slugs for the detector picker: "off" suppresses the kind
 # entirely; "manual" routes it to manual click-to-place annotation.
@@ -64,6 +65,7 @@ DEFAULT_ID_BY_KIND: dict[str, str] = {
     "glint": DETECTOR_OFF,
     "limbus": DETECTOR_OFF,
     "eyelid": DETECTOR_MANUAL,
+    "purkinje_iv": DETECTOR_OFF,
 }
 
 DEFAULT_DIVIDER_X_NORM = 0.5

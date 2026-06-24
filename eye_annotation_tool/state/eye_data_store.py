@@ -17,6 +17,7 @@ POINT_FIELDS: tuple[str, ...] = (
     "limbus_points",
     "eyelid_contour_points",
     "glint_points",
+    "purkinje_iv_points",
 )
 ELLIPSE_FIELDS: tuple[str, ...] = ("pupil_ellipse", "limbus_ellipse")
 # Smooth-curve boundary points for the manual "smooth" fit mode. Transient:
@@ -35,6 +36,7 @@ FIELDS_BY_ANNOTATION: dict[str, tuple[str, str | None]] = {
     "limbus": ("limbus_points", "limbus_ellipse"),
     "eyelid_contour": ("eyelid_contour_points", None),
     "glint": ("glint_points", None),
+    "purkinje_iv": ("purkinje_iv_points", None),
 }
 
 # Per-eye field values: point lists hold :class:`QPointF`, ellipse

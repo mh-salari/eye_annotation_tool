@@ -27,6 +27,7 @@ _MANUAL_ANNOTATION_BY_KIND = {
     "limbus": "limbus",
     "eyelid": "eyelid_contour",
     "glint": "glint",
+    "purkinje_iv": "purkinje_iv",
 }
 
 
@@ -41,6 +42,7 @@ class AnnotationControlPanel(QWidget):
     clear_limbus_requested = pyqtSignal()
     clear_eyelid_points_requested = pyqtSignal()
     clear_glint_points_requested = pyqtSignal()
+    clear_purkinje_iv_points_requested = pyqtSignal()
     clear_all_requested = pyqtSignal()
     clear_selected_annotation_requested = pyqtSignal()
 
@@ -82,11 +84,16 @@ class AnnotationControlPanel(QWidget):
         self.glint_group.points_active_toggled.connect(lambda a: self.points_active_toggled.emit("glint", a))
         self.glint_group.clear_requested.connect(self.clear_glint_points_requested.emit)
 
+        self.purkinje_iv_group = AnnotationGroup("Purkinje IV", has_fit=False)
+        self.purkinje_iv_group.points_active_toggled.connect(lambda a: self.points_active_toggled.emit("purkinje_iv", a))
+        self.purkinje_iv_group.clear_requested.connect(self.clear_purkinje_iv_points_requested.emit)
+
         self._manual_group_by_kind: dict[str, AnnotationGroup] = {
             "pupil": self.pupil_group,
             "limbus": self.limbus_group,
             "eyelid": self.eyelid_group,
             "glint": self.glint_group,
+            "purkinje_iv": self.purkinje_iv_group,
         }
 
         self.cards: dict[str, DetectorCard] = build_detector_cards(
