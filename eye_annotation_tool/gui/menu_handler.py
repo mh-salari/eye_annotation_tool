@@ -71,16 +71,16 @@ class MenuHandler:
         self._recent_menu.setToolTipsVisible(True)
         self._recent_menu.aboutToShow.connect(self._populate_recent_menu)
 
-        # No Ctrl+S accelerator here: Ctrl+S / Cmd+S is the per-image Save
-        # Annotations shortcut (see ShortcutHandler). The project file persists
-        # automatically on every settings/image change, and Save Project As
-        # keeps Ctrl+Shift+S, so this entry needs no shortcut of its own.
+        # Ctrl+S / Cmd+S is the per-image Save Annotations shortcut (see
+        # ShortcutHandler), so Save Project takes Ctrl+Shift+S. It snapshots the
+        # live detector-card picks into the project defaults and writes the
+        # project file — the one action that persists current settings to disk.
         save_action = QAction("Save Project", self.main_window)
+        save_action.setShortcut("Ctrl+Shift+S")
         save_action.triggered.connect(self.main_window.save_project)
         file_menu.addAction(save_action)
 
         save_as_action = QAction("Save Project As…", self.main_window)
-        save_as_action.setShortcut("Ctrl+Shift+S")
         save_as_action.triggered.connect(self.main_window.save_project_as)
         file_menu.addAction(save_as_action)
 

@@ -638,8 +638,10 @@ class MainWindow(QMainWindow):
         if self.project_store.path is None or self.project_store.read_only:
             self.save_project_as()
             return
+        self.detection_controller.save_settings_to_project()
         self._commit_enhancement_to_project()
         self.project_store.save()
+        self._refresh_save_state_indicator()
 
     def save_project_as(self) -> None:
         """Prompt for a save path and persist the active project there.
@@ -661,6 +663,7 @@ class MainWindow(QMainWindow):
         if not path:
             return
         path = normalize_project_filename(path)
+        self.detection_controller.save_settings_to_project()
         self._commit_enhancement_to_project()
         self.project_store.save_as(path)
         self._refresh_save_state_indicator()

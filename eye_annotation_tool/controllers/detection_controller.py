@@ -404,24 +404,43 @@ class DetectionController(QObject):
         self.orchestrator.set_cached_result(kind, None)
         self._kick_live_run(kind)
 
+    def _snapshot_card_to_project(self, kind: str) -> None:
+        """Write ``kind``'s live card pick (id, params, pins, overlays) into the project defaults.
+
+        Captures the active card selection without persisting — the caller
+        owns the disk write. Handles Off / Manual picks (no active detector)
+        too: only their id, pins and overlays are recorded.
+        """
+        card = self.annotation_controls.card(kind)
+        if card is None:
+            return
+        detectors_block = self.project_store.project.setdefault("detectors", {})
+        kind_block = detectors_block.setdefault(kind, {})
+        kind_block["id"] = card.active_id()
+        det = card.active_detector()
+        if det is not None:
+            roi_name = _roi_setting_name(det)
+            cleaned = _strip_roi(card.current_params(), roi_name)
+            slots = ("left", "right") if self.binocular.is_binocular else ("single",)
+            for slot in slots:
+                self.per_eye_state.set_project_default(kind, slot, dict(cleaned))
+            kind_block["params"] = {slot: dict(cleaned) for slot in slots}
+            card.set_project_default(card.active_id(), cleaned)
+        kind_block["pinned"] = card.current_pinned()
+        kind_block["overlays"] = _serialize_overlays(card.all_overlay_states())
+
+    def save_settings_to_project(self) -> None:
+        """Snapshot every kind's live card pick into the project defaults (no persist)."""
+        for kind in KINDS:
+            self._snapshot_card_to_project(kind)
+
     def _on_card_save_default(self, kind: str) -> None:
         card = self.annotation_controls.card(kind)
         det = card.active_detector() if card is not None else None
         if card is None or det is None:
             return
-        roi_name = _roi_setting_name(det)
-        cleaned = _strip_roi(card.current_params(), roi_name)
-        slots = ("left", "right") if self.binocular.is_binocular else ("single",)
-        for slot in slots:
-            self.per_eye_state.set_project_default(kind, slot, dict(cleaned))
-        detectors_block = self.project_store.project.setdefault("detectors", {})
-        kind_block = detectors_block.setdefault(kind, {})
-        kind_block["id"] = card.active_id()
-        kind_block["params"] = {slot: dict(cleaned) for slot in slots}
-        kind_block["pinned"] = card.current_pinned()
-        kind_block["overlays"] = _serialize_overlays(card.all_overlay_states())
+        self._snapshot_card_to_project(kind)
         self.project_store.persist()
-        card.set_project_default(card.active_id(), cleaned)
         self.status_message.emit(f"{kind.capitalize()} default saved.", 3000)
 
     def _on_overlay_changed(self, kind: str, _key: str, _field: str, _value: object) -> None:

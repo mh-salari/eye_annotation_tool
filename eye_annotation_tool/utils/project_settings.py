@@ -64,7 +64,7 @@ DEFAULT_ID_BY_KIND: dict[str, str] = {
     "pupil": DETECTOR_MANUAL,
     "glint": DETECTOR_OFF,
     "limbus": DETECTOR_OFF,
-    "eyelid": DETECTOR_MANUAL,
+    "eyelid": DETECTOR_OFF,
     "purkinje_iv": DETECTOR_OFF,
 }
 
