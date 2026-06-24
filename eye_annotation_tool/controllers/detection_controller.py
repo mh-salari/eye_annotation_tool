@@ -460,6 +460,14 @@ class DetectionController(QObject):
             if card is not None and card.active_detector() is not None:
                 self._run_with_crop(kind, image, card.current_params())
 
+    def rerun_enabled_detectors(self) -> None:
+        """Re-run every enabled detector now, bypassing the auto-detect-on-load gate.
+
+        For live edits whose result changes the detector input (e.g. an image
+        enhancement fed to detection), mirroring how detector-card sliders run.
+        """
+        self._kick_live_run_for_all_enabled()
+
     def refresh_all_detections(self) -> None:
         """Re-run every enabled detector on the current image when auto-detect is on.
 

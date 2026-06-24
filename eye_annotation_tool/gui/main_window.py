@@ -66,6 +66,34 @@ _BRIGHTNESS_SLIDER_DEFAULT = 500  # 1.0x — identity brightness
 _BRIGHTNESS_MIN_FACTOR = 0.1
 _BRIGHTNESS_MAX_FACTOR = 10.0
 
+# Composable enhancement pipeline. Each method has an enable checkbox + one
+# slider for its main param; enabled stages apply in this (denoise -> contrast
+# -> sharpen) order. Tuple: (method, label, slider_min, slider_max,
+# slider_default, params_from_slider, slider_from_params).
+_ENHANCE_SPECS = (
+    (
+        "bilateral",
+        "Bilateral",
+        1,
+        150,
+        50,
+        lambda v: {"sigma_color": float(v), "sigma_space": float(v)},
+        lambda p: int(p.get("sigma_color", 50)),
+    ),
+    (
+        "percentile_stretch",
+        "Stretch",
+        0,
+        20,
+        1,
+        lambda v: {"lo_pct": float(v), "hi_pct": float(100 - v)},
+        lambda p: int(p.get("lo_pct", 1)),
+    ),
+    ("clahe", "CLAHE", 5, 80, 20, lambda v: {"clip_limit": v / 10.0}, lambda p: round(p.get("clip_limit", 2.0) * 10)),
+    ("gamma", "Gamma", 30, 300, 100, lambda v: {"g": v / 100.0}, lambda p: round(p.get("g", 1.0) * 100)),
+    ("unsharp", "Unsharp", 0, 300, 100, lambda v: {"amount": v / 100.0}, lambda p: round(p.get("amount", 1.0) * 100)),
+)
+
 
 def _log_slider_to_factor(value: int, slider_min: int, slider_max: int, min_factor: float, max_factor: float) -> float:
     """Map an integer slider position to a log-scaled multiplicative factor."""
@@ -308,6 +336,33 @@ class MainWindow(QMainWindow):
         brightness_row.addWidget(self.brightness_reset_button)
         brightness_row.addWidget(self.brightness_slider, 1)
         left_layout.addLayout(brightness_row)
+
+        # Image enhancement: a composable pipeline (denoise -> contrast ->
+        # sharpen). Each method has an enable checkbox + a slider for its main
+        # param; enabled stages feed the display, and the detector too when
+        # "Apply to detection" is ticked.
+        left_layout.addWidget(QLabel("Enhance"))
+        self._enhance_checks: dict[str, QCheckBox] = {}
+        self._enhance_sliders: dict[str, QSlider] = {}
+        for method, label, smin, smax, sdef, _params_fn, _slider_fn in _ENHANCE_SPECS:
+            row = QHBoxLayout()
+            row.setContentsMargins(0, 0, 0, 0)
+            check = QCheckBox(label)
+            slider = QSlider(Qt.Horizontal)
+            slider.setRange(smin, smax)
+            slider.setValue(sdef)
+            slider.setToolTip(f"{label} strength")
+            row.addWidget(check)
+            row.addWidget(slider, 1)
+            left_layout.addLayout(row)
+            self._enhance_checks[method] = check
+            self._enhance_sliders[method] = slider
+            check.toggled.connect(self._on_enhancement_changed)
+            slider.valueChanged.connect(self._on_enhancement_changed)
+        self.enhance_detect_check = QCheckBox("Apply to detection")
+        self.enhance_detect_check.setToolTip("Also run the detector on the enhanced image")
+        self.enhance_detect_check.toggled.connect(self._on_enhancement_changed)
+        left_layout.addWidget(self.enhance_detect_check)
         left_panel.setLayout(left_layout)
 
         self.zoom_reset_button.clicked.connect(self._on_zoom_reset_clicked)
@@ -315,6 +370,47 @@ class MainWindow(QMainWindow):
         self.brightness_reset_button.clicked.connect(self._on_brightness_reset_clicked)
         self.brightness_slider.valueChanged.connect(self._on_brightness_slider_changed)
         return left_panel
+
+    def _collect_enhance_stages(self) -> list:
+        """Read the enabled methods + their slider params into an ordered pipeline."""
+        stages = []
+        for method, _label, _smin, _smax, _sdef, params_fn, _slider_fn in _ENHANCE_SPECS:
+            if self._enhance_checks[method].isChecked():
+                stages.append((method, params_fn(self._enhance_sliders[method].value())))
+        return stages
+
+    def _restore_enhancement(self, block: dict | None) -> None:
+        """Restore the enhancement controls + viewer from a saved project block."""
+        self.image_viewer.enhancement.from_dict(block)
+        params_by_method = dict(self.image_viewer.enhancement.stages)
+        for method, _label, _smin, _smax, _sdef, _params_fn, slider_fn in _ENHANCE_SPECS:
+            enabled = method in params_by_method
+            check = self._enhance_checks[method]
+            slider = self._enhance_sliders[method]
+            check.blockSignals(True)
+            check.setChecked(enabled)
+            check.blockSignals(False)
+            if enabled:
+                slider.blockSignals(True)
+                slider.setValue(slider_fn(params_by_method[method]))
+                slider.blockSignals(False)
+        self.enhance_detect_check.blockSignals(True)
+        self.enhance_detect_check.setChecked(self.image_viewer.enhancement.apply_to_detection)
+        self.enhance_detect_check.blockSignals(False)
+        # Refresh the viewer display to match the restored pipeline.
+        self.image_viewer.apply_enhancement(self._collect_enhance_stages(), self.enhance_detect_check.isChecked())
+
+    def _on_enhancement_changed(self) -> None:
+        """Apply the enhancement pipeline; re-run detection live + record an undo step."""
+        stages = self._collect_enhance_stages()
+        apply_to_detection = self.enhance_detect_check.isChecked()
+        detector_input_changed = self.image_viewer.apply_enhancement(stages, apply_to_detection)
+        self.project_store.project["enhancement"] = self.image_viewer.enhancement.to_dict()
+        self._mark_modified(True)
+        if detector_input_changed:
+            self.detection_controller.rerun_enabled_detectors()
+        # Debounced so a continuous slider drag collapses into one undo step.
+        self.undo_coordinator.capture_debounced()
 
     def _build_right_panel(self) -> QWidget:
         """Build the right panel: scrolling AnnotationControlPanel + Clear All footer.
@@ -376,6 +472,7 @@ class MainWindow(QMainWindow):
             "selection": self.detection_controller.snapshot_selection(),
             "points": self.image_viewer.snapshot_points(),
             "params": self.detection_controller.snapshot_params(),
+            "enhancement": self.image_viewer.enhancement.to_dict(),
         }
 
     def _apply_undo_snapshot(self, snapshot: dict) -> None:
@@ -383,6 +480,7 @@ class MainWindow(QMainWindow):
         self.detection_controller.apply_selection(snapshot["selection"])
         self.image_viewer.apply_points_state(snapshot["points"])
         self.detection_controller.apply_params(snapshot["params"])
+        self._restore_enhancement(snapshot.get("enhancement"))
 
     def _current_image_path(self) -> str | None:
         """Return the active image's path, or ``None`` when no image is loaded."""
@@ -652,6 +750,7 @@ class MainWindow(QMainWindow):
         self.binocular_controller.apply_mode(self.project_store.binocular_mode)
         self.image_viewer.set_divider_x_norm(self.binocular_controller.effective_divider_x_norm())
         self.detection_controller.apply_project_settings(project.get("detectors", {}))
+        self._restore_enhancement(project.get("enhancement"))
         self.autosave_checkbox.blockSignals(True)
         self.autosave_checkbox.setChecked(self.project_store.autosave)
         self.autosave_checkbox.blockSignals(False)

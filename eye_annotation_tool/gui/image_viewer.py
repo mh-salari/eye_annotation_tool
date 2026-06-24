@@ -7,7 +7,7 @@ import cv2
 import numpy as np
 from cheshm.shape import pupil_center, smoothing_spline
 from PyQt5.QtCore import QEvent, QPoint, QPointF, QSizeF, Qt, pyqtSignal
-from PyQt5.QtGui import QKeyEvent, QPixmap, QResizeEvent
+from PyQt5.QtGui import QImage, QKeyEvent, QPixmap, QResizeEvent
 from PyQt5.QtWidgets import QLabel, QMessageBox, QScrollArea, QVBoxLayout, QWidget
 
 from ..state import EyeDataStore, OverlayStore, TargetRoiStore
@@ -15,6 +15,7 @@ from ..state.eye_data_store import FIELDS_BY_ANNOTATION
 from ..utils.image_processing import find_closest_point, fit_ellipse
 from .brightness_controller import BrightnessController
 from .canvas_renderer import AnnotationColors, CanvasGeometry, CanvasRenderer, OverlayStateLookup, SelectionLookup
+from .enhancement_controller import EnhancementController
 from .mouse_drag_state import MouseDragState
 from .zoom_controller import ZoomController
 
@@ -168,6 +169,14 @@ class ImageViewer(QWidget):
         # image; the controller caches an adjusted pixmap built from
         # the numpy grayscale view.
         self.brightness = BrightnessController()
+
+        # Image enhancement (CLAHE / stretch / gamma / …). The display always
+        # shows the enhanced image; the detector sees it only when the
+        # controller's apply_to_detection flag is set. ``_display_grayscale``
+        # is the array the brightness layer operates on (enhanced or raw).
+        self.enhancement = EnhancementController()
+        self._display_grayscale: np.ndarray | None = None
+        self._raw_pixmap: QPixmap | None = None  # as-loaded pixmap, restored when enhancement is off
 
         # Batch-update gate. Setters call ``update_image()`` to repaint after
         # mutating state; on heavy load paths (apply_loaded_detections,
@@ -811,13 +820,13 @@ class ImageViewer(QWidget):
         self.original_pixmap = QPixmap(image_path)
         if self.original_pixmap.isNull():
             return False
+        self._raw_pixmap = self.original_pixmap
         self.image_grayscale = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
-        # Display brightness carries forward across image navigation —
-        # once the user has tuned the canvas to see darker / brighter
-        # pixels in one frame, the next frame keeps the same factor so
-        # they don't have to re-tune per image. Rebuild the cached
-        # brightness pixmap against the freshly loaded grayscale.
-        self.brightness.rebuild(self.original_pixmap, self.image_grayscale)
+        # Enhancement + brightness both carry forward across image navigation —
+        # once the user has tuned the canvas (enhancement method, brightness)
+        # to see the boundaries in one frame, the next frame keeps the same
+        # settings. Rebuild the enhanced display against the fresh grayscale.
+        self._refresh_enhanced_display()
         self.pupil_points = []
         self.limbus_points = []
         self.pupil_ellipse = None
@@ -872,32 +881,73 @@ class ImageViewer(QWidget):
         self.zoom_state.factor = clamped
         self.update_image()
 
+    @staticmethod
+    def _pixmap_from_gray(arr: np.ndarray) -> QPixmap:
+        """Build a grayscale QPixmap from a uint8 array."""
+        a = np.ascontiguousarray(arr, dtype=np.uint8)
+        h, w = a.shape[:2]
+        return QPixmap.fromImage(QImage(a.tobytes(), w, h, w, QImage.Format_Grayscale8))
+
+    def _refresh_enhanced_display(self) -> None:
+        """Recompute the enhanced display array + pixmap and rebuild brightness.
+
+        ``original_pixmap`` becomes the enhanced image when a method is active
+        (same dimensions as the raw image, so geometry/zoom/divider are
+        unaffected) and reverts to the as-loaded pixmap when inert.
+        """
+        self._display_grayscale = self.enhancement.apply(self.image_grayscale)
+        if self.enhancement.is_active() and self._display_grayscale is not None:
+            self.original_pixmap = self._pixmap_from_gray(self._display_grayscale)
+        elif self._raw_pixmap is not None:
+            self.original_pixmap = self._raw_pixmap
+        self.brightness.rebuild(self.original_pixmap, self._display_grayscale)
+
+    def apply_enhancement(self, stages: list, apply_to_detection: bool) -> bool:
+        """Set the enhancement pipeline, refresh the display, and repaint.
+
+        Returns whether the detector's input changed (pipeline changed while
+        applied-to-detection, or the flag itself toggled) so the caller can
+        re-run detection.
+        """
+        before = (self.enhancement.signature(), self.enhancement.apply_to_detection)
+        self.enhancement.configure(stages, apply_to_detection)
+        after = (self.enhancement.signature(), self.enhancement.apply_to_detection)
+        self._refresh_enhanced_display()
+        self.update_image()
+        return (before[1] or after[1]) and before != after
+
     def brighten_display(self) -> None:
         """Multiply the displayed grayscale by the brightness step."""
         if self.brightness.brighten():
-            self.brightness.rebuild(self.original_pixmap, self.image_grayscale)
+            self.brightness.rebuild(self.original_pixmap, self._display_grayscale)
             self.update_image()
 
     def darken_display(self) -> None:
         """Divide the displayed grayscale by the brightness step."""
         if self.brightness.darken():
-            self.brightness.rebuild(self.original_pixmap, self.image_grayscale)
+            self.brightness.rebuild(self.original_pixmap, self._display_grayscale)
             self.update_image()
 
     def reset_display_brightness(self) -> None:
         """Restore the displayed grayscale to its source values."""
         if self.brightness.reset():
-            self.brightness.rebuild(self.original_pixmap, self.image_grayscale)
+            self.brightness.rebuild(self.original_pixmap, self._display_grayscale)
             self.update_image()
 
     def set_brightness_factor(self, factor: float) -> None:
         """Set the brightness factor directly (clamped to the controller's range)."""
         if self.brightness.set_factor(float(factor)):
-            self.brightness.rebuild(self.original_pixmap, self.image_grayscale)
+            self.brightness.rebuild(self.original_pixmap, self._display_grayscale)
             self.update_image()
 
     def get_current_image_grayscale(self) -> np.ndarray | None:
-        """Return the grayscale numpy view of the current image (or None)."""
+        """Return the grayscale the detector should consume.
+
+        The enhanced array when enhancement is set to apply-to-detection,
+        otherwise the raw source-of-truth grayscale.
+        """
+        if self.enhancement.apply_to_detection and self._display_grayscale is not None:
+            return self._display_grayscale
         return self.image_grayscale
 
     # ----- Auto Detect overlays -----
