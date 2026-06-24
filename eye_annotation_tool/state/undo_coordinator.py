@@ -37,7 +37,7 @@ class UndoCoordinator(QObject):
         super().__init__(parent)
         self._build = build_snapshot
         self._apply = apply_snapshot
-        self._stack: UndoStack[dict] = UndoStack(maxlen=50)
+        self._stack: UndoStack[dict] = UndoStack(maxlen=100)
         self._applying = False
         self._settle = QTimer(self)
         self._settle.setSingleShot(True)
