@@ -460,6 +460,15 @@ class DetectionController(QObject):
             if card is not None and card.active_detector() is not None:
                 self._run_with_crop(kind, image, card.current_params())
 
+    def enhancement_provenance(self) -> dict | None:
+        """Enhancement fed to the detector, for the per-image annotation.
+
+        ``None`` when the enhancement was display-only (did not touch the
+        detector input), so display-only enhancements leave no annotation trace.
+        """
+        enhancement = self.image_viewer.enhancement
+        return enhancement.to_dict() if enhancement.apply_to_detection else None
+
     def rerun_enabled_detectors(self) -> None:
         """Re-run every enabled detector now, bypassing the auto-detect-on-load gate.
 

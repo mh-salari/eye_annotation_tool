@@ -82,6 +82,7 @@ class AnnotationController:
                 binocular_mode=self.binocular_controller.is_binocular,
                 divider_x_norm=self.binocular_controller.divider_override_for_current_image(),
                 detections=self.detection_controller.collect_detections_for_save(),
+                enhancement=self.detection_controller.enhancement_provenance(),
             )
             self.session.modified = False
 

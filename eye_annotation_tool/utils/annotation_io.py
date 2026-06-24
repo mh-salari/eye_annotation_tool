@@ -39,6 +39,7 @@ def save_annotations(
     binocular_mode: bool,
     divider_x_norm: float | None = None,
     detections: dict | None = None,
+    enhancement: dict | None = None,
 ) -> None:
     """Write the per-image annotation JSON.
 
@@ -50,11 +51,17 @@ def save_annotations(
     fraction of image width in ``[0, 1]``. Pass ``None`` to let the
     image inherit the project default at load time. Only persisted
     when ``binocular_mode`` is True.
+
+    ``enhancement`` records the image preprocessing fed to the detector for
+    this image (provenance: what produced these results). Pass ``None`` when
+    the enhancement was display-only and did not touch detection.
     """
     payload: dict = {"binocular_mode": bool(binocular_mode)}
     if binocular_mode and divider_x_norm is not None:
         payload["divider_x_norm"] = float(divider_x_norm)
     payload["detections"] = dict(detections) if detections else {}
+    if enhancement is not None:
+        payload["enhancement"] = dict(enhancement)
     with Path(annotation_path).open("w", encoding="utf-8") as f:
         json.dump(payload, f, indent=2)
 

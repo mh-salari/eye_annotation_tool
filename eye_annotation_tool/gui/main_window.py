@@ -400,13 +400,26 @@ class MainWindow(QMainWindow):
         # Refresh the viewer display to match the restored pipeline.
         self.image_viewer.apply_enhancement(self._collect_enhance_stages(), self.enhance_detect_check.isChecked())
 
+    def _commit_enhancement_to_project(self) -> None:
+        """Write the live enhancement into the project dict.
+
+        Enhancement is a session/view setting: it is NOT written to the project
+        file on change (that would persist eagerly like a structural setting).
+        It reaches the file only through this call, made from the explicit
+        project-save paths, so it survives reopen only when the user saved.
+        """
+        self.project_store.project["enhancement"] = self.image_viewer.enhancement.to_dict()
+
     def _on_enhancement_changed(self) -> None:
-        """Apply the enhancement pipeline; re-run detection live + record an undo step."""
+        """Apply the enhancement pipeline (session-only); re-run detection live + record undo.
+
+        The pipeline lives in memory and carries between images; it is not
+        persisted here. Provenance reaches disk per-image (in the annotation,
+        when apply-to-detection is on) and project-wide only on explicit save.
+        """
         stages = self._collect_enhance_stages()
         apply_to_detection = self.enhance_detect_check.isChecked()
         detector_input_changed = self.image_viewer.apply_enhancement(stages, apply_to_detection)
-        self.project_store.project["enhancement"] = self.image_viewer.enhancement.to_dict()
-        self._mark_modified(True)
         if detector_input_changed:
             self.detection_controller.rerun_enabled_detectors()
         # Debounced so a continuous slider drag collapses into one undo step.
@@ -624,6 +637,7 @@ class MainWindow(QMainWindow):
         if self.project_store.path is None or self.project_store.read_only:
             self.save_project_as()
             return
+        self._commit_enhancement_to_project()
         self.project_store.save()
 
     def save_project_as(self) -> None:
@@ -646,6 +660,7 @@ class MainWindow(QMainWindow):
         if not path:
             return
         path = normalize_project_filename(path)
+        self._commit_enhancement_to_project()
         self.project_store.save_as(path)
         self._refresh_save_state_indicator()
 
@@ -801,6 +816,7 @@ class MainWindow(QMainWindow):
             return
         updates = dialog.result_payload()
         self.project_store.project.update(updates)
+        self._commit_enhancement_to_project()
         self.project_store.persist()
         self._apply_project_state()
 
