@@ -6,7 +6,7 @@ from typing import ClassVar
 import cv2
 import numpy as np
 from cheshm.shape import pupil_center, smoothing_spline
-from PyQt5.QtCore import QEvent, QPoint, QPointF, QSizeF, Qt, pyqtSignal
+from PyQt5.QtCore import QEvent, QPoint, QPointF, QSizeF, Qt, QTimer, pyqtSignal
 from PyQt5.QtGui import QImage, QKeyEvent, QPixmap, QResizeEvent
 from PyQt5.QtWidgets import QLabel, QMenu, QMessageBox, QScrollArea, QVBoxLayout, QWidget
 
@@ -425,9 +425,9 @@ class ImageViewer(QWidget):
     def keyPressEvent(self, event: QKeyEvent) -> None:  # noqa: N802
         """Handle key press events."""
         if event.key() == Qt.Key_Plus or event.key() == Qt.Key_Equal:
-            self.zoom(True, self.rect().center())
+            self.zoom_in_centered()
         elif event.key() == Qt.Key_Minus:
-            self.zoom(False, self.rect().center())
+            self.zoom_out_centered()
         elif event.key() == Qt.Key_Escape:
             self._deactivate_interaction()
         elif event.key() == Qt.Key_Delete:
@@ -861,8 +861,11 @@ class ImageViewer(QWidget):
         """Handle mouse wheel events for zooming."""
         if event.modifiers() == Qt.ControlModifier:
             zoom_in = event.angleDelta().y() > 0
-            self.zoom(zoom_in, event.position().toPoint())
-            event.accept()  # Prevent the event from being passed to the parent widget
+            # This handler runs on the viewer, so map the cursor into viewport coordinates.
+            viewport = self.scroll_area.viewport()
+            viewport_point = viewport.mapFromGlobal(self.mapToGlobal(event.position().toPoint()))
+            self.zoom_at_cursor(zoom_in, viewport_point)
+            event.accept()
         else:
             # Only allow scrolling when not zooming
             super().wheelEvent(event)
@@ -916,14 +919,12 @@ class ImageViewer(QWidget):
         self.image_label.clear()
 
     def zoom_in_centered(self) -> None:
-        """Zoom in around the centre of the visible viewport."""
-        self.zoom_state.zoom_in_centered(self.scroll_area, self)
-        self.update_image()
+        """Step zoom in around the viewport centre (+ key / button)."""
+        self._set_factor_anchored(self._stepped_factor(True), self._viewport_center())
 
     def zoom_out_centered(self) -> None:
-        """Zoom out around the centre of the visible viewport."""
-        self.zoom_state.zoom_out_centered(self.scroll_area, self)
-        self.update_image()
+        """Step zoom out around the viewport centre (- key / button)."""
+        self._set_factor_anchored(self._stepped_factor(False), self._viewport_center())
 
     def reset_zoom_to_fit(self) -> None:
         """Restore the zoom factor to fit the whole image inside the viewport."""
@@ -931,13 +932,8 @@ class ImageViewer(QWidget):
         self.update_image()
 
     def set_zoom_factor(self, factor: float) -> None:
-        """Set the zoom factor directly (clamped to the controller's range)."""
-        clamped = max(self.zoom_state.MIN_FACTOR, min(self.zoom_state.MAX_FACTOR, float(factor)))
-        if clamped == self.zoom_state.factor:
-            return
-        self.zoom_state.at_fit = False
-        self.zoom_state.factor = clamped
-        self.update_image()
+        """Set an absolute zoom factor (the zoom slider), keeping the viewport centre fixed."""
+        self._set_factor_anchored(float(factor), self._viewport_center())
 
     @staticmethod
     def _pixmap_from_gray(arr: np.ndarray) -> QPixmap:
@@ -1150,17 +1146,65 @@ class ImageViewer(QWidget):
         if source == self.scroll_area.viewport():
             if event.type() == QEvent.Wheel and event.modifiers() == Qt.ControlModifier:
                 zoom_in = event.angleDelta().y() > 0
-                self.zoom(zoom_in, event.position().toPoint())
+                # The filter is installed on the viewport, so event.position() is
+                # already in viewport coordinates — the frame zoom_at_cursor expects.
+                self.zoom_at_cursor(zoom_in, event.position().toPoint())
                 return True  # Event handled, don't propagate further
             if event.type() == QEvent.Resize and self.zoom_state.at_fit and self.original_pixmap is not None:
                 self.reset_zoom_to_fit()
 
         return super().eventFilter(source, event)  # Propagate other events
 
-    def zoom(self, zoom_in: bool, pos: QPoint) -> None:
-        """Zoom in or out around ``pos`` (cursor position in viewer-local coords)."""
-        self.zoom_state.zoom(zoom_in, pos, self.scroll_area, self)
+    def _set_factor_anchored(self, new_factor: float, viewport_anchor: QPoint) -> None:
+        """Set the zoom factor (clamped) while keeping ``viewport_anchor`` fixed.
+
+        This is the single zoom path — every zoom goes through here: the wheel (cursor
+        anchor) and the +/- keys, buttons and zoom slider (viewport-centre anchor). The
+        anchor is captured as a fraction of the label *before* the resize (label.pos() is
+        in viewport coordinates, valid whether the small image is centred or the large one
+        is scrolled). The scroll area recomputes the label size and the bar ranges only on
+        a *queued* layout pass, so moving the scroll bars in this call would clamp them to
+        the stale (zero) range and pin the view top-left; the scroll is applied after that
+        pass in _anchor_scroll.
+        """
+        label = self.image_label
+        old_w, old_h = label.width(), label.height()
+        frac = None
+        if old_w > 0 and old_h > 0:
+            frac = ((viewport_anchor.x() - label.x()) / old_w, (viewport_anchor.y() - label.y()) / old_h)
+        if not self.zoom_state.set_factor(new_factor):
+            return
         self.update_image()
+        if frac is not None:
+            QTimer.singleShot(0, lambda: self._anchor_scroll(frac[0], frac[1], viewport_anchor))
+
+    def _stepped_factor(self, zoom_in: bool) -> float:
+        """One multiplicative zoom step up or down from the current factor."""
+        step = self.zoom_state.ZOOM_STEP
+        return self.zoom_state.factor * step if zoom_in else self.zoom_state.factor / step
+
+    def _viewport_center(self) -> QPoint:
+        """Centre of the visible area, in scroll-area viewport coordinates."""
+        return self.scroll_area.viewport().rect().center()
+
+    def _anchor_scroll(self, frac_x: float, frac_y: float, viewport_point: QPoint) -> None:
+        """Put the captured image fractions back under ``viewport_point`` after layout.
+
+        Runs once the scroll area has relaid out, so the label size and bar ranges are
+        current: the content-local position ``fraction*size`` must appear at the viewport
+        pixel ``anchor``, i.e. scroll = fraction*size - anchor. The bar clamps it to its
+        now-correct range; when the image fits an axis that range is zero, so the value
+        pins to 0 and the scroll area keeps the image centred.
+        """
+        label = self.image_label
+        h_bar = self.scroll_area.horizontalScrollBar()
+        v_bar = self.scroll_area.verticalScrollBar()
+        h_bar.setValue(round(frac_x * label.width() - viewport_point.x()))
+        v_bar.setValue(round(frac_y * label.height() - viewport_point.y()))
+
+    def zoom_at_cursor(self, zoom_in: bool, viewport_point: QPoint) -> None:
+        """Wheel zoom: step the factor, keeping the image pixel under the cursor fixed."""
+        self._set_factor_anchored(self._stepped_factor(zoom_in), viewport_point)
 
     def pause_updates(self) -> None:
         """Suppress ``update_image`` repaints until ``resume_updates`` matches.
