@@ -8,7 +8,7 @@ import numpy as np
 from cheshm.shape import pupil_center, smoothing_spline
 from PyQt5.QtCore import QEvent, QPoint, QPointF, QSizeF, Qt, pyqtSignal
 from PyQt5.QtGui import QImage, QKeyEvent, QPixmap, QResizeEvent
-from PyQt5.QtWidgets import QLabel, QMessageBox, QScrollArea, QVBoxLayout, QWidget
+from PyQt5.QtWidgets import QLabel, QMenu, QMessageBox, QScrollArea, QVBoxLayout, QWidget
 
 from ..state import EyeDataStore, OverlayStore, TargetRoiStore
 from ..state.eye_data_store import FIELDS_BY_ANNOTATION
@@ -91,6 +91,10 @@ class ImageViewer(QWidget):
     # adding). The detection controller clears every ROI / Add-points button
     # and the viewer's active state.
     interaction_deactivated = pyqtSignal()
+    # Emitted from the right-click menu to convert the active eye's auto pupil
+    # detection into an editable manual smooth boundary (the controller seeds the
+    # manual points from the detected contour).
+    edit_detected_boundary_requested = pyqtSignal()
     # Emitted when the user finishes dragging the binocular divider line.
     # Payload is the new normalised x position in [0, 1]. MainWindow
     # persists the value as the current image's per-image override.
@@ -813,6 +817,14 @@ class ImageViewer(QWidget):
             if was_moving and self.mouse_state.selected_point:
                 self.save_state()
                 self.annotation_changed.emit()
+
+    def contextMenuEvent(self, event: QEvent) -> None:  # noqa: N802
+        """Right-click menu: promote the detected pupil boundary into editable points."""
+        if self.original_pixmap is None:
+            return
+        menu = QMenu(self)
+        menu.addAction("Edit detected boundary").triggered.connect(self.edit_detected_boundary_requested.emit)
+        menu.exec_(event.globalPos())
 
     def wheelEvent(self, event: QEvent) -> None:  # noqa: N802
         """Handle mouse wheel events for zooming."""

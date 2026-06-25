@@ -16,6 +16,7 @@ from ..gui.annotation_controls import AnnotationControlPanel
 from ..gui.detector_card import MANUAL, OFF
 from ..gui.image_viewer import ImageViewer
 from ..state import PerEyeStateStore, ProjectStore
+from ..utils.image_processing import adaptive_control_points, best_smoothness
 from ..utils.project_settings import (
     DETECTOR_OFF,
     EYE_SLOTS,
@@ -144,6 +145,7 @@ class DetectionController(QObject):
         self.image_viewer.roi_edit_activated.connect(self._on_roi_edit_activated)
         self.image_viewer.points_activated.connect(self._on_points_activated)
         self.image_viewer.interaction_deactivated.connect(self._on_interaction_deactivated)
+        self.image_viewer.edit_detected_boundary_requested.connect(self.promote_pupil_to_manual)
         self.annotation_controls.points_active_toggled.connect(self._on_points_edit_requested)
 
         self._wire_card_signals()
@@ -671,6 +673,46 @@ class DetectionController(QObject):
     def _on_interaction_deactivated(self) -> None:
         """Escape left the active interaction; clear every ROI / Add-points button."""
         self._set_active_interaction(None, None)
+
+    def promote_pupil_to_manual(self) -> None:
+        """Seed manual smooth-curve editing from the active eye's auto pupil contour.
+
+        Turns a good-but-imperfect detected pupil into an editable boundary: the
+        contour is reduced to adaptive control points (RDP) and loaded into the
+        manual smooth-curve mode, so the user drags / adds / removes a few points
+        instead of re-annotating from scratch - the fix for glint-overlap rims.
+        """
+        slot = self._active_slot()
+        result = self.per_eye_state.get_result(slot, "pupil") or self.orchestrator.cached_result("pupil")
+        contour = (result or {}).get("contour")
+        if contour is None:
+            self.status_message.emit("No detected pupil boundary to edit.", 3000)
+            return
+        ref = np.asarray(contour, dtype=float)
+        points = adaptive_control_points(ref)
+        if len(points) < 5:
+            self.status_message.emit("Detected pupil boundary too small to edit.", 3000)
+            return
+
+        host = self.annotation_controls.manual_group_for_kind("pupil")
+        card = self.annotation_controls.card("pupil")
+        if host is None or card is None:
+            return
+        # Smooth-curve manual mode, convex-hull centroid to match the analysis pipeline.
+        # Auto-pick the smoothness whose curve best matches the detected contour
+        # (0 would interpolate the sparse control points and kink at them).
+        smoothness = best_smoothness(points, ref)
+        host.set_manual_params({"mode": "smooth", "center_method": "convex_hull_centroid", "smoothness": smoothness})
+        card.set_selection(MANUAL, emit=True)  # records the pick + clears the auto overlay
+        self.image_viewer.eye_data_store.set_field(
+            "pupil_points", [QPointF(float(x), float(y)) for x, y in points]
+        )
+        self._set_active_interaction("pupil", "points")  # current kind = pupil, edit mode on
+        self.image_viewer.fit_ellipse()  # build the smooth boundary + centre from the seeded points
+        self.annotation_modified.emit(True)
+        if self.undo_coordinator is not None:
+            self.undo_coordinator.capture()
+        self.status_message.emit("Editing detected boundary: drag points; click the curve to add.", 4000)
 
     def _on_roi_delete_requested(self, kind: str) -> None:
         self.image_viewer.set_target_roi(kind, None)

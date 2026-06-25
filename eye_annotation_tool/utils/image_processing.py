@@ -1,8 +1,73 @@
 """Image processing utilities for ellipse fitting and point selection."""
 
+import cv2
 import numpy as np
+from cheshm.shape import smoothing_spline
 from PyQt5.QtCore import QPointF
 from scipy import optimize
+from scipy.spatial import cKDTree
+
+
+def adaptive_control_points(
+    contour: np.ndarray, min_pts: int = 20, max_pts: int = 48
+) -> np.ndarray:
+    """Simplify a closed contour to an adaptive set of editable control points.
+
+    Ramer-Douglas-Peucker (``cv2.approxPolyDP``) keeps more points where the rim
+    bends and fewer on smooth arcs. The tolerance is binary-searched so the point
+    count lands in ``[min_pts, max_pts]`` - no hardcoded count - giving the fewest
+    points that still trace the shape. Used to seed manual boundary editing from
+    an auto-detected pupil contour. Returns an ``(M, 2)`` float array of ordered
+    boundary points.
+    """
+    pts = np.asarray(contour, dtype=np.float32).reshape(-1, 1, 2)
+    if len(pts) <= min_pts:
+        return pts.reshape(-1, 2).astype(float)
+    perimeter = cv2.arcLength(pts, True)
+    lo, hi = 1e-4 * perimeter, 0.08 * perimeter
+    approx = cv2.approxPolyDP(pts, hi, True)
+    for _ in range(40):
+        eps = 0.5 * (lo + hi)
+        approx = cv2.approxPolyDP(pts, eps, True)
+        n = len(approx)
+        if n > max_pts:
+            lo = eps  # coarser -> fewer points
+        elif n < min_pts:
+            hi = eps  # finer -> more points
+        else:
+            break
+    return approx.reshape(-1, 2).astype(float)
+
+
+def best_smoothness(
+    control_pts: np.ndarray, reference: np.ndarray, hi: float = 0.004, steps: int = 81
+) -> float:
+    """Pick the smoothness whose smooth curve best matches the detected contour.
+
+    ``control_pts`` are the seed control points; ``reference`` is the original
+    detected contour. At smoothness 0 the spline interpolates the sparse control
+    points and *overshoots* between them, so it deviates from the detection; a
+    tiny smoothness removes that overshoot and tracks the detection better, then
+    larger values over-round and drift away. So the deviation has a clear minimum
+    at a small smoothness, which this finds by scanning a fine grid over the small
+    useful range ``[0, hi]`` (smoothness is scale-invariant). Points are
+    angle-ordered to match the fit.
+    """
+    arr = np.asarray(control_pts, dtype=float).reshape(-1, 2)
+    if len(arr) < 4:
+        return 0.0
+    c0 = arr.mean(axis=0)
+    ordered = np.ascontiguousarray(arr[np.argsort(np.arctan2(arr[:, 1] - c0[1], arr[:, 0] - c0[0]))])
+    ref = np.asarray(reference, dtype=float).reshape(-1, 2)
+    best_s, best_dev = 0.0, np.inf
+    for s in np.linspace(0.0, hi, steps):
+        curve = smoothing_spline(ordered, float(s))
+        if curve is None or len(curve) < 5:
+            continue
+        dev = float(cKDTree(curve).query(ref)[0].mean())
+        if dev < best_dev:
+            best_dev, best_s = dev, float(s)
+    return best_s
 
 
 def fit_ellipse(x: np.ndarray, y: np.ndarray) -> np.ndarray:
