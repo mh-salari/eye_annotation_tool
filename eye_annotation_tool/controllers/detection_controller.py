@@ -81,7 +81,9 @@ def _manual_result(kind: str, eye_block: dict) -> dict | None:
     }
     curve = eye_block.get(_MANUAL_CURVE_FIELD[kind])
     if curve:
-        result["boundary"] = [[p.x(), p.y()] for p in curve]
+        # Same key the auto detectors use for the outline, so every pupil (auto or
+        # hand-edited) carries its boundary under one name for downstream readers.
+        result["contour"] = [[p.x(), p.y()] for p in curve]
     return result
 
 
