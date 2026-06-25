@@ -35,6 +35,7 @@ class AnnotationControlPanel(QWidget):
     """Right-panel widget hosting the eye selector and per-kind detector cards."""
 
     points_active_toggled = pyqtSignal(str, bool)
+    delete_points_toggled = pyqtSignal(str, bool)
     eye_changed = pyqtSignal(str)
     binocular_toggled = pyqtSignal(bool)
     fit_annotation_requested = pyqtSignal()
@@ -68,24 +69,29 @@ class AnnotationControlPanel(QWidget):
 
         self.pupil_group = AnnotationGroup("Pupil", has_fit=True, center_methods=CENTER_METHODS)
         self.pupil_group.points_active_toggled.connect(lambda a: self.points_active_toggled.emit("pupil", a))
+        self.pupil_group.delete_active_toggled.connect(lambda a: self.delete_points_toggled.emit("pupil", a))
         self.pupil_group.fit_requested.connect(self.fit_annotation_requested.emit)
         self.pupil_group.clear_requested.connect(self.clear_pupil_requested.emit)
 
         self.limbus_group = AnnotationGroup("Limbus", has_fit=True, center_methods=CENTER_METHODS)
         self.limbus_group.points_active_toggled.connect(lambda a: self.points_active_toggled.emit("limbus", a))
+        self.limbus_group.delete_active_toggled.connect(lambda a: self.delete_points_toggled.emit("limbus", a))
         self.limbus_group.fit_requested.connect(self.fit_annotation_requested.emit)
         self.limbus_group.clear_requested.connect(self.clear_limbus_requested.emit)
 
         self.eyelid_group = AnnotationGroup("Eyelid Contour", has_fit=False)
         self.eyelid_group.points_active_toggled.connect(lambda a: self.points_active_toggled.emit("eyelid", a))
+        self.eyelid_group.delete_active_toggled.connect(lambda a: self.delete_points_toggled.emit("eyelid", a))
         self.eyelid_group.clear_requested.connect(self.clear_eyelid_points_requested.emit)
 
         self.glint_group = AnnotationGroup("Glint", has_fit=False)
         self.glint_group.points_active_toggled.connect(lambda a: self.points_active_toggled.emit("glint", a))
+        self.glint_group.delete_active_toggled.connect(lambda a: self.delete_points_toggled.emit("glint", a))
         self.glint_group.clear_requested.connect(self.clear_glint_points_requested.emit)
 
         self.purkinje_iv_group = AnnotationGroup("Purkinje IV", has_fit=False)
         self.purkinje_iv_group.points_active_toggled.connect(lambda a: self.points_active_toggled.emit("purkinje_iv", a))
+        self.purkinje_iv_group.delete_active_toggled.connect(lambda a: self.delete_points_toggled.emit("purkinje_iv", a))
         self.purkinje_iv_group.clear_requested.connect(self.clear_purkinje_iv_points_requested.emit)
 
         self._manual_group_by_kind: dict[str, AnnotationGroup] = {

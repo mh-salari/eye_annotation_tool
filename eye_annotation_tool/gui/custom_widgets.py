@@ -1,5 +1,6 @@
 """Custom widget components for the application."""
 
+import qtawesome as qta
 from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtWidgets import (
     QAbstractSpinBox,
@@ -16,6 +17,8 @@ from PyQt5.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+
+from .theme import theme
 
 
 class MaterialButton(QPushButton):
@@ -54,6 +57,7 @@ class AnnotationGroup(QWidget):
     """
 
     points_active_toggled = pyqtSignal(bool)
+    delete_active_toggled = pyqtSignal(bool)
     fit_requested = pyqtSignal()
     clear_requested = pyqtSignal()
     params_changed = pyqtSignal()  # manual fit mode / centre method / harmonics changed
@@ -80,14 +84,26 @@ class AnnotationGroup(QWidget):
         layout = QVBoxLayout()
         layout.setContentsMargins(0, 0, 0, 0)
 
-        # The Add-points toggle decides whether canvas clicks place points for
-        # this kind. It mirrors the ROI button: checkable, mutually exclusive
-        # with every other ROI / Add-points toggle (the controller enforces
-        # that), and cleared by Escape.
-        self.points_button = MaterialButton("Add points", compact=True)
+        # Two compact mode toggles: place points (clicks add/move) and delete
+        # points (a click removes the nearest point). Both mirror the ROI button:
+        # checkable and mutually exclusive with every other ROI / Add / delete
+        # toggle (the controller enforces that), cleared by Escape.
+        mode_row = QHBoxLayout()
+        mode_row.setSpacing(4)
+        self.points_button = QPushButton(qta.icon("mdi6.vector-point-plus", color=theme.color("icon")), " add points")
         self.points_button.setCheckable(True)
+        self.points_button.setToolTip("Add points: click to place, drag to move")
         self.points_button.toggled.connect(self.points_active_toggled.emit)
-        layout.addWidget(self.points_button)
+        mode_row.addWidget(self.points_button)
+        self.delete_button = QPushButton(qta.icon("mdi6.trash-can-outline", color=theme.color("icon")), "")
+        self.delete_button.setCheckable(True)
+        self.delete_button.setToolTip("Delete points: click a point to remove it")
+        # When armed, the destructive mode reads red rather than the usual accent.
+        self.delete_button.setStyleSheet("QPushButton:checked { background-color: #c0392b; }")
+        self.delete_button.toggled.connect(self.delete_active_toggled.emit)
+        mode_row.addWidget(self.delete_button)
+        mode_row.addStretch()
+        layout.addLayout(mode_row)
 
         if self.has_fit:
             self._build_fit_mode_controls(layout)
@@ -193,6 +209,12 @@ class AnnotationGroup(QWidget):
         self.points_button.blockSignals(True)
         self.points_button.setChecked(bool(checked))
         self.points_button.blockSignals(False)
+
+    def set_delete_checked(self, checked: bool) -> None:
+        """Set the delete-points toggle without emitting (controller-driven sync)."""
+        self.delete_button.blockSignals(True)
+        self.delete_button.setChecked(bool(checked))
+        self.delete_button.blockSignals(False)
 
 
 class EyeSelector(QGroupBox):

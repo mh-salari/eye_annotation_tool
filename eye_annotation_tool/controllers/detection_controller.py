@@ -149,6 +149,7 @@ class DetectionController(QObject):
         self.image_viewer.interaction_deactivated.connect(self._on_interaction_deactivated)
         self.image_viewer.edit_detected_boundary_requested.connect(self.promote_pupil_to_manual)
         self.annotation_controls.points_active_toggled.connect(self._on_points_edit_requested)
+        self.annotation_controls.delete_points_toggled.connect(self._on_delete_points_requested)
 
         self._wire_card_signals()
 
@@ -652,17 +653,20 @@ class DetectionController(QObject):
             group = self.annotation_controls.manual_group_for_kind(k)
             if group is not None:
                 group.set_checked(k == kind and kind_type == "points")
+                group.set_delete_checked(k == kind and kind_type == "delete")
         self.image_viewer.set_active_roi_target(kind if kind_type == "roi" else None)
-        if kind_type == "points" and kind is not None:
-            self.image_viewer.set_points_active(True, _ANNOTATION_SLUG[kind])
-        else:
-            self.image_viewer.set_points_active(False)
+        slug = _ANNOTATION_SLUG[kind] if kind is not None else None
+        self.image_viewer.set_points_active(kind_type == "points" and kind is not None, slug)
+        self.image_viewer.set_delete_points_active(kind_type == "delete" and kind is not None, slug)
 
     def _on_roi_edit_requested(self, kind: str, active: bool) -> None:
         self._set_active_interaction(kind if active else None, "roi" if active else None)
 
     def _on_points_edit_requested(self, kind: str, active: bool) -> None:
         self._set_active_interaction(kind if active else None, "points" if active else None)
+
+    def _on_delete_points_requested(self, kind: str, active: bool) -> None:
+        self._set_active_interaction(kind if active else None, "delete" if active else None)
 
     def _on_roi_edit_activated(self, kind: str) -> None:
         """A direct click on a drawn ROI activated it; sync buttons + viewer state."""

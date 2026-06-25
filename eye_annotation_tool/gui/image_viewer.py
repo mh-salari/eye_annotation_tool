@@ -154,6 +154,9 @@ class ImageViewer(QWidget):
         # Off until a kind's Add-points toggle (or a direct point click) makes
         # it active; mutually exclusive with ROI edit mode. Controller-driven.
         self.points_active = False
+        # Delete-points mode: a click removes the nearest point. Mutually
+        # exclusive with Add-points / ROI edit. Controller-driven.
+        self.delete_points_active = False
         # Supplies the active manual fit settings (mode / centre / smoothness)
         # per kind; injected by MainWindow from the detector cards.
         self._manual_fit_lookup = None
@@ -462,13 +465,24 @@ class ImageViewer(QWidget):
             self.current_annotation = kind
         self.update_image()
 
+    def set_delete_points_active(self, active: bool, kind: str | None = None) -> None:
+        """Toggle delete-points mode; a left click then removes the nearest point.
+
+        Controller-driven, parallel to :meth:`set_points_active`.
+        """
+        self.delete_points_active = bool(active)
+        if kind is not None:
+            self.current_annotation = kind
+        self.setCursor(Qt.PointingHandCursor if self.delete_points_active else Qt.ArrowCursor)
+        self.update_image()
+
     def _deactivate_interaction(self) -> None:
         """Leave the active interaction (Escape): ROI edit or point adding.
 
         No-op when nothing is active. The controller clears the viewer state
         and unchecks the buttons; this only signals the intent.
         """
-        if self.target_rois.active_target is None and not self.points_active:
+        if self.target_rois.active_target is None and not self.points_active and not self.delete_points_active:
             return
         self.interaction_deactivated.emit()
 
@@ -484,6 +498,18 @@ class ImageViewer(QWidget):
             return False
         self.active_roi_delete_requested.emit(kind)
         return True
+
+    def _delete_point_near(self, image_pos: QPointF) -> None:
+        """Remove the active kind's nearest point to ``image_pos`` (delete-points click)."""
+        points_field, _ = FIELDS_BY_ANNOTATION[self.current_annotation]
+        points = self.eye_data_store.get_field(points_field)
+        point = find_closest_point(points, image_pos, self.factor)
+        if point is None or point not in points:
+            return
+        points.remove(point)
+        self.save_state()
+        self.annotation_changed.emit()
+        self.update_image()
 
     def delete_selected_point(self) -> None:
         """Delete the currently selected point from the active annotation's list."""
@@ -688,6 +714,11 @@ class ImageViewer(QWidget):
         # click inside does nothing (move is Space+drag).
         if self.target_rois.active_target is not None:
             self._try_begin_roi_drag(image_pos, self._active_drag_roi())
+            return
+
+        # Delete-points mode active: a click removes the nearest point.
+        if self.delete_points_active:
+            self._delete_point_near(image_pos)
             return
 
         # Add-points mode active: place or grab points for the active kind.
