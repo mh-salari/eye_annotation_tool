@@ -8,17 +8,18 @@ ROI affordance row. When the user picks Manual the card hosts the
 kind's manual annotation group widget instead.
 """
 
+from collections.abc import Callable
 from typing import Any
 
 import qtawesome as qta
 from PyQt5.QtCore import Qt, pyqtSignal
-from PyQt5.QtGui import QColor, QPalette
+from PyQt5.QtGui import QColor, QCursor, QPalette
 from PyQt5.QtWidgets import (
-    QAbstractSpinBox,
     QCheckBox,
     QColorDialog,
     QComboBox,
     QFrame,
+    QGridLayout,
     QHBoxLayout,
     QLabel,
     QMenu,
@@ -26,8 +27,8 @@ from PyQt5.QtWidgets import (
     QPushButton,
     QSizePolicy,
     QSlider,
-    QSpinBox,
     QToolButton,
+    QToolTip,
     QVBoxLayout,
     QWidget,
 )
@@ -112,6 +113,7 @@ def default_overlay_state(kind: str, overlays: tuple[tuple[str, str], ...]) -> d
             "color": _bgr_to_qcolor(_DEFAULT_BGR_BY_FULL_KEY.get(full, (255, 255, 255))),
             "alpha": _TYPE_DEFAULT_ALPHA.get(elem_type, 1.0),
             "thickness": _TYPE_DEFAULT_THICKNESS.get(elem_type, 1),
+            "style": "solid",
             "type": elem_type,
         }
     return state
@@ -127,6 +129,7 @@ def default_manual_overlay_state(kind: str) -> dict[str, dict[str, Any]]:
             "color": QColor(*rgb),
             "alpha": 1.0,
             "thickness": 2 if elem_type == "point" else 1,
+            "style": "solid",
             "type": elem_type,
         }
     return state
@@ -181,6 +184,26 @@ class _ColorSwatch(QPushButton):
         self.color_changed.emit(self._color)
 
 
+_OVERLAY_SLIDER_QSS = (
+    "QSlider::groove:horizontal { height: 3px; background: #4a4a4a; border-radius: 1px; }"
+    "QSlider::sub-page:horizontal { background: #16a085; height: 3px; border-radius: 1px; }"
+    "QSlider::add-page:horizontal { background: #4a4a4a; height: 3px; border-radius: 1px; }"
+    "QSlider::handle:horizontal { width: 9px; height: 9px; margin: -3px 0; border-radius: 4px; background: #1abc9c; }"
+    "QSlider::handle:horizontal:hover { background: #1fd0ae; }"
+)
+
+
+def _overlay_slider(low: int, high: int, value: int, fmt: Callable[[int], str]) -> QSlider:
+    """A compact slider (small handle) that shows its formatted value at the cursor while dragging."""
+    slider = QSlider(Qt.Horizontal)
+    slider.setRange(low, high)
+    slider.setValue(value)
+    slider.setFixedWidth(72)
+    slider.setStyleSheet(_OVERLAY_SLIDER_QSS)
+    slider.sliderMoved.connect(lambda v: QToolTip.showText(QCursor.pos(), fmt(v), slider))
+    return slider
+
+
 class OverlayRow(QWidget):
     """Collapsing block of per-overlay-key rows for the active detector."""
 
@@ -193,42 +216,51 @@ class OverlayRow(QWidget):
         self._section = CollapsibleSection("overlay")
         outer.addWidget(self._section)
 
-    def populate(self, state: dict[str, dict[str, Any]]) -> None:
-        """Rebuild the row from a fresh overlay-state dict."""
-        self._section.clear()
-        for key, entry in state.items():
-            row_widget = QWidget()
-            row_widget.setLayout(self._build_row(key, entry))
-            self._section.add_widget(row_widget)
+    # Grid columns: show | name | colour | opacity | size | dash
+    _COL_SHOW, _COL_NAME, _COL_COLOR, _COL_OPACITY, _COL_SIZE, _COL_DASH = range(6)
 
-    def _build_row(self, key: str, entry: dict[str, Any]) -> QHBoxLayout:
-        row = QHBoxLayout()
-        row.setContentsMargins(0, 2, 0, 2)
+    def populate(self, state: dict[str, dict[str, Any]]) -> None:
+        """Rebuild the rows as one aligned grid with column headers."""
+        self._section.clear()
+        container = QWidget()
+        grid = QGridLayout(container)
+        grid.setContentsMargins(2, 2, 2, 4)
+        grid.setHorizontalSpacing(8)
+        grid.setVerticalSpacing(5)
+        for col, text in ((self._COL_OPACITY, "opacity"), (self._COL_SIZE, "size"), (self._COL_DASH, "dash")):
+            head = QLabel(text)
+            head.setStyleSheet("color: gray;")
+            grid.addWidget(head, 0, col, Qt.AlignHCenter)
+        for r, (key, entry) in enumerate(state.items(), start=1):
+            self._add_row(grid, r, key, entry)
+        grid.setColumnStretch(self._COL_NAME, 1)
+        self._section.add_widget(container)
+
+    def _add_row(self, grid: "QGridLayout", r: int, key: str, entry: dict[str, Any]) -> None:
         show = QCheckBox()
         show.setChecked(bool(entry["show"]))
         show.toggled.connect(lambda v, k=key: self.overlay_changed.emit(k, "show", bool(v)))
-        row.addWidget(show)
-        row.addWidget(QLabel(key))
+        grid.addWidget(show, r, self._COL_SHOW)
+        grid.addWidget(QLabel(key), r, self._COL_NAME)
         swatch = _ColorSwatch(entry["color"])
         swatch.color_changed.connect(lambda c, k=key: self.overlay_changed.emit(k, "color", QColor(c)))
-        row.addWidget(swatch)
-        alpha = QSlider(Qt.Horizontal)
-        alpha.setRange(0, 100)
-        alpha.setValue(int(float(entry["alpha"]) * 100))
-        alpha.setFixedWidth(70)
+        grid.addWidget(swatch, r, self._COL_COLOR, Qt.AlignHCenter)
+
+        alpha = _overlay_slider(0, 100, int(float(entry["alpha"]) * 100), lambda v: f"{v}%")
         alpha.valueChanged.connect(lambda v, k=key: self.overlay_changed.emit(k, "alpha", float(v) / 100.0))
-        row.addWidget(alpha)
+        grid.addWidget(alpha, r, self._COL_OPACITY)
+
         elem_type = entry.get("type", "line")
         if elem_type in {"line", "point"}:
-            thickness = QSpinBox()
-            thickness.setRange(1, 20)
-            thickness.setValue(int(entry["thickness"]))
-            thickness.setMaximumWidth(50)
-            thickness.setButtonSymbols(QAbstractSpinBox.NoButtons)
-            thickness.valueChanged.connect(lambda v, k=key: self.overlay_changed.emit(k, "thickness", int(v)))
-            row.addWidget(thickness)
-        row.addStretch(1)
-        return row
+            # thickness for lines, dot size for points - one field, one slider
+            size = _overlay_slider(1, 20, int(entry["thickness"]), lambda v: f"{v} px")
+            size.valueChanged.connect(lambda v, k=key: self.overlay_changed.emit(k, "thickness", int(v)))
+            grid.addWidget(size, r, self._COL_SIZE)
+        if elem_type == "line":
+            dash = QCheckBox()
+            dash.setChecked(entry.get("style") == "dash")
+            dash.toggled.connect(lambda v, k=key: self.overlay_changed.emit(k, "style", "dash" if v else "solid"))
+            grid.addWidget(dash, r, self._COL_DASH, Qt.AlignHCenter)
 
 
 # ---------------------------------------------------------------------------

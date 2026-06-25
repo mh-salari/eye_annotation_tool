@@ -252,9 +252,11 @@ class CanvasRenderer:
             curve = eye_data.get(curve_field)
             if not ellipse and not curve:
                 continue
-            outline_color, outline_thickness = self._manual_line_style(annotation_type, "ellipse", default_outline)
+            outline_color, outline_thickness, outline_style = self._manual_line_style(
+                annotation_type, "ellipse", default_outline
+            )
             if outline_color is not None:
-                painter.setPen(QPen(outline_color, outline_thickness, Qt.SolidLine))
+                painter.setPen(self._make_pen(outline_color, outline_thickness, outline_style))
                 painter.setBrush(Qt.NoBrush)
                 # Smooth-curve mode draws the actual boundary through the points;
                 # ellipse mode draws the fitted conic.
@@ -334,15 +336,29 @@ class CanvasRenderer:
         annotation_type: str,
         key: str,
         default_color: QColor,
-    ) -> tuple[QColor | None, int]:
-        """Return ``(color, thickness)`` for a line-type overlay (e.g. fitted ellipse)."""
+    ) -> tuple[QColor | None, int, str]:
+        """Return ``(color, thickness, style)`` for a line-type overlay (e.g. fitted ellipse)."""
         entry = self._manual_entry(annotation_type, key)
         if entry is None:
-            return default_color, 1
+            return default_color, 1, "solid"
         if not entry.get("show", True):
-            return None, 1
+            return None, 1, "solid"
         color = self._with_alpha(QColor(entry.get("color", default_color)), float(entry.get("alpha", 1.0)))
-        return color, max(1, int(entry.get("thickness", 1)))
+        return color, max(1, int(entry.get("thickness", 1))), entry.get("style", "solid")
+
+    @staticmethod
+    def _make_pen(color: QColor, thickness: float, style: str) -> QPen:
+        """Build a line-overlay pen; ``dash`` uses a wide-gap custom dash pattern.
+
+        Qt's stock ``DashLine`` packs the dashes too tightly to read on a thin
+        boundary, so the dashed style sets an explicit dash:gap pattern (in
+        pen-width units) with the gap twice the dash length.
+        """
+        pen = QPen(color, thickness, Qt.SolidLine)
+        if style == "dash":
+            pen.setStyle(Qt.CustomDashLine)
+            pen.setDashPattern([3.0, 6.0])
+        return pen
 
     def _manual_center_style(
         self,
@@ -402,6 +418,7 @@ class CanvasRenderer:
             elem_type = entry.get("type", "line")
             color = self._with_alpha(entry["color"], float(entry.get("alpha", 1.0)))
             thickness = int(entry.get("thickness", 1) or 1)
+            style = entry.get("style", "solid")
             if elem_type == "fill":
                 # "mask" overlays paint the result's contour filled (or
                 # the limbus polygon filled), not the binary mask ndarray.
@@ -415,16 +432,16 @@ class CanvasRenderer:
             value = result.get(key)
             if value is None:
                 if key == "curve" and result.get("center") is not None:
-                    self._draw_limbus_curve(painter, result, color, thickness)
+                    self._draw_limbus_curve(painter, result, color, thickness, style)
                 continue
             if key == "contour":
-                self._draw_contour(painter, value, color, thickness)
+                self._draw_contour(painter, value, color, thickness, style)
             elif key == "ellipse":
-                self._draw_ellipse_outline(painter, value, color, thickness)
+                self._draw_ellipse_outline(painter, value, color, thickness, style)
             elif key == "center":
                 self._draw_point(painter, value, color, thickness)
             elif key == "curve":
-                self._draw_limbus_curve(painter, result, color, thickness)
+                self._draw_limbus_curve(painter, result, color, thickness, style)
             _ = kind  # parametrise future per-kind branches without losing the value
 
     def _draw_glint_list(
@@ -471,23 +488,27 @@ class CanvasRenderer:
         painter.drawEllipse(QPointF(cx * self.zoom.factor, cy * self.zoom.factor), float(size), float(size))
         painter.restore()
 
-    def _draw_contour(self, painter: QPainter, contour: object, color: QColor, thickness: int) -> None:
+    def _draw_contour(
+        self, painter: QPainter, contour: object, color: QColor, thickness: int, style: str = "solid"
+    ) -> None:
         pts = self._contour_to_points(contour)
         if pts is None or len(pts) < 2:
             return
         polygon = self._polygon_from_points(pts)
         painter.save()
-        painter.setPen(QPen(color, thickness, Qt.SolidLine))
+        painter.setPen(self._make_pen(color, thickness, style))
         painter.setBrush(Qt.NoBrush)
         painter.drawPolygon(polygon)
         painter.restore()
 
-    def _draw_ellipse_outline(self, painter: QPainter, ellipse: object, color: QColor, thickness: int) -> None:
+    def _draw_ellipse_outline(
+        self, painter: QPainter, ellipse: object, color: QColor, thickness: int, style: str = "solid"
+    ) -> None:
         center, size, angle = self._normalise_ellipse(ellipse)
         if center is None:
             return
         painter.save()
-        painter.setPen(QPen(color, thickness, Qt.SolidLine))
+        painter.setPen(self._make_pen(color, thickness, style))
         painter.setBrush(Qt.NoBrush)
         painter.translate(QPointF(center[0] * self.zoom.factor, center[1] * self.zoom.factor))
         painter.rotate(float(angle))
@@ -498,7 +519,9 @@ class CanvasRenderer:
         )
         painter.restore()
 
-    def _draw_limbus_curve(self, painter: QPainter, result: dict, color: QColor, thickness: int) -> None:
+    def _draw_limbus_curve(
+        self, painter: QPainter, result: dict, color: QColor, thickness: int, style: str = "solid"
+    ) -> None:
         cx, cy = float(result["center"][0]), float(result["center"][1])
         if "R_theta" in result and "thetas" in result:
             thetas = np.asarray(result["thetas"])
@@ -506,11 +529,11 @@ class CanvasRenderer:
             xs = cx + radii * np.cos(thetas)
             ys = cy + radii * np.sin(thetas)
             pts = np.stack([xs, ys], axis=-1)
-            self._draw_contour(painter, pts, color, thickness)
+            self._draw_contour(painter, pts, color, thickness, style)
         elif "radius" in result:
             radius = float(result["radius"])
             painter.save()
-            painter.setPen(QPen(color, thickness, Qt.SolidLine))
+            painter.setPen(self._make_pen(color, thickness, style))
             painter.setBrush(Qt.NoBrush)
             painter.drawEllipse(
                 QPointF(cx * self.zoom.factor, cy * self.zoom.factor),
