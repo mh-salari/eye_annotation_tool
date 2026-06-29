@@ -148,6 +148,7 @@ class DetectionController(QObject):
         self.image_viewer.points_activated.connect(self._on_points_activated)
         self.image_viewer.interaction_deactivated.connect(self._on_interaction_deactivated)
         self.image_viewer.edit_detected_boundary_requested.connect(self.promote_pupil_to_manual)
+        self.image_viewer.set_can_edit_boundary(self.can_edit_detected_boundary)
         self.annotation_controls.points_active_toggled.connect(self._on_points_edit_requested)
         self.annotation_controls.delete_points_toggled.connect(self._on_delete_points_requested)
 
@@ -679,6 +680,20 @@ class DetectionController(QObject):
     def _on_interaction_deactivated(self) -> None:
         """Escape left the active interaction; clear every ROI / Add-points button."""
         self._set_active_interaction(None, None)
+
+    def can_edit_detected_boundary(self) -> bool:
+        """Whether the active pupil shows a promotable auto detection.
+
+        True only with an auto detector selected (not manual / off) whose result
+        carries a contour, so the right-click promote action appears just when it
+        can act.
+        """
+        card = self.annotation_controls.card("pupil")
+        if card is None or card.active_detector() is None:
+            return False
+        slot = self._active_slot()
+        result = self.per_eye_state.get_result(slot, "pupil") or self.orchestrator.cached_result("pupil")
+        return (result or {}).get("contour") is not None
 
     def promote_pupil_to_manual(self) -> None:
         """Seed manual smooth-curve editing from the active eye's auto pupil contour.

@@ -160,6 +160,9 @@ class ImageViewer(QWidget):
         # Supplies the active manual fit settings (mode / centre / smoothness)
         # per kind; injected by MainWindow from the detector cards.
         self._manual_fit_lookup = None
+        # Gates the right-click "Edit detected boundary" menu; injected by the
+        # detection controller, which owns the detector and result state.
+        self._can_edit_boundary = None
         self.original_pixmap = None
         self.pixmap = None
 
@@ -850,8 +853,14 @@ class ImageViewer(QWidget):
                 self.annotation_changed.emit()
 
     def contextMenuEvent(self, event: QEvent) -> None:  # noqa: N802
-        """Right-click menu: promote the detected pupil boundary into editable points."""
+        """Right-click menu to promote the detected pupil boundary into editable points.
+
+        Shown only when the active pupil has an auto detection to promote - not in
+        manual / off mode, and not before a detection exists.
+        """
         if self.original_pixmap is None:
+            return
+        if self._can_edit_boundary is not None and not self._can_edit_boundary():
             return
         menu = QMenu(self)
         menu.addAction("Edit detected boundary").triggered.connect(self.edit_detected_boundary_requested.emit)
@@ -1361,6 +1370,10 @@ class ImageViewer(QWidget):
     def set_manual_fit_lookup(self, lookup: Callable[[str], dict]) -> None:
         """Register ``lookup(kind) -> {mode, center_method, smoothness}`` for manual fits."""
         self._manual_fit_lookup = lookup
+
+    def set_can_edit_boundary(self, predicate: Callable[[], bool]) -> None:
+        """Register the predicate gating the right-click "Edit detected boundary" menu."""
+        self._can_edit_boundary = predicate
 
     def _manual_fit_params(self, kind: str) -> dict:
         if self._manual_fit_lookup is None:
