@@ -5,7 +5,7 @@ from typing import ClassVar
 
 import cv2
 import numpy as np
-from cheshm.shape import pupil_center, smoothing_spline
+from cheshm.shape import ellipse_boundary, pupil_center, smoothing_spline
 from PyQt5.QtCore import QEvent, QPoint, QPointF, QSizeF, Qt, QTimer, pyqtSignal
 from PyQt5.QtGui import QImage, QKeyEvent, QPixmap, QResizeEvent
 from PyQt5.QtWidgets import QLabel, QMenu, QMessageBox, QScrollArea, QVBoxLayout, QWidget
@@ -1373,9 +1373,9 @@ class ImageViewer(QWidget):
         Ellipse mode is the least-squares conic fit. Smooth-curve mode fits a
         periodic smoothing spline (cheshm) through the points and reports its
         bounding ellipse with the chosen centre estimator. Returns
-        ``(ellipse, curve)`` where ``curve`` is the smooth boundary points
-        (smooth mode) or ``None`` (ellipse mode); ``ellipse`` is ``None`` on
-        failure.
+        ``(ellipse, curve)`` where ``curve`` is the dense boundary points (the
+        smoothing spline in smooth mode, the fitted ellipse sampled in ellipse
+        mode); ``ellipse`` is ``None`` on failure.
         """
         params = self._manual_fit_params(kind)
         if params.get("mode") == "smooth":
@@ -1398,7 +1398,13 @@ class ImageViewer(QWidget):
         x = np.array([p.x() for p in points])
         y = np.array([p.y() for p in points])
         prm = fit_ellipse(x, y)
-        return (QPointF(prm[0], prm[1]), QSizeF(2 * prm[2], 2 * prm[3]), float(np.degrees(prm[4]))), None
+        center = (prm[0], prm[1])
+        axes = (2 * prm[2], 2 * prm[3])
+        angle = float(np.degrees(prm[4]))
+        # Sample the fitted ellipse to a dense boundary so an ellipse fit carries the
+        # same contour that smooth mode and the auto detectors provide.
+        curve_pts = [QPointF(float(px), float(py)) for px, py in ellipse_boundary(center, axes, angle)]
+        return (QPointF(center[0], center[1]), QSizeF(axes[0], axes[1]), angle), curve_pts
 
     def refit_manual_live(self, kind: str) -> bool:
         """Silently re-fit a manual kind's ellipse + smooth curve from its points.
