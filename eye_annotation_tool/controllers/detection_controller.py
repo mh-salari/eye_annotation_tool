@@ -21,6 +21,7 @@ from ..utils.project_settings import (
     DETECTOR_OFF,
     EYE_SLOTS,
     KINDS,
+    MANUAL_POINT_CAP_KINDS,
 )
 
 if TYPE_CHECKING:
@@ -149,8 +150,11 @@ class DetectionController(QObject):
         self.image_viewer.interaction_deactivated.connect(self._on_interaction_deactivated)
         self.image_viewer.edit_detected_boundary_requested.connect(self.promote_pupil_to_manual)
         self.image_viewer.set_can_edit_boundary(self.can_edit_detected_boundary)
+        self.image_viewer.set_point_cap_lookup(self._manual_point_cap)
+        self.image_viewer.point_limit_reached.connect(self._on_point_limit_reached)
         self.annotation_controls.points_active_toggled.connect(self._on_points_edit_requested)
         self.annotation_controls.delete_points_toggled.connect(self._on_delete_points_requested)
+        self.annotation_controls.max_points_changed.connect(self._on_max_points_changed)
 
         self._wire_card_signals()
 
@@ -327,6 +331,10 @@ class DetectionController(QObject):
             det = card.active_detector()
             if det is not None:
                 self._restore_card_params(kind, det, params_by_slot)
+            if kind in MANUAL_POINT_CAP_KINDS and "manual_max_points" in entry:
+                group = self.annotation_controls.manual_group_for_kind(kind)
+                if group is not None:
+                    group.set_max_points(entry["manual_max_points"])
         self._refresh_orchestrator_enabled()
         self._refresh_auto_managed_kinds()
         self.refresh_all_detections()
@@ -434,6 +442,10 @@ class DetectionController(QObject):
             card.set_project_default(card.active_id(), cleaned)
         kind_block["pinned"] = card.current_pinned()
         kind_block["overlays"] = _serialize_overlays(card.all_overlay_states())
+        if kind in MANUAL_POINT_CAP_KINDS:
+            group = self.annotation_controls.manual_group_for_kind(kind)
+            if group is not None:
+                kind_block["manual_max_points"] = group.max_points()
 
     def save_settings_to_project(self) -> None:
         """Snapshot every kind's live card pick into the project defaults (no persist)."""
@@ -991,6 +1003,22 @@ class DetectionController(QObject):
         kind_block = detectors_block.setdefault(kind, {})
         kind_block["pinned"] = list(pinned)
         self.project_store.persist()
+
+    def _manual_point_cap(self, kind: str) -> int | None:
+        """Max manual points allowed for ``kind`` (point-cap kinds), or ``None``."""
+        if kind not in MANUAL_POINT_CAP_KINDS:
+            return None
+        group = self.annotation_controls.manual_group_for_kind(kind)
+        return group.max_points() if group is not None else None
+
+    def _on_max_points_changed(self, kind: str, value: int) -> None:
+        detectors_block = self.project_store.project.setdefault("detectors", {})
+        kind_block = detectors_block.setdefault(kind, {})
+        kind_block["manual_max_points"] = value
+        self.project_store.persist()
+
+    def _on_point_limit_reached(self, kind: str, cap: int) -> None:
+        self.status_message.emit(f"Max {cap} {kind} point(s) for this project.", 3000)
 
     def _active_slot(self) -> str:
         if self._binocular is None:

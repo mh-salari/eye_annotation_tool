@@ -68,6 +68,11 @@ DEFAULT_ID_BY_KIND: dict[str, str] = {
     "purkinje_iv": DETECTOR_OFF,
 }
 
+# Kinds whose manual annotation is a few distinct corneal-reflection points,
+# capped per project so a stray click can't add a spurious one.
+MANUAL_POINT_CAP_KINDS = ("glint", "purkinje_iv")
+DEFAULT_MANUAL_MAX_POINTS = 1
+
 DEFAULT_DIVIDER_X_NORM = 0.5
 
 # Per-eye param slots; "single" is used in monocular mode where the eye
@@ -121,6 +126,19 @@ def _default_params_per_eye() -> dict:
     return dict.fromkeys(EYE_SLOTS)
 
 
+def _default_detector_entry(kind: str) -> dict:
+    """Fresh ``detectors.<kind>`` entry: the single source of per-kind defaults."""
+    entry = {
+        "id": DEFAULT_ID_BY_KIND[kind],
+        "params": _default_params_per_eye(),
+        "pinned": [],
+        "overlays": {},
+    }
+    if kind in MANUAL_POINT_CAP_KINDS:
+        entry["manual_max_points"] = DEFAULT_MANUAL_MAX_POINTS
+    return entry
+
+
 def default_project() -> dict:
     """Return a fresh deep dict of an empty project's defaults."""
     return {
@@ -129,15 +147,7 @@ def default_project() -> dict:
         "divider_x_norm": DEFAULT_DIVIDER_X_NORM,
         "autosave": False,
         "auto_detect_on_load": False,
-        "detectors": {
-            kind: {
-                "id": DEFAULT_ID_BY_KIND[kind],
-                "params": _default_params_per_eye(),
-                "pinned": [],
-                "overlays": {},
-            }
-            for kind in KINDS
-        },
+        "detectors": {kind: _default_detector_entry(kind) for kind in KINDS},
     }
 
 
@@ -166,7 +176,7 @@ def load_project(project_path: str | Path) -> dict:
         for kind in KINDS:
             entry = detectors_in.get(kind)
             if isinstance(entry, dict):
-                project["detectors"][kind] = _parse_detector_entry(entry)
+                project["detectors"][kind] = _parse_detector_entry(kind, entry)
     return project
 
 
@@ -206,14 +216,22 @@ def _parse_images(images_in: dict) -> dict:
     return out
 
 
-def _parse_detector_entry(entry: dict) -> dict:
-    """Normalise one ``detectors.<kind>`` block from disk into the in-memory shape."""
-    return {
-        "id": entry.get("id", DETECTOR_OFF),
-        "params": _parse_params_per_eye(entry.get("params")),
-        "pinned": [name for name in (entry.get("pinned") or []) if isinstance(name, str)],
-        "overlays": _parse_overlays(entry.get("overlays")),
-    }
+def _parse_detector_entry(kind: str, entry: dict) -> dict:
+    """Normalise a loaded ``detectors.<kind>`` block onto the per-kind defaults.
+
+    Validated file values overlay :func:`_default_detector_entry`, so every
+    default has a single source there rather than being respecified here.
+    """
+    out = _default_detector_entry(kind)
+    if isinstance(entry.get("id"), str):
+        out["id"] = entry["id"]
+    out["params"] = _parse_params_per_eye(entry.get("params"))
+    out["pinned"] = [name for name in (entry.get("pinned") or []) if isinstance(name, str)]
+    out["overlays"] = _parse_overlays(entry.get("overlays"))
+    raw_max = entry.get("manual_max_points")
+    if kind in MANUAL_POINT_CAP_KINDS and isinstance(raw_max, int) and raw_max >= 1:
+        out["manual_max_points"] = raw_max
+    return out
 
 
 def _parse_overlays(overlays_in: object) -> dict:

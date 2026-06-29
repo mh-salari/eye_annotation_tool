@@ -95,6 +95,8 @@ class ImageViewer(QWidget):
     # detection into an editable manual smooth boundary (the controller seeds the
     # manual points from the detected contour).
     edit_detected_boundary_requested = pyqtSignal()
+    # Emitted when a manual click is rejected by the per-kind point cap (kind, cap).
+    point_limit_reached = pyqtSignal(str, int)
     # Emitted when the user finishes dragging the binocular divider line.
     # Payload is the new normalised x position in [0, 1]. MainWindow
     # persists the value as the current image's per-image override.
@@ -163,6 +165,9 @@ class ImageViewer(QWidget):
         # Gates the right-click "Edit detected boundary" menu; injected by the
         # detection controller, which owns the detector and result state.
         self._can_edit_boundary = None
+        # Supplies the per-kind manual point cap; injected by the detection
+        # controller. Returns None for uncapped kinds.
+        self._point_cap_lookup = None
         self.original_pixmap = None
         self.pixmap = None
 
@@ -777,8 +782,12 @@ class ImageViewer(QWidget):
         elif self.current_annotation == "eyelid_contour":
             self.eyelid_contour_points.append(image_pos)
         elif self.current_annotation == "purkinje_iv":
+            if not self._within_point_cap("purkinje_iv", self.purkinje_iv_points):
+                return
             self.purkinje_iv_points.append(image_pos)
         else:  # glint
+            if not self._within_point_cap("glint", self.glint_points):
+                return
             self.glint_points.append(image_pos)
 
         self.save_state()
@@ -1374,6 +1383,18 @@ class ImageViewer(QWidget):
     def set_can_edit_boundary(self, predicate: Callable[[], bool]) -> None:
         """Register the predicate gating the right-click "Edit detected boundary" menu."""
         self._can_edit_boundary = predicate
+
+    def set_point_cap_lookup(self, lookup: Callable[[str], int | None]) -> None:
+        """Register ``lookup(kind) -> max_points`` (or ``None``) for capped manual kinds."""
+        self._point_cap_lookup = lookup
+
+    def _within_point_cap(self, kind: str, points: list) -> bool:
+        """Whether another manual ``kind`` point fits under its per-project cap."""
+        cap = self._point_cap_lookup(kind) if self._point_cap_lookup is not None else None
+        if cap is not None and len(points) >= cap:
+            self.point_limit_reached.emit(kind, cap)
+            return False
+        return True
 
     def _manual_fit_params(self, kind: str) -> dict:
         if self._manual_fit_lookup is None:

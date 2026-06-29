@@ -61,21 +61,26 @@ class AnnotationGroup(QWidget):
     fit_requested = pyqtSignal()
     clear_requested = pyqtSignal()
     params_changed = pyqtSignal()  # manual fit mode / centre method / harmonics changed
+    max_points_changed = pyqtSignal(int)  # point-cap kinds: per-project max-points value changed
 
     def __init__(
         self,
         title: str,  # noqa: ARG002 - kept for API compatibility; the card owns the title
         has_fit: bool = True,
         center_methods: tuple[str, ...] = (),
+        point_cap: bool = False,
         parent: QWidget | None = None,
     ) -> None:
         """Build the click-active radio, fit-mode controls, and Fit / Clear row.
 
         ``center_methods`` lists the smooth-curve centre estimators to offer
         (empty for kinds without an ellipse fit, where the mode controls hide).
+        ``point_cap`` adds a max-points spinbox for the point-only kinds whose
+        manual annotation is a small, fixed set of reflections.
         """
         super().__init__(parent)
         self.has_fit = has_fit
+        self.point_cap = point_cap
         self._center_methods = tuple(center_methods)
         self.setup_ui()
 
@@ -107,6 +112,8 @@ class AnnotationGroup(QWidget):
 
         if self.has_fit:
             self._build_fit_mode_controls(layout)
+        if self.point_cap:
+            self._build_point_cap_control(layout)
 
         button_layout = QHBoxLayout()
         button_layout.setSpacing(4)
@@ -199,6 +206,32 @@ class AnnotationGroup(QWidget):
         for widget in (self.mode_combo, self.center_combo, self.smooth_slider):
             widget.blockSignals(False)
         self._smooth_row.setVisible(self.mode_combo.currentData() == "smooth")
+
+    # Upper bound for the manual point-cap spinbox; well above the handful of
+    # corneal reflections a frame can carry.
+    _MAX_POINT_CAP = 20
+
+    def _build_point_cap_control(self, layout: QVBoxLayout) -> None:
+        """Spinbox capping how many manual points this kind accepts."""
+        row = QHBoxLayout()
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(4)
+        row.addWidget(QLabel("max points"))
+        self.max_points_spin = QSpinBox()
+        self.max_points_spin.setRange(1, self._MAX_POINT_CAP)
+        self.max_points_spin.valueChanged.connect(self.max_points_changed.emit)
+        row.addWidget(self.max_points_spin, 1)
+        layout.addLayout(row)
+
+    def max_points(self) -> int:
+        """Return the manual point cap (point-cap kinds only)."""
+        return self.max_points_spin.value()
+
+    def set_max_points(self, value: int) -> None:
+        """Set the manual point cap without emitting ``max_points_changed``."""
+        self.max_points_spin.blockSignals(True)
+        self.max_points_spin.setValue(int(value))
+        self.max_points_spin.blockSignals(False)
 
     def is_checked(self) -> bool:
         """Return whether point-adding is active for this kind."""

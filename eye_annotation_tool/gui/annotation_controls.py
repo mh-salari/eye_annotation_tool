@@ -36,6 +36,7 @@ class AnnotationControlPanel(QWidget):
 
     points_active_toggled = pyqtSignal(str, bool)
     delete_points_toggled = pyqtSignal(str, bool)
+    max_points_changed = pyqtSignal(str, int)
     eye_changed = pyqtSignal(str)
     binocular_toggled = pyqtSignal(bool)
     fit_annotation_requested = pyqtSignal()
@@ -84,14 +85,16 @@ class AnnotationControlPanel(QWidget):
         self.eyelid_group.delete_active_toggled.connect(lambda a: self.delete_points_toggled.emit("eyelid", a))
         self.eyelid_group.clear_requested.connect(self.clear_eyelid_points_requested.emit)
 
-        self.glint_group = AnnotationGroup("Glint", has_fit=False)
+        self.glint_group = AnnotationGroup("Glint", has_fit=False, point_cap=True)
         self.glint_group.points_active_toggled.connect(lambda a: self.points_active_toggled.emit("glint", a))
         self.glint_group.delete_active_toggled.connect(lambda a: self.delete_points_toggled.emit("glint", a))
         self.glint_group.clear_requested.connect(self.clear_glint_points_requested.emit)
+        self.glint_group.max_points_changed.connect(lambda n: self.max_points_changed.emit("glint", n))
 
-        self.purkinje_iv_group = AnnotationGroup("Purkinje IV", has_fit=False)
+        self.purkinje_iv_group = AnnotationGroup("Purkinje IV", has_fit=False, point_cap=True)
         self.purkinje_iv_group.points_active_toggled.connect(lambda a: self.points_active_toggled.emit("purkinje_iv", a))
         self.purkinje_iv_group.delete_active_toggled.connect(lambda a: self.delete_points_toggled.emit("purkinje_iv", a))
+        self.purkinje_iv_group.max_points_changed.connect(lambda n: self.max_points_changed.emit("purkinje_iv", n))
         self.purkinje_iv_group.clear_requested.connect(self.clear_purkinje_iv_points_requested.emit)
 
         self._manual_group_by_kind: dict[str, AnnotationGroup] = {
