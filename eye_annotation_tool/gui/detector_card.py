@@ -36,7 +36,7 @@ from PyQt5.QtWidgets import (
 from eye_annotation_tool.auto_detectors.plugin import DetectorPlugin as Detector
 
 from .collapsible import CollapsibleSection
-from .custom_widgets import MaterialButton
+from .custom_widgets import ClearIconButton, MaterialButton
 from .detector_setting_widgets import SettingsBlock
 from .theme import theme
 
@@ -269,18 +269,26 @@ class OverlayRow(QWidget):
 
 
 class _RoiRow(QWidget):
-    """ROI edit toggle button. Delete the ROI with the Delete key while active."""
+    """ROI draw toggle and a clear button for the active detector's ROI."""
 
     roi_edit_requested = pyqtSignal(bool)
+    roi_clear_requested = pyqtSignal()
 
     def __init__(self, kind_label: str, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         row = QHBoxLayout()
         row.setContentsMargins(0, 0, 0, 0)
-        self.roi_button = MaterialButton(f"{kind_label} ROI", compact=True)
+        row.setSpacing(4)
+        self.roi_button = QPushButton(qta.icon("mdi6.selection-drag", color=theme.color("icon")), " ROI")
         self.roi_button.setCheckable(True)
+        self.roi_button.setToolTip(f"Draw the {kind_label} ROI: drag a box on the image")
         self.roi_button.toggled.connect(self.roi_edit_requested.emit)
         row.addWidget(self.roi_button)
+        self.clear_button = ClearIconButton()
+        self.clear_button.setToolTip("Clear ROI")
+        self.clear_button.clicked.connect(self.roi_clear_requested.emit)
+        row.addWidget(self.clear_button)
+        row.addStretch()
         self.setLayout(row)
 
     def set_roi_button_checked(self, checked: bool) -> None:
@@ -313,6 +321,7 @@ class DetectorCard(QFrame):
 
     # Re-emitted from the ROI affordance row.
     roi_edit_requested = pyqtSignal(bool)
+    roi_clear_requested = pyqtSignal()
 
     def __init__(
         self,
@@ -683,6 +692,7 @@ class DetectorCard(QFrame):
         if detector_has_roi(det) is not None:
             self._roi_row = _RoiRow(self.kind.capitalize())
             self._roi_row.roi_edit_requested.connect(self._on_roi_edit)
+            self._roi_row.roi_clear_requested.connect(self.roi_clear_requested.emit)
             self._content_layout.addWidget(self._roi_row)
 
 

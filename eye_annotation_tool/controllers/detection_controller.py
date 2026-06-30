@@ -302,6 +302,9 @@ class DetectionController(QObject):
             card.roi_edit_requested.connect(
                 lambda active, k=kind: self._on_roi_edit_requested(k, active),
             )
+            card.roi_clear_requested.connect(
+                lambda k=kind: self._on_roi_delete_requested(k),
+            )
             card.detect_requested.connect(
                 lambda k=kind: self._kick_live_run_for_kind(k),
             )
