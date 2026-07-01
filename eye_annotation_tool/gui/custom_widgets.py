@@ -29,24 +29,6 @@ class MaterialButton(QPushButton):
         super().__init__(text, parent)
 
 
-class IconButton(QPushButton):
-    """Icon-based button for compact UI."""
-
-    def __init__(self, icon: str, tooltip: str, parent: QWidget | None = None) -> None:
-        """Initialize the IconButton."""
-        super().__init__(icon, parent)
-        self.setToolTip(tooltip)
-
-
-class ClearIconButton(QPushButton):
-    """Clear button."""
-
-    def __init__(self, parent: QWidget | None = None) -> None:
-        """Initialize the ClearIconButton."""
-        super().__init__("x", parent)
-        self.setToolTip("Clear")
-
-
 class AnnotationGroup(QWidget):
     """Manual-mode controls for one annotation kind.
 
@@ -119,11 +101,13 @@ class AnnotationGroup(QWidget):
         button_layout.setSpacing(4)
 
         if self.has_fit:
-            self.fit_button = IconButton("fit ellipse", "Fit")
+            self.fit_button = QPushButton(qta.icon("mdi6.vector-ellipse", color=theme.color("icon")), "")
+            self.fit_button.setToolTip("Fit")
             self.fit_button.clicked.connect(self.fit_requested.emit)
             button_layout.addWidget(self.fit_button)
 
-        self.clear_button = ClearIconButton()
+        self.clear_button = QPushButton(qta.icon("mdi6.eraser", color=theme.color("icon")), "")
+        self.clear_button.setToolTip("Clear")
         self.clear_button.clicked.connect(self.clear_requested.emit)
         button_layout.addWidget(self.clear_button)
 

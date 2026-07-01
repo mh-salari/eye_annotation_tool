@@ -36,7 +36,7 @@ from PyQt5.QtWidgets import (
 from eye_annotation_tool.auto_detectors.plugin import DetectorPlugin as Detector
 
 from .collapsible import CollapsibleSection
-from .custom_widgets import ClearIconButton, MaterialButton
+from .custom_widgets import MaterialButton
 from .detector_setting_widgets import SettingsBlock
 from .theme import theme
 
@@ -284,7 +284,7 @@ class _RoiRow(QWidget):
         self.roi_button.setToolTip(f"Draw the {kind_label} ROI: drag a box on the image")
         self.roi_button.toggled.connect(self.roi_edit_requested.emit)
         row.addWidget(self.roi_button)
-        self.clear_button = ClearIconButton()
+        self.clear_button = QPushButton(qta.icon("mdi6.eraser", color=theme.color("icon")), "")
         self.clear_button.setToolTip("Clear ROI")
         self.clear_button.clicked.connect(self.roi_clear_requested.emit)
         row.addWidget(self.clear_button)
