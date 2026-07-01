@@ -1,31 +1,13 @@
-"""Help > About dialog.
+"""Help > About dialog."""
 
-Builds the rich-text body, parses the version literal out of
-``setup.py``, and shows the result inside a :class:`QMessageBox`. Kept
-separate from ``main_window.py`` so the AST parse of ``setup.py``
-doesn't need to live next to the GUI shell.
-"""
-
-import ast
 from pathlib import Path
 
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QPixmap
 from PyQt5.QtWidgets import QLabel, QMessageBox, QVBoxLayout, QWidget
 
+from .._version import version as _app_version
 from .theme import theme
-
-
-def get_version_from_setup() -> str:
-    """Read the application version literal from ``setup.py``."""
-    setup_path = Path(__file__).parent / ".." / ".." / "setup.py"
-    tree = ast.parse(setup_path.read_text(encoding="utf-8"))
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Call) and node.func.id == "setup":
-            for keyword in node.keywords:
-                if keyword.arg == "version":
-                    return ast.literal_eval(keyword.value)
-    return "Unknown"
 
 
 def show_about_dialog(parent: QWidget) -> None:
@@ -36,7 +18,7 @@ def show_about_dialog(parent: QWidget) -> None:
         "<p>Developed by "
         "<a href='https://mh-salari.ir/'"
         f"style='color: {theme.color('link')};'>Mohammadhossein Salari</a></p>"
-        f"<p>Current version: {get_version_from_setup()}</p>"
+        f"<p>Current version: {_app_version}</p>"
         "<p>To get the latest version of Eye Annotation Tool, visit<br>"
         "<a href='https://github.com/mh-salari/eye_annotation_tool' "
         f"style='color: {theme.color('link')};' target='_blank' rel='noopener noreferrer'>"
