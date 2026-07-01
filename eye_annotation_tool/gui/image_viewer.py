@@ -5,6 +5,7 @@ from typing import ClassVar
 
 import cv2
 import numpy as np
+from cheshm.align import match_glints
 from cheshm.shape import ellipse_boundary, pupil_center, smoothing_spline
 from PyQt5.QtCore import QEvent, QPoint, QPointF, QSizeF, Qt, QTimer, pyqtSignal
 from PyQt5.QtGui import QImage, QKeyEvent, QPixmap, QResizeEvent
@@ -15,6 +16,8 @@ from ..state.eye_data_store import FIELDS_BY_ANNOTATION
 from ..utils.image_processing import find_closest_point, fit_ellipse
 from .brightness_controller import BrightnessController
 from .canvas_renderer import AnnotationColors, CanvasGeometry, CanvasRenderer, OverlayStateLookup, SelectionLookup
+from .compare_compose import OVERLAY, compare_layout, compose
+from .compare_features import load_glints, load_results
 from .enhancement_controller import EnhancementController
 from .mouse_drag_state import MouseDragState
 from .zoom_controller import ZoomController
@@ -194,6 +197,24 @@ class ImageViewer(QWidget):
         self.enhancement = EnhancementController()
         self._display_grayscale: np.ndarray | None = None
         self._raw_pixmap: QPixmap | None = None  # as-loaded pixmap, restored when enhancement is off
+
+        # Compare mode: the display becomes a composite of the current image (A)
+        # and an aligned partner (B), so the renderer, zoom and brightness all run
+        # on it unchanged. Alignment is a translation (matched glints or a manual
+        # nudge) plus an optional manual rotation.
+        self._compare_active = False
+        self._compare_b_gray: np.ndarray | None = None
+        self._compare_a_glints: np.ndarray | None = None
+        self._compare_b_glints: np.ndarray | None = None
+        # Each image's saved detections, loaded once on entry: (kind, id, result).
+        self._compare_a_results: list[tuple[str, str, dict]] = []
+        self._compare_b_results: list[tuple[str, str, dict]] = []
+        self._compare_mode = "glints"
+        self._compare_view = OVERLAY
+        self._compare_alpha = 0.5
+        self._compare_diff_colormap = True
+        self._compare_nudge = np.zeros(2)
+        self._compare_rotation = 0.0
 
         # Batch-update gate. Setters call ``update_image()`` to repaint after
         # mutating state; on heavy load paths (apply_loaded_detections,
@@ -968,11 +989,169 @@ class ImageViewer(QWidget):
         unaffected) and reverts to the as-loaded pixmap when inert.
         """
         self._display_grayscale = self.enhancement.apply(self.image_grayscale)
-        if self.enhancement.is_active() and self._display_grayscale is not None:
+        if self._compare_active and self._compare_b_gray is not None:
+            composite = self._compose_compare()
+            self.original_pixmap = self._pixmap_from_array(composite)
+            self._display_grayscale = composite if composite.ndim == 2 else None
+        elif self.enhancement.is_active() and self._display_grayscale is not None:
             self.original_pixmap = self._pixmap_from_gray(self._display_grayscale)
         elif self._raw_pixmap is not None:
             self.original_pixmap = self._raw_pixmap
         self.brightness.rebuild(self.original_pixmap, self._display_grayscale)
+
+    # ---------------------------------------------------------------------------
+    # Compare mode
+    # ---------------------------------------------------------------------------
+
+    def enter_compare(self, a_path: str, b_path: str) -> None:
+        """Show a composite of the current image (A) and its partner ``b_path``.
+
+        The current image must already be ``a_path``. Both images' saved glints
+        (for the matched-glint alignment) and detections (for the overlays) are
+        loaded here from their annotation files.
+        """
+        self._compare_b_gray = cv2.imread(b_path, cv2.IMREAD_GRAYSCALE)
+        a_glints, b_glints = load_glints(a_path), load_glints(b_path)
+        self._compare_a_glints = a_glints if len(a_glints) else None
+        self._compare_b_glints = b_glints if len(b_glints) else None
+        self._compare_a_results = load_results(a_path)
+        self._compare_b_results = load_results(b_path)
+        self._compare_nudge = np.zeros(2)
+        self._compare_rotation = 0.0
+        self._compare_active = True
+        self._refresh_enhanced_display()
+        self.zoom_state.fit_to_viewport(self.scroll_area, self.original_pixmap)
+        self.update_image()
+
+    @property
+    def comparing(self) -> bool:
+        """Whether the viewer is currently showing a compare composite."""
+        return self._compare_active
+
+    def exit_compare(self) -> None:
+        """Leave compare mode and restore the single-image display."""
+        self._compare_active = False
+        self._refresh_enhanced_display()
+        self.zoom_state.fit_to_viewport(self.scroll_area, self.original_pixmap)
+        self.update_image()
+
+    def set_compare_view(self, view: str) -> None:
+        """Select the composite view (Overlay / Diff)."""
+        self._compare_view = view
+        self._repaint_compare()
+
+    def set_compare_alpha(self, alpha: float) -> None:
+        """Set the overlay blend weight for B in [0, 1]."""
+        self._compare_alpha = float(alpha)
+        self._repaint_compare()
+
+    def set_compare_diff_colormap(self, colored: bool) -> None:
+        """Render the Diff view as a warm heatmap (True) or plain grey (False)."""
+        self._compare_diff_colormap = bool(colored)
+        self._repaint_compare()
+
+    def set_compare_mode(self, mode: str) -> None:
+        """Select the alignment: ``glints`` / ``manual`` / ``none``."""
+        self._compare_mode = mode
+        self._repaint_compare()
+
+    def nudge_compare(self, dx: float, dy: float) -> None:
+        """Translate B by ``(dx, dy)`` px in manual alignment."""
+        self._compare_nudge += np.array([dx, dy])
+        self._repaint_compare()
+
+    def rotate_compare(self, degrees: float) -> None:
+        """Rotate B by ``degrees`` about its centre in manual alignment."""
+        self._compare_rotation += degrees
+        self._repaint_compare()
+
+    def _repaint_compare(self) -> None:
+        if not self._compare_active:
+            return
+        self._refresh_enhanced_display()
+        # Views (and nudge / rotate) change the composite, so keep a fit view
+        # fitted; a manually zoomed view keeps its factor.
+        if self.zoom_state.at_fit:
+            self.zoom_state.fit_to_viewport(self.scroll_area, self.original_pixmap)
+        self.update_image()
+
+    def _compare_transform(self) -> np.ndarray:
+        """2x3 affine mapping B onto A for the active alignment."""
+        if (
+            self._compare_mode == "glints"
+            and self._compare_a_glints is not None
+            and self._compare_b_glints is not None
+        ):
+            dx, dy = match_glints(self._compare_a_glints, self._compare_b_glints)
+            return np.array([[1.0, 0.0, dx], [0.0, 1.0, dy]])
+        if self._compare_mode == "manual":
+            height, width = self._compare_b_gray.shape[:2]
+            transform = cv2.getRotationMatrix2D((width / 2.0, height / 2.0), self._compare_rotation, 1.0)
+            transform[:, 2] += self._compare_nudge
+            return transform
+        return np.array([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]])
+
+    def _enhanced(self, grayscale: np.ndarray) -> np.ndarray:
+        """``grayscale`` through the active enhancement, or unchanged when inert."""
+        if self.enhancement.is_active():
+            applied = self.enhancement.apply(grayscale)
+            if applied is not None:
+                return applied
+        return grayscale
+
+    def _compare_a_gray(self) -> np.ndarray:
+        """Image A's grayscale for the composite: the enhanced display, or the raw image."""
+        return self._display_grayscale if self._display_grayscale is not None else self.image_grayscale
+
+    def _compose_compare(self) -> np.ndarray:
+        """Composite the current image (A) and the aligned partner (B) for the active view."""
+        return compose(
+            self._compare_a_gray(),
+            self._enhanced(self._compare_b_gray),
+            self._compare_transform(),
+            self._compare_view,
+            self._compare_alpha,
+            self._compare_diff_colormap,
+        )
+
+    def _compare_layers(self) -> list:
+        """Renderer compare layers: both images' saved overlays at their union offsets.
+
+        The offsets match the union canvas :func:`compose` builds, so annotations
+        land on their pixels; each detection is styled by its detector's shared
+        overlay settings.
+        """
+        _size, a_transform, b_transform = compare_layout(
+            self._compare_a_gray().shape, self._compare_b_gray.shape, self._compare_transform()
+        )
+        return [
+            self._compare_layer(self._compare_a_results, a_transform),
+            self._compare_layer(self._compare_b_results, b_transform),
+        ]
+
+    def _compare_layer(self, results: list, transform: np.ndarray) -> tuple:
+        """One layer ``(transform, [(kind, result, overlay_state), ...])``.
+
+        ``transform`` is the full 2x3 affine placing this image into the union
+        canvas, so annotations follow the image under both nudge and rotation.
+        """
+        drawn = []
+        for kind, detector_id, result in results:
+            overlay_state = self._overlay_state_lookup(kind, detector_id)
+            if overlay_state:
+                drawn.append((kind, result, overlay_state))
+        return (transform, drawn)
+
+    @staticmethod
+    def _pixmap_from_array(arr: np.ndarray) -> QPixmap:
+        """QPixmap from a uint8 array: 2-D grayscale, or 3-D BGR (the heatmap diff)."""
+        if arr.ndim == 2:
+            data = np.ascontiguousarray(arr)
+            height, width = data.shape
+            return QPixmap.fromImage(QImage(data.tobytes(), width, height, width, QImage.Format_Grayscale8))
+        rgb = np.ascontiguousarray(cv2.cvtColor(arr, cv2.COLOR_BGR2RGB))
+        height, width, _ = rgb.shape
+        return QPixmap.fromImage(QImage(rgb.tobytes(), width, height, 3 * width, QImage.Format_RGB888))
 
     def apply_enhancement(self, stages: list, apply_to_detection: bool) -> bool:
         """Set the enhancement pipeline, refresh the display, and repaint.
@@ -1247,12 +1426,14 @@ class ImageViewer(QWidget):
         if self._updates_paused:
             self._update_pending = True
             return
+        in_compare = self._compare_active and self._compare_b_gray is not None
         geometry = CanvasGeometry(
             current_eye=self.current_eye,
             binocular_mode=self.binocular_mode,
             divider_x_image=self._divider_x_image(),
             current_annotation=self.current_annotation,
             selected_point=self.mouse_state.selected_point,
+            compare=self._compare_layers() if in_compare else None,
         )
         pixmap = self.renderer.render(self.original_pixmap, geometry)
         if pixmap is None:

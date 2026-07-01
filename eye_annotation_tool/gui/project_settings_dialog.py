@@ -86,6 +86,10 @@ class ProjectSettingsDialog(QDialog):
         self._auto_detect_checkbox.setChecked(bool(self._project.get("auto_detect_on_load", False)))
         layout.addWidget(self._auto_detect_checkbox)
 
+        self._enable_compare_checkbox = QCheckBox("Enable compare mode (image pairs)")
+        self._enable_compare_checkbox.setChecked(bool(self._project.get("enable_compare", False)))
+        layout.addWidget(self._enable_compare_checkbox)
+
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
@@ -106,5 +110,6 @@ class ProjectSettingsDialog(QDialog):
             "binocular_mode": self._binocular_radio.isChecked(),
             "autosave": self._autosave_checkbox.isChecked(),
             "auto_detect_on_load": self._auto_detect_checkbox.isChecked(),
+            "enable_compare": self._enable_compare_checkbox.isChecked(),
             "detectors": detectors,
         }

@@ -39,7 +39,7 @@ class NavigationController:
         self.load_current_image = load_current_image
         self._dialog_parent = dialog_parent
 
-    def _handle_unsaved_before_switch(self) -> bool:
+    def handle_unsaved_before_switch(self) -> bool:
         """Save / prompt / cancel based on autosave; return True to proceed with the switch.
 
         When autosave is enabled, every navigation persists the current image
@@ -78,7 +78,7 @@ class NavigationController:
         if current is None or current not in ordered:
             return
         pos = ordered.index(current)
-        if pos < len(ordered) - 1 and self._handle_unsaved_before_switch():
+        if pos < len(ordered) - 1 and self.handle_unsaved_before_switch():
             self._switch_to(ordered[pos + 1])
 
     def prev_image(self) -> None:
@@ -88,7 +88,7 @@ class NavigationController:
         if current is None or current not in ordered:
             return
         pos = ordered.index(current)
-        if pos > 0 and self._handle_unsaved_before_switch():
+        if pos > 0 and self.handle_unsaved_before_switch():
             self._switch_to(ordered[pos - 1])
 
     def on_image_selected(self, path: str) -> None:
@@ -99,7 +99,7 @@ class NavigationController:
         index = paths.index(path)
         if index == self.session.current_image_index:
             return
-        if not self._handle_unsaved_before_switch():
+        if not self.handle_unsaved_before_switch():
             # Revert the tree's highlight to the image that's actually loaded.
             current = self._current_path()
             if current is not None:

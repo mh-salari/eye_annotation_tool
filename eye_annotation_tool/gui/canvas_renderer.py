@@ -16,7 +16,7 @@ from dataclasses import dataclass
 
 import numpy as np
 from PyQt5.QtCore import QPointF, QSizeF, Qt
-from PyQt5.QtGui import QColor, QPainter, QPen, QPixmap, QPolygonF
+from PyQt5.QtGui import QColor, QPainter, QPen, QPixmap, QPolygonF, QTransform
 
 from ..state import EyeDataStore, OverlayStore, TargetRoiStore
 from ..utils.project_settings import DETECTOR_MANUAL, DETECTOR_OFF
@@ -79,6 +79,11 @@ class CanvasGeometry:
     divider_x_image: float
     current_annotation: str
     selected_point: QPointF | None
+    # Compare mode: a list of ``(transform, results)`` layers, one per paired
+    # image, where ``transform`` is the 2x3 affine into the union canvas and each
+    # result is ``(kind, result, overlay_state)``. When set, the renderer draws
+    # only these layers (no manual points, divider, ROI or dim).
+    compare: list | None = None
 
 
 _POINT_FIELD_BY_ANNOTATION: dict[str, str] = {
@@ -156,6 +161,11 @@ class CanvasRenderer:
         canvas.fill(Qt.transparent)
         painter = QPainter(canvas)
         painter.drawPixmap(0, 0, scaled_pixmap)
+
+        if geometry.compare is not None:
+            self._draw_compare(painter, geometry.compare)
+            painter.end()
+            return canvas
 
         self._draw_eye_annotations(painter, "left", geometry)
         if geometry.binocular_mode:
@@ -386,6 +396,38 @@ class CanvasRenderer:
         return overlay_state.get(key)
 
     # ---------------------------------------------------------------------------
+    # Compare mode: both paired images' saved detections at their union offsets
+    # ---------------------------------------------------------------------------
+
+    def _draw_compare(self, painter: QPainter, layers: list) -> None:
+        """Paint each paired image's saved detections, transformed into the union canvas.
+
+        Each layer is ``(transform, results)`` where ``transform`` is the 2x3
+        affine placing that image into the union canvas. The overlay primitives
+        scale image coordinates by the zoom factor, so the painter transform
+        applies the affine's linear part and the zoom-scaled translation — image
+        and annotations move together under both nudge and rotation.
+        """
+        for transform, results in layers:
+            painter.save()
+            painter.setTransform(self._compare_qtransform(transform), combine=True)
+            for kind, result, overlay_state in results:
+                self._draw_one_result(painter, kind, result, overlay_state)
+            painter.restore()
+
+    def _compare_qtransform(self, transform: np.ndarray) -> QTransform:
+        """The 2x3 affine as a painter transform that composes with the per-point zoom.
+
+        A primitive draws point ``p`` at ``p * zoom``; this maps that to
+        ``zoom * (M @ p)`` — so the linear part of ``M`` is applied as-is and only
+        the translation is scaled by the zoom factor.
+        """
+        a, b, tx = transform[0]
+        c, d, ty = transform[1]
+        z = self.zoom.factor
+        return QTransform(float(a), float(c), float(b), float(d), float(tx) * z, float(ty) * z)
+
+    # ---------------------------------------------------------------------------
     # Auto Detect overlays — generic walk over result + overlay-state
     # ---------------------------------------------------------------------------
 
@@ -410,6 +452,10 @@ class CanvasRenderer:
         """Walk one detection result and paint each overlay key the user has visible."""
         if "glints" in result and isinstance(result["glints"], list):
             self._draw_glint_list(painter, result["glints"], overlay_state)
+            return
+
+        if isinstance(result.get("points"), list):
+            self._draw_point_list(painter, result["points"], overlay_state)
             return
 
         for key, entry in overlay_state.items():
@@ -437,7 +483,13 @@ class CanvasRenderer:
             if key == "contour":
                 self._draw_contour(painter, value, color, thickness, style)
             elif key == "ellipse":
-                self._draw_ellipse_outline(painter, value, color, thickness, style)
+                # A manual overlay has no separate "contour" key, so draw the real
+                # saved contour here; auto detectors own a "contour" overlay and
+                # keep the fitted ellipse.
+                if "contour" not in overlay_state and self._contour_to_points(result.get("contour")) is not None:
+                    self._draw_contour(painter, result["contour"], color, thickness, style)
+                else:
+                    self._draw_ellipse_outline(painter, value, color, thickness, style)
             elif key == "center":
                 self._draw_point(painter, value, color, thickness)
             elif key == "curve":
@@ -464,13 +516,28 @@ class CanvasRenderer:
                     if contour is not None:
                         self._draw_fill_polygon(painter, contour, color)
                     continue
-                value = g.get(key)
-                if value is None:
+                # A point-type overlay marks the glint centre — whether its key is
+                # the auto detector's "center" or the manual annotation's "points".
+                if elem_type == "point":
+                    center = g.get("center")
+                    if center is not None:
+                        self._draw_point(painter, center, color, thickness)
                     continue
-                if key == "contour":
+                value = g.get(key)
+                if value is not None and key == "contour":
                     self._draw_contour(painter, value, color, thickness)
-                elif key == "center":
-                    self._draw_point(painter, value, color, thickness)
+
+    def _draw_point_list(self, painter: QPainter, points: list, overlay_state: dict[str, dict]) -> None:
+        """Render a point list (e.g. manual Purkinje IV ``[{"center": [x, y]}, ...]``)."""
+        entry = overlay_state.get("points")
+        if entry is None or not entry.get("show", True):
+            return
+        color = self._with_alpha(entry["color"], float(entry.get("alpha", 1.0)))
+        thickness = int(entry.get("thickness", 1) or 1)
+        for point in points:
+            center = point.get("center") if isinstance(point, dict) else point
+            if center is not None:
+                self._draw_point(painter, center, color, thickness)
 
     # ----- low-level primitives -----
 

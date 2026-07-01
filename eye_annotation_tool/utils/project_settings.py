@@ -147,7 +147,9 @@ def default_project() -> dict:
         "divider_x_norm": DEFAULT_DIVIDER_X_NORM,
         "autosave": False,
         "auto_detect_on_load": False,
+        "enable_compare": False,
         "detectors": {kind: _default_detector_entry(kind) for kind in KINDS},
+        "pairs": [],
     }
 
 
@@ -169,9 +171,12 @@ def load_project(project_path: str | Path) -> dict:
     _reject_legacy_schema(loaded, path)
     detectors_in = loaded.pop("detectors", None)
     images_in = loaded.pop("images", None)
+    pairs_in = loaded.pop("pairs", None)
     project.update(loaded)
     if isinstance(images_in, dict):
         project["images"] = _parse_images(images_in)
+    if pairs_in is not None:
+        project["pairs"] = _parse_pairs(pairs_in)
     if isinstance(detectors_in, dict):
         for kind in KINDS:
             entry = detectors_in.get(kind)
@@ -213,6 +218,17 @@ def _parse_images(images_in: dict) -> dict:
             if isinstance(divider, (int, float)):
                 per_image["divider_x_norm"] = float(divider)
         out[key] = per_image
+    return out
+
+
+def _parse_pairs(pairs_in: object) -> list[list[str]]:
+    """Normalise the compare-``pairs`` list: keep well-formed ``[path_a, path_b]`` string pairs."""
+    out: list[list[str]] = []
+    if not isinstance(pairs_in, list):
+        return out
+    for entry in pairs_in:
+        if isinstance(entry, (list, tuple)) and len(entry) == 2 and all(isinstance(p, str) for p in entry):
+            out.append([entry[0], entry[1]])
     return out
 
 

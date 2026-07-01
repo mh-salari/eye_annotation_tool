@@ -38,13 +38,12 @@ class ShortcutHandler:
         save_shortcut = QShortcut(QKeySequence.Save, self.main_window)
         save_shortcut.activated.connect(self.main_window.annotation_controller.save_annotations)
 
-        # Next image shortcut
-        next_image_shortcut = QShortcut(QKeySequence(Qt.Key_Right), self.main_window)
-        next_image_shortcut.activated.connect(self.main_window.navigation_controller.next_image)
+        # j / k step forward / back: next pair while comparing, else next image.
+        next_image_shortcut = QShortcut(QKeySequence(Qt.Key_J), self.main_window)
+        next_image_shortcut.activated.connect(self.main_window.navigate_next)
 
-        # Previous image shortcut
-        prev_image_shortcut = QShortcut(QKeySequence(Qt.Key_Left), self.main_window)
-        prev_image_shortcut.activated.connect(self.main_window.navigation_controller.prev_image)
+        prev_image_shortcut = QShortcut(QKeySequence(Qt.Key_K), self.main_window)
+        prev_image_shortcut.activated.connect(self.main_window.navigate_prev)
 
         # Toggle between pupil and limbus
         toggle_shortcut = QShortcut(QKeySequence(Qt.Key_Tab), self.main_window)

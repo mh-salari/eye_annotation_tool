@@ -42,12 +42,16 @@ from ..utils.project_settings import (
 )
 from .about_dialog import show_about_dialog
 from .annotation_controls import AnnotationControlPanel
+from .collapsible import CollapsibleSection
+from .compare_controls import CompareControls
 from .custom_widgets import MaterialButton
 from .dialogs import confirm, show_error
 from .image_tree import ImageTree
 from .image_viewer import ImageViewer
 from .menu_handler import MenuHandler
 from .new_project_dialog import NewProjectDialog
+from .pair_strip import PairStrip
+from .pairs_panel import PairsPanel
 from .project_settings_dialog import ProjectSettingsDialog
 from .shortcut_handler import ShortcutHandler
 from .theme import theme
@@ -175,6 +179,13 @@ class MainWindow(QMainWindow):
         self.detection_controller.undo_coordinator = self.undo_coordinator
         # In-app clipboard for copy/paste of detector settings (current eye).
         self._settings_clipboard: dict | None = None
+        # Independent view settings (zoom / brightness / enhancement) for the two
+        # modes: annotating a single image vs comparing a pair. Switching modes
+        # saves the current mode's and applies the other's.
+        self._view_settings: dict[str, dict | None] = {"annotation": None, "comparison": None}
+        # The pairs-list index of the open pair, so prev/next can step through
+        # pairs while comparing instead of through the image list.
+        self._current_pair_index = -1
 
         self.binocular_controller = BinocularController(
             self.image_viewer,
@@ -283,7 +294,11 @@ class MainWindow(QMainWindow):
         left_layout.addWidget(self.autosave_checkbox)
         left_layout.addWidget(self.auto_detect_checkbox)
 
-        # Image list header: title plus expand-all / collapse-all controls.
+        # Image list header (title + expand-all / collapse-all) sits with the tree
+        # so the splitter resizes them as one pane.
+        tree_container = QWidget()
+        tree_box = QVBoxLayout(tree_container)
+        tree_box.setContentsMargins(0, 0, 0, 0)
         tree_header = QHBoxLayout()
         tree_header.setContentsMargins(0, 0, 0, 0)
         tree_header.addWidget(QLabel("Loaded Images:"))
@@ -298,11 +313,26 @@ class MainWindow(QMainWindow):
         self.collapse_all_button.setToolTip("Collapse all folders")
         tree_header.addWidget(self.expand_all_button)
         tree_header.addWidget(self.collapse_all_button)
-        left_layout.addLayout(tree_header)
-
-        # The tree takes the stretch so it fills the panel's vertical space.
+        tree_box.addLayout(tree_header)
         self.image_tree = ImageTree()
-        left_layout.addWidget(self.image_tree, 1)
+        tree_box.addWidget(self.image_tree)
+
+        # Vertical splitter so the image tree and compare-pairs list are drag-resizable.
+        self.pairs_panel = PairsPanel()
+        lists_splitter = QSplitter(Qt.Vertical)
+        lists_splitter.addWidget(tree_container)
+        lists_splitter.addWidget(self.pairs_panel)
+        lists_splitter.setStretchFactor(0, 3)
+        lists_splitter.setStretchFactor(1, 1)
+        lists_splitter.setChildrenCollapsible(False)
+        lists_splitter.setHandleWidth(8)
+        # A centred grip so the divider reads as draggable (Qt's default handle is
+        # an invisible thin line in the dark theme).
+        lists_splitter.setStyleSheet(
+            "QSplitter::handle:vertical { margin: 2px 24px; border-radius: 2px; background: palette(mid); }"
+            "QSplitter::handle:vertical:hover { background: palette(light); }"
+        )
+        left_layout.addWidget(lists_splitter, 1)
 
         icon_colour = theme.color("icon")
         icon_size = QSize(20, 20)
@@ -340,8 +370,11 @@ class MainWindow(QMainWindow):
         # Image enhancement: a composable pipeline (denoise -> contrast ->
         # sharpen). Each method has an enable checkbox + a slider for its main
         # param; enabled stages feed the display, and the detector too when
-        # "Apply to detection" is ticked.
-        left_layout.addWidget(QLabel("Enhance"))
+        # "Apply to detection" is ticked. Collapsed by default so it does not
+        # crowd the lists on small screens.
+        enhance_body = QWidget()
+        enhance_layout = QVBoxLayout(enhance_body)
+        enhance_layout.setContentsMargins(0, 0, 0, 0)
         self._enhance_checks: dict[str, QCheckBox] = {}
         self._enhance_sliders: dict[str, QSlider] = {}
         for method, label, smin, smax, sdef, _params_fn, _slider_fn in _ENHANCE_SPECS:
@@ -354,7 +387,7 @@ class MainWindow(QMainWindow):
             slider.setToolTip(f"{label} strength")
             row.addWidget(check)
             row.addWidget(slider, 1)
-            left_layout.addLayout(row)
+            enhance_layout.addLayout(row)
             self._enhance_checks[method] = check
             self._enhance_sliders[method] = slider
             check.toggled.connect(self._on_enhancement_changed)
@@ -362,7 +395,10 @@ class MainWindow(QMainWindow):
         self.enhance_detect_check = QCheckBox("Apply to detection")
         self.enhance_detect_check.setToolTip("Also run the detector on the enhanced image")
         self.enhance_detect_check.toggled.connect(self._on_enhancement_changed)
-        left_layout.addWidget(self.enhance_detect_check)
+        enhance_layout.addWidget(self.enhance_detect_check)
+        enhance_section = CollapsibleSection("Enhance", expanded=False)
+        enhance_section.add_widget(enhance_body)
+        left_layout.addWidget(enhance_section)
         left_panel.setLayout(left_layout)
 
         self.zoom_reset_button.clicked.connect(self._on_zoom_reset_clicked)
@@ -434,20 +470,55 @@ class MainWindow(QMainWindow):
         visible regardless of how tall the panel contents grow.
         """
         self.annotation_controls = AnnotationControlPanel(self._detectors_by_kind)
-        right_scroll = QScrollArea()
-        right_scroll.setWidget(self.annotation_controls)
-        right_scroll.setWidgetResizable(True)
-        right_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        right_scroll.setFrameShape(QScrollArea.NoFrame)
+        self.right_scroll = QScrollArea()
+        self.right_scroll.setWidget(self.annotation_controls)
+        self.right_scroll.setWidgetResizable(True)
+        self.right_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.right_scroll.setFrameShape(QScrollArea.NoFrame)
+
+        # Compare header replaces the cards while a pair is open.
+        self.compare_controls = CompareControls(self.image_viewer)
+        self.compare_controls.setVisible(False)
+        # Pair strip sits above the cards while annotating an image that belongs
+        # to a pair, so the user can jump to the other image or back to Compare.
+        self.pair_strip = PairStrip()
+        self.pair_strip.setVisible(False)
 
         right_panel = QWidget()
         right_layout = QVBoxLayout()
         right_layout.setContentsMargins(0, 0, 0, 0)
-        right_layout.addWidget(right_scroll, 1)
+        right_layout.addWidget(self.compare_controls)
+        right_layout.addWidget(self.pair_strip)
+        right_layout.addWidget(self.right_scroll, 1)
         right_layout.addWidget(self.annotation_controls.clear_all_button)
         right_panel.setLayout(right_layout)
         right_panel.setFixedWidth(360)  # 340 panel + room for the vertical scrollbar
         return right_panel
+
+    def _set_compare_ui(self, on: bool) -> None:
+        """Show the Compare header instead of the annotation cards while a pair is open."""
+        self.compare_controls.setVisible(on)
+        self.right_scroll.setVisible(not on)
+        self.annotation_controls.clear_all_button.setVisible(not on)
+        self._update_pair_strip()
+
+    def _update_pair_strip(self) -> None:
+        """Show the pair strip when annotating an image whose pair is usable.
+
+        Hidden unless compare is enabled, the current image is in a pair, and both
+        of that pair's images are still in the project (so the buttons all work).
+        """
+        current = self._current_image_path()
+        enabled = bool(self.project_store.project.get("enable_compare", False))
+        pair = next(
+            (p for p in self.pairs_panel.pairs() if current in p and all(x in self.image_paths for x in p)),
+            None,
+        )
+        if not enabled or pair is None or self.image_viewer.comparing:
+            self.pair_strip.setVisible(False)
+            return
+        self.pair_strip.set_pair(pair[0], pair[1], current)
+        self.pair_strip.setVisible(True)
 
     @property
     def image_paths(self) -> list[str]:
@@ -531,10 +602,16 @@ class MainWindow(QMainWindow):
 
     def connect_signals(self) -> None:
         """Connect signals and slots for UI components."""
+        self.pairs_panel.add_requested.connect(self._on_add_pair)
+        self.pairs_panel.open_requested.connect(self._on_open_pair)
+        self.pairs_panel.pairs_changed.connect(self._on_pairs_changed)
+        self.compare_controls.open_image_requested.connect(self._open_image_from_compare)
+        self.pair_strip.open_image_requested.connect(self._open_image_from_compare)
+        self.pair_strip.open_compare_requested.connect(self._on_open_pair)
         self.load_images_button.clicked.connect(self.on_load_images_clicked)
         self.load_folder_button.clicked.connect(self.on_load_folder_clicked)
-        self.prev_image_button.clicked.connect(self.navigation_controller.prev_image)
-        self.next_image_button.clicked.connect(self.navigation_controller.next_image)
+        self.prev_image_button.clicked.connect(self.navigate_prev)
+        self.next_image_button.clicked.connect(self.navigate_next)
         self.save_annotations_button.clicked.connect(self.annotation_controller.save_annotations)
         self.expand_all_button.clicked.connect(self.image_tree.expandAll)
         self.collapse_all_button.clicked.connect(self.image_tree.collapseAll)
@@ -769,6 +846,8 @@ class MainWindow(QMainWindow):
         self.binocular_controller.apply_mode(self.project_store.binocular_mode)
         self.image_viewer.set_divider_x_norm(self.binocular_controller.effective_divider_x_norm())
         self.detection_controller.apply_project_settings(project.get("detectors", {}))
+        self.pairs_panel.set_pairs(project.get("pairs", []))
+        self.pairs_panel.setVisible(bool(project.get("enable_compare", False)))
         self._restore_enhancement(project.get("enhancement"))
         self.autosave_checkbox.blockSignals(True)
         self.autosave_checkbox.setChecked(self.project_store.autosave)
@@ -899,8 +978,90 @@ class MainWindow(QMainWindow):
         if 0 <= self.session.current_image_index < len(self.image_paths):
             self.image_tree.select_path(self.image_paths[self.session.current_image_index])
 
+    def _on_add_pair(self) -> None:
+        """Pair the two images currently selected in the image list."""
+        selected = self.image_tree.selected_image_paths()
+        if len(selected) != 2:
+            self.statusBar().showMessage("Select exactly two images in the list to pair them.", 3000)
+            return
+        self.pairs_panel.add_pair(selected[0], selected[1])
+
+    def _on_open_pair(self, path_a: str, path_b: str) -> None:
+        """Open a pair: load A as the current image, composite B onto it, show the controls."""
+        if path_a not in self.image_paths or path_b not in self.image_paths:
+            self.statusBar().showMessage("Both paired images must be in the project to compare them.", 3000)
+            return
+        # Persist (or prompt for) the current image's edits before switching, since
+        # opening a pair reloads image A over whatever is in memory.
+        if not self.navigation_controller.handle_unsaved_before_switch():
+            return
+        pairs = self.pairs_panel.pairs()
+        self._current_pair_index = next(
+            (i for i, (a, b) in enumerate(pairs) if a == path_a and b == path_b), self._current_pair_index
+        )
+        # Entering comparison from annotation: keep the annotation view settings.
+        if not self.image_viewer.comparing:
+            self._view_settings["annotation"] = self._capture_view_settings()
+        self.session.current_image_index = self.image_paths.index(path_a)
+        # Track the open pair in the pairs tree, not the image tree — stepping
+        # through pairs should not drag the Loaded Images selection around.
+        self.pairs_panel.select_pair(path_a, path_b)
+        self.load_current_image()  # loads A in the normal view (and leaves any prior compare)
+        self.image_viewer.enter_compare(path_a, path_b)
+        self.compare_controls.set_pair(path_a, path_b)
+        self._set_compare_ui(True)
+        # Apply comparison's own view settings, seeding them from the fitted
+        # composite the first time (and syncing the sliders to the composite fit).
+        if self._view_settings["comparison"] is None:
+            self._view_settings["comparison"] = self._capture_view_settings()
+            self._sync_zoom_slider_to_viewer()
+            self._sync_brightness_slider_to_viewer()
+        else:
+            self._apply_view_settings(self._view_settings["comparison"])
+
+    def navigate_next(self) -> None:
+        """Next pair while comparing, otherwise the next image."""
+        if self.image_viewer.comparing:
+            self._open_pair_at_offset(1)
+        else:
+            self.navigation_controller.next_image()
+
+    def navigate_prev(self) -> None:
+        """Previous pair while comparing, otherwise the previous image."""
+        if self.image_viewer.comparing:
+            self._open_pair_at_offset(-1)
+        else:
+            self.navigation_controller.prev_image()
+
+    def _open_pair_at_offset(self, delta: int) -> None:
+        """Open the pair ``delta`` positions from the current one (clamped to the list)."""
+        pairs = self.pairs_panel.pairs()
+        if not pairs:
+            return
+        index = max(0, min(len(pairs) - 1, self._current_pair_index + delta))
+        if index != self._current_pair_index:
+            self._on_open_pair(*pairs[index])
+
+    def _open_image_from_compare(self, path: str) -> None:
+        """Open a paired image in the normal annotation view (leaving Compare)."""
+        if path not in self.image_paths or not self.navigation_controller.handle_unsaved_before_switch():
+            return
+        self.session.current_image_index = self.image_paths.index(path)
+        self.refresh_image_tree()
+        self.load_current_image()
+
+    def _on_pairs_changed(self) -> None:
+        """Persist the edited pairs list to the project."""
+        self.project_store.project["pairs"] = self.pairs_panel.pairs()
+        self.project_store.persist()
+
     def load_current_image(self) -> None:
         """Load and display the current image with its annotations."""
+        leaving_compare = self.image_viewer.comparing
+        if leaving_compare:
+            self._view_settings["comparison"] = self._capture_view_settings()
+            self.image_viewer.exit_compare()
+        self._set_compare_ui(False)
         if 0 <= self.session.current_image_index < len(self.image_paths):
             image_path = self.image_paths[self.session.current_image_index]
             if self.image_viewer.load_image(image_path):
@@ -914,6 +1075,9 @@ class MainWindow(QMainWindow):
         else:
             self.image_viewer.set_image_path_text("")
             self.undo_coordinator.reset()
+        # Returning to annotation: restore that mode's saved view settings.
+        if leaving_compare and self._view_settings["annotation"] is not None:
+            self._apply_view_settings(self._view_settings["annotation"])
 
     def _relative_image_path(self, image_path: str) -> str:
         """Path of ``image_path`` relative to the project folder, or absolute if outside it."""
@@ -1005,6 +1169,26 @@ class MainWindow(QMainWindow):
         self.brightness_slider.blockSignals(True)
         self.brightness_slider.setValue(slider_value)
         self.brightness_slider.blockSignals(False)
+
+    def _capture_view_settings(self) -> dict:
+        """Snapshot the current mode's zoom / brightness / enhancement view settings."""
+        return {
+            "zoom": self.image_viewer.zoom_state.factor,
+            "at_fit": self.image_viewer.zoom_state.at_fit,
+            "brightness": self.image_viewer.brightness.factor,
+            "enhancement": self.image_viewer.enhancement.to_dict(),
+        }
+
+    def _apply_view_settings(self, settings: dict) -> None:
+        """Apply a saved view-settings snapshot and sync the sliders + enhancement controls."""
+        self._restore_enhancement(settings["enhancement"])
+        self.image_viewer.set_brightness_factor(settings["brightness"])
+        self._sync_brightness_slider_to_viewer()
+        if settings["at_fit"]:
+            self.image_viewer.reset_zoom_to_fit()
+        else:
+            self.image_viewer.set_zoom_factor(settings["zoom"])
+        self._sync_zoom_slider_to_viewer()
 
     def _on_clear_all(self) -> None:
         """Wipe every manual annotation AND every detection result on the current image."""

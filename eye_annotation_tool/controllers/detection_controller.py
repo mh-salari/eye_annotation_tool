@@ -464,10 +464,9 @@ class DetectionController(QObject):
         self.project_store.persist()
         self.status_message.emit(f"{kind.capitalize()} default saved.", 3000)
 
-    def _on_overlay_changed(self, kind: str, _key: str, _field: str, _value: object) -> None:
-        # Overlays are a project-level display preference: persist the change to
-        # the project immediately, then repaint to reflect it.
-        self._persist_overlays(kind)
+    def _on_overlay_changed(self, _kind: str, _key: str, _field: str, _value: object) -> None:
+        # Overlay edits are not autosaved; they persist with the project on
+        # Save Project (Cmd+Shift+S). Repaint to reflect the change live.
         self.image_viewer.update_image()
 
     # ---------------------------------------------------------------------------
