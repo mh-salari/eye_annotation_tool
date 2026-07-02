@@ -82,5 +82,4 @@ class TargetRoiStore:
         """Yield ``(target, slot, roi)`` for every stored rectangle."""
         for target, by_slot in self.rois.items():
             for slot, roi in by_slot.items():
-                if roi is not None:
-                    yield target, slot, roi
+                yield target, slot, roi

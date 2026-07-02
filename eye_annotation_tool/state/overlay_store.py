@@ -54,5 +54,4 @@ class OverlayStore:
         """
         for target, by_slot in self.overlays.items():
             for slot, result in by_slot.items():
-                if result is not None:
-                    yield target, slot, result
+                yield target, slot, result
