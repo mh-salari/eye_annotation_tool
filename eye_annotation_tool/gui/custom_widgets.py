@@ -174,7 +174,7 @@ class AnnotationGroup(QWidget):
 
     def set_manual_params(self, params: dict) -> None:
         """Apply saved manual fit settings without re-emitting ``params_changed``."""
-        if not self.has_fit or not isinstance(params, dict):
+        if not self.has_fit:
             return
         for widget in (self.mode_combo, self.center_combo, self.smooth_slider):
             widget.blockSignals(True)
