@@ -519,8 +519,9 @@ class MainWindow(QMainWindow):
         if not enabled or pair is None:
             self.pair_strip.setVisible(False)
             return
-        loaded = "" if self.image_viewer.comparing else current
-        self.pair_strip.set_pair(pair[0], pair[1], loaded)
+        comparing = self.image_viewer.comparing
+        loaded = "" if comparing else current
+        self.pair_strip.set_pair(pair[0], pair[1], loaded, comparing=comparing)
         self.pair_strip.setVisible(True)
 
     @property

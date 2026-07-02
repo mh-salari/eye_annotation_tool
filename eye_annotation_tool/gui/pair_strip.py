@@ -41,10 +41,12 @@ class PairStrip(QWidget):
         box.addWidget(self.compare_button)
         box.addStretch(1)
 
-    def set_pair(self, path_a: str, path_b: str, current: str = "") -> None:
-        """Show the pair; the button for ``current`` (the loaded image) is disabled.
+    def set_pair(self, path_a: str, path_b: str, current: str = "", *, comparing: bool = False) -> None:
+        """Show the pair; disable the button for the place you already are.
 
-        Pass no ``current`` (compare mode shows both images) to keep A and B enabled.
+        In the annotation view ``current`` is the loaded image, whose A / B button is
+        disabled. In compare mode pass ``comparing=True`` (and no ``current``): A and
+        B stay enabled and the Compare button is disabled instead.
         """
         self._path_a = path_a
         self._path_b = path_b
@@ -52,3 +54,4 @@ class PairStrip(QWidget):
         self.b_button.setToolTip(Path(path_b).name)
         self.a_button.setEnabled(current != path_a)
         self.b_button.setEnabled(current != path_b)
+        self.compare_button.setEnabled(not comparing)
