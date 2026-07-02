@@ -41,6 +41,11 @@ eye_annotation_tool = "eye_annotation_tool.main:run_app"
 requires = ["hatchling", "hatch-vcs"]
 build-backend = "hatchling.build"
 
+# Local dev override: use the in-tree cheshm (has the `enhance` module not yet on
+# PyPI). Remove this block at release time to fall back to the published cheshm.
+[tool.uv.sources]
+cheshm = { path = "../cheshm", editable = true }
+
 [dependency-groups]
 dev = [
     "ruff>=0.15.13",
@@ -159,6 +164,7 @@ lint.ignore = [
     "EM101", # Flake8-errmsg - Exception must not use a string literal, assign to variable first
     "EM102", # Flake8-errmsg - Exception must not use an f-string literal, assign to variable first
     "D401", # Pydocstyle - First line of docstring should be in imperative mood
+    "D107", # Pydocstyle - Missing docstring in `__init__` (the class docstring covers it)
 ]
 
 [tool.ruff.lint.per-file-ignores]
