@@ -45,7 +45,7 @@ class AnnotationController:
         self._dialog_parent = dialog_parent
 
     def save_annotations(self) -> None:
-        """Save the current image's annotation file (interactive entry point)."""
+        """No-arg slot for the Save button/shortcut; saves without the ``silent`` flag."""
         self.save_current_annotations()
 
     def save_current_annotations(self, silent: bool = False) -> None:
