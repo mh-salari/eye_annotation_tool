@@ -40,7 +40,6 @@ class AnnotationGroup(QWidget):
     points_active_toggled = pyqtSignal(bool)
     delete_active_toggled = pyqtSignal(bool)
     fit_requested = pyqtSignal()
-    clear_requested = pyqtSignal()
     params_changed = pyqtSignal()  # manual fit mode / centre method / harmonics changed
     max_points_changed = pyqtSignal(int)  # point-cap kinds: per-project max-points value changed
 
@@ -96,23 +95,16 @@ class AnnotationGroup(QWidget):
         if self.point_cap:
             self._build_point_cap_control(layout)
 
-        button_layout = QHBoxLayout()
-        button_layout.setSpacing(4)
-
         if self.has_fit:
-            self.fit_button = QPushButton(qta.icon("mdi6.ellipse-outline", color=theme.color("icon")), " fit")
+            button_layout = QHBoxLayout()
+            button_layout.setSpacing(4)
+            self.fit_button = QPushButton("fit")
             self.fit_button.setToolTip("Fit ellipse / curve to the points")
             self.fit_button.clicked.connect(self.fit_requested.emit)
             button_layout.addWidget(self.fit_button)
+            button_layout.addStretch()
+            layout.addLayout(button_layout)
 
-        self.clear_button = QPushButton(qta.icon("mdi6.eraser", color=theme.color("icon")), " clear")
-        self.clear_button.setToolTip("Clear all points")
-        self.clear_button.clicked.connect(self.clear_requested.emit)
-        button_layout.addWidget(self.clear_button)
-
-        button_layout.addStretch()
-
-        layout.addLayout(button_layout)
         self.setLayout(layout)
 
     # Smoothness slider (0..100) maps to the spline penalty; squared for fine
