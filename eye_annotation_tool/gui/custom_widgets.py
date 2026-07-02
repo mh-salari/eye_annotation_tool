@@ -81,7 +81,7 @@ class AnnotationGroup(QWidget):
         self.points_button.setToolTip("Add points: click to place, drag to move")
         self.points_button.toggled.connect(self.points_active_toggled.emit)
         mode_row.addWidget(self.points_button)
-        self.delete_button = QPushButton(qta.icon("mdi6.trash-can-outline", color=theme.color("icon")), "")
+        self.delete_button = QPushButton(qta.icon("mdi6.trash-can-outline", color=theme.color("icon")), " delete")
         self.delete_button.setCheckable(True)
         self.delete_button.setToolTip("Delete points: click a point to remove it")
         # When armed, the destructive mode reads red rather than the usual accent.
@@ -100,13 +100,13 @@ class AnnotationGroup(QWidget):
         button_layout.setSpacing(4)
 
         if self.has_fit:
-            self.fit_button = QPushButton(qta.icon("mdi6.vector-ellipse", color=theme.color("icon")), "")
-            self.fit_button.setToolTip("Fit")
+            self.fit_button = QPushButton(qta.icon("mdi6.ellipse-outline", color=theme.color("icon")), " fit")
+            self.fit_button.setToolTip("Fit ellipse / curve to the points")
             self.fit_button.clicked.connect(self.fit_requested.emit)
             button_layout.addWidget(self.fit_button)
 
-        self.clear_button = QPushButton(qta.icon("mdi6.eraser", color=theme.color("icon")), "")
-        self.clear_button.setToolTip("Clear")
+        self.clear_button = QPushButton(qta.icon("mdi6.eraser", color=theme.color("icon")), " clear")
+        self.clear_button.setToolTip("Clear all points")
         self.clear_button.clicked.connect(self.clear_requested.emit)
         button_layout.addWidget(self.clear_button)
 
