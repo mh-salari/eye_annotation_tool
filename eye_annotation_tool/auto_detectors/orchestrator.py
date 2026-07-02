@@ -181,4 +181,4 @@ class DetectorOrchestrator(QObject):
         return positional
 
 
-__all__ = ["KINDS", "DetectorOrchestrator"]
+__all__ = ["DetectorOrchestrator"]
