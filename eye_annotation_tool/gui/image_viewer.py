@@ -1167,29 +1167,27 @@ class ImageViewer(QWidget):
         self.update_image()
         return (before[1] or after[1]) and before != after
 
-    def brighten_display(self) -> None:
-        """Multiply the displayed grayscale by the brightness step."""
-        if self.brightness.brighten():
+    def _apply_brightness_change(self, changed: bool) -> None:
+        """Rebuild the cached brightness pixmap and repaint when the factor changed."""
+        if changed:
             self.brightness.rebuild(self.original_pixmap, self._display_grayscale)
             self.update_image()
+
+    def brighten_display(self) -> None:
+        """Multiply the displayed grayscale by the brightness step."""
+        self._apply_brightness_change(self.brightness.brighten())
 
     def darken_display(self) -> None:
         """Divide the displayed grayscale by the brightness step."""
-        if self.brightness.darken():
-            self.brightness.rebuild(self.original_pixmap, self._display_grayscale)
-            self.update_image()
+        self._apply_brightness_change(self.brightness.darken())
 
     def reset_display_brightness(self) -> None:
         """Restore the displayed grayscale to its source values."""
-        if self.brightness.reset():
-            self.brightness.rebuild(self.original_pixmap, self._display_grayscale)
-            self.update_image()
+        self._apply_brightness_change(self.brightness.reset())
 
     def set_brightness_factor(self, factor: float) -> None:
         """Set the brightness factor directly (clamped to the controller's range)."""
-        if self.brightness.set_factor(float(factor)):
-            self.brightness.rebuild(self.original_pixmap, self._display_grayscale)
-            self.update_image()
+        self._apply_brightness_change(self.brightness.set_factor(float(factor)))
 
     def get_current_image_grayscale(self) -> np.ndarray | None:
         """Return the grayscale the detector should consume.
