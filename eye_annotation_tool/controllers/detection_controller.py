@@ -135,7 +135,6 @@ class DetectionController(QObject):
             (d.kind, d.name): d for d in discover_plugins()
         }
 
-        self._pending_run_one: tuple[str, dict] | None = None
         self._auto_detect_debounce = QTimer(self)
         self._auto_detect_debounce.setSingleShot(True)
         self._auto_detect_debounce.setInterval(AUTO_DETECT_DEBOUNCE_MS)
@@ -383,7 +382,7 @@ class DetectionController(QObject):
         # active detector changed; each detector keeps its own overlays.
         self._persist_overlays(kind)
         self.annotation_modified.emit(True)
-        self._kick_live_run(kind)
+        self._kick_live_run_for_all_enabled()
         # A detector-type switch is a discrete edit: record it on the shared
         # timeline so undo/redo steps through it like points and params.
         if self.undo_coordinator is not None:
@@ -402,7 +401,6 @@ class DetectionController(QObject):
             return
         # Single-shot 0 ms timer coalesces multiple slider events from
         # the same event-loop tick into one detection pass.
-        self._pending_run_one = None
         self._auto_detect_debounce.start()
 
     def manual_fit_params(self, kind: str) -> dict:
@@ -419,7 +417,7 @@ class DetectionController(QObject):
         self.image_viewer.clear_detection_overlay(kind)
         self.image_viewer.clear_target_roi(kind)
         self.orchestrator.set_cached_result(kind, None)
-        self._kick_live_run(kind)
+        self._kick_live_run_for_all_enabled()
 
     def _snapshot_card_to_project(self, kind: str) -> None:
         """Write ``kind``'s live card pick (id, params, pins, overlays) into the project defaults.
@@ -474,11 +472,6 @@ class DetectionController(QObject):
     # ---------------------------------------------------------------------------
 
     def _on_auto_detect_debounce_fired(self) -> None:
-        self._pending_run_one = None
-        self._kick_live_run_for_all_enabled()
-
-    def _kick_live_run(self, _kind: str) -> None:
-        """Re-run every enabled detector top-down."""
         self._kick_live_run_for_all_enabled()
 
     def _kick_live_run_for_kind(self, kind: str) -> None:
@@ -964,7 +957,6 @@ class DetectionController(QObject):
     def clear_all(self) -> None:
         """Drop every detection result + every kind's ROI on the current image."""
         self._auto_detect_debounce.stop()
-        self._pending_run_one = None
         for kind in KINDS:
             self.orchestrator.set_cached_result(kind, None)
             self.image_viewer.clear_detection_overlay(kind)
