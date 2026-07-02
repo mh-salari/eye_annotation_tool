@@ -22,10 +22,9 @@ from .theme import theme
 
 
 class MaterialButton(QPushButton):
-    """Project's standard push button. ``compact`` is preserved for API compatibility."""
+    """Project's standard push button."""
 
-    def __init__(self, text: str, parent: QWidget | None = None, *, compact: bool = False) -> None:  # noqa: ARG002
-        """Initialize the MaterialButton."""
+    def __init__(self, text: str, parent: QWidget | None = None) -> None:
         super().__init__(text, parent)
 
 

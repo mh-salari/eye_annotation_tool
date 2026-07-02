@@ -372,7 +372,7 @@ class DetectorCard(QFrame):
         picker_row.addWidget(self._combo, 1)
         # Per-card Detect button — re-runs the active auto detector
         # without needing a slider tweak. Hidden in Off and Manual.
-        self._detect_button = MaterialButton("Detect", compact=True)
+        self._detect_button = MaterialButton("Detect")
         self._detect_button.clicked.connect(self.detect_requested.emit)
         picker_row.addWidget(self._detect_button)
         layout.addLayout(picker_row)
