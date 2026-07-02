@@ -7,8 +7,9 @@ back to ``~/.config``), alongside the recent-projects list. App-wide preferences
 
 import json
 import logging
-import os
 from pathlib import Path
+
+from ..utils.config import config_dir
 
 VALID_THEMES = ("system", "dark", "light")
 _DEFAULT_THEME = "system"
@@ -18,9 +19,7 @@ logger = logging.getLogger(__name__)
 
 def _store_path() -> Path:
     """Return the path to the settings JSON file."""
-    xdg = os.environ.get("XDG_CONFIG_HOME")
-    root = Path(xdg).expanduser() if xdg else Path.home() / ".config"
-    return root / "eye_annotation_tool" / "settings.json"
+    return config_dir() / "settings.json"
 
 
 def _load() -> dict:

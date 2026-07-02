@@ -22,6 +22,7 @@ from pathlib import Path
 from cheshm.gui.registry import Setting as _CheshmSetting
 from cheshm.gui.registry import discover_detectors as _discover_cheshm
 
+from ..utils.config import config_dir
 from .plugin import DetectorPlugin, SettingSpec
 
 logger = logging.getLogger(__name__)
@@ -99,9 +100,7 @@ def _user_plugin_dirs() -> list[Path]:
     env = os.environ.get("EYE_ANNOTATION_PLUGINS")
     if env:
         dirs.extend(Path(d).expanduser() for d in env.split(os.pathsep) if d)
-    xdg = os.environ.get("XDG_CONFIG_HOME")
-    config_root = Path(xdg).expanduser() if xdg else Path.home() / ".config"
-    dirs.append(config_root / "eye_annotation_tool" / "plugins")
+    dirs.append(config_dir() / "plugins")
     return dirs
 
 

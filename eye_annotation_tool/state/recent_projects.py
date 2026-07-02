@@ -6,17 +6,16 @@ Stored as a JSON array of absolute project-file paths, most-recent first, at
 """
 
 import json
-import os
 from pathlib import Path
+
+from ..utils.config import config_dir
 
 _MAX_RECENT = 10
 
 
 def _store_path() -> Path:
     """Return the path to the recent-projects JSON file."""
-    xdg = os.environ.get("XDG_CONFIG_HOME")
-    root = Path(xdg).expanduser() if xdg else Path.home() / ".config"
-    return root / "eye_annotation_tool" / "recent_projects.json"
+    return config_dir() / "recent_projects.json"
 
 
 def load() -> list[str]:
