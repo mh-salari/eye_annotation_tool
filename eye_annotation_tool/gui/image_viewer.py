@@ -1242,14 +1242,7 @@ class ImageViewer(QWidget):
         annotation = self._PLUGIN_TARGET_TO_ANNOTATION.get(plugin_target)
         if annotation is None:
             return
-        field_map = {
-            "pupil": ("pupil_points", "pupil_ellipse"),
-            "limbus": ("limbus_points", "limbus_ellipse"),
-            "eyelid_contour": ("eyelid_contour_points", None),
-            "glint": ("glint_points", None),
-            "purkinje_iv": ("purkinje_iv_points", None),
-        }
-        points_field, ellipse_field = field_map[annotation]
+        points_field, ellipse_field = FIELDS_BY_ANNOTATION[annotation]
         if not self.eye_data_store.clear_target_across_eyes(points_field, ellipse_field):
             return
         self.save_state()
