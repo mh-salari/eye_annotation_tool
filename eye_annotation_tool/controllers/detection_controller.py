@@ -791,7 +791,7 @@ class DetectionController(QObject):
         bino = self.binocular.is_binocular
         slots = ("left", "right") if bino else ("single",)
         slot_to_eye = {"left": "left", "right": "right"} if bino else {"single": "left"}
-        eye_data = self.image_viewer.get_annotation_data()
+        eye_data = self.image_viewer.get_all_eye_data()
         out: dict = {}
         for kind in KINDS:
             default_id = (project_detectors.get(kind) or {}).get("id", DETECTOR_OFF)
@@ -888,7 +888,7 @@ class DetectionController(QObject):
                 if active_slug != card.active_id():
                     card.set_selection(active_slug, emit=False)
 
-            self.image_viewer.set_annotation_data(eye_data)
+            self.image_viewer.set_all_eye_data(eye_data)
             self._refresh_orchestrator_enabled()
             self._refresh_auto_managed_kinds()
 

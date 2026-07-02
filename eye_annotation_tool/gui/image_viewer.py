@@ -1549,14 +1549,6 @@ class ImageViewer(QWidget):
         self.clear_glint_points()
         self.clear_purkinje_iv_points()
 
-    def get_annotation_data(self) -> dict:
-        """Get all annotation data for both eyes."""
-        return self.get_all_eye_data()
-
-    def set_annotation_data(self, data: dict) -> None:
-        """Set annotation data for both eyes."""
-        self.set_all_eye_data(data)
-
     def set_manual_fit_lookup(self, lookup: Callable[[str], dict]) -> None:
         """Register ``lookup(kind) -> {mode, center_method, smoothness}`` for manual fits."""
         self._manual_fit_lookup = lookup
