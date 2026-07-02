@@ -30,8 +30,8 @@ def _load() -> dict:
         return {}
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError:
-        logger.warning("settings file %s is corrupt; falling back to defaults", path, exc_info=True)
+    except (OSError, json.JSONDecodeError):
+        logger.warning("could not read settings file %s; falling back to defaults", path, exc_info=True)
         return {}
     return data if isinstance(data, dict) else {}
 
