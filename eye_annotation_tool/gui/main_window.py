@@ -1129,17 +1129,30 @@ class MainWindow(QMainWindow):
         )
         self.image_viewer.set_zoom_factor(factor)
 
+    @staticmethod
+    def _sync_slider(
+        slider: QSlider,
+        factor: float,
+        slider_min: int,
+        slider_max: int,
+        factor_min: float,
+        factor_max: float,
+    ) -> None:
+        """Move ``slider`` to the log position of ``factor`` without emitting valueChanged."""
+        value = _factor_to_log_slider(factor, slider_min, slider_max, factor_min, factor_max)
+        slider.blockSignals(True)
+        slider.setValue(value)
+        slider.blockSignals(False)
+
     def _sync_zoom_slider_to_viewer(self) -> None:
-        slider_value = _factor_to_log_slider(
+        self._sync_slider(
+            self.zoom_slider,
             self.image_viewer.zoom_state.factor,
             _ZOOM_SLIDER_MIN,
             _ZOOM_SLIDER_MAX,
             _ZOOM_MIN_FACTOR,
             _ZOOM_MAX_FACTOR,
         )
-        self.zoom_slider.blockSignals(True)
-        self.zoom_slider.setValue(slider_value)
-        self.zoom_slider.blockSignals(False)
 
     def _on_brightness_reset_clicked(self) -> None:
         self.image_viewer.reset_display_brightness()
@@ -1156,16 +1169,14 @@ class MainWindow(QMainWindow):
         self.image_viewer.set_brightness_factor(factor)
 
     def _sync_brightness_slider_to_viewer(self) -> None:
-        slider_value = _factor_to_log_slider(
+        self._sync_slider(
+            self.brightness_slider,
             self.image_viewer.brightness.factor,
             _BRIGHTNESS_SLIDER_MIN,
             _BRIGHTNESS_SLIDER_MAX,
             _BRIGHTNESS_MIN_FACTOR,
             _BRIGHTNESS_MAX_FACTOR,
         )
-        self.brightness_slider.blockSignals(True)
-        self.brightness_slider.setValue(slider_value)
-        self.brightness_slider.blockSignals(False)
 
     def _capture_view_settings(self) -> dict:
         """Snapshot the current mode's zoom / brightness / enhancement view settings."""
