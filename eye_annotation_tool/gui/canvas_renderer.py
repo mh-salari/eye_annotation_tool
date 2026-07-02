@@ -411,8 +411,8 @@ class CanvasRenderer:
         for transform, results in layers:
             painter.save()
             painter.setTransform(self._compare_qtransform(transform), combine=True)
-            for kind, result, overlay_state in results:
-                self._draw_one_result(painter, kind, result, overlay_state)
+            for _kind, result, overlay_state in results:
+                self._draw_one_result(painter, result, overlay_state)
             painter.restore()
 
     def _compare_qtransform(self, transform: np.ndarray) -> QTransform:
@@ -440,12 +440,11 @@ class CanvasRenderer:
             overlay_state = self.overlay_state_lookup(kind, detector_id)
             if overlay_state is None:
                 continue
-            self._draw_one_result(painter, kind, result, overlay_state)
+            self._draw_one_result(painter, result, overlay_state)
 
     def _draw_one_result(
         self,
         painter: QPainter,
-        kind: str,
         result: dict,
         overlay_state: dict[str, dict],
     ) -> None:
@@ -494,7 +493,6 @@ class CanvasRenderer:
                 self._draw_point(painter, value, color, thickness)
             elif key == "curve":
                 self._draw_limbus_curve(painter, result, color, thickness, style)
-            _ = kind  # parametrise future per-kind branches without losing the value
 
     def _draw_glint_list(
         self,
