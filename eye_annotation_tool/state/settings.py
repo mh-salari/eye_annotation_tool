@@ -6,11 +6,14 @@ back to ``~/.config``), alongside the recent-projects list. App-wide preferences
 """
 
 import json
+import logging
 import os
 from pathlib import Path
 
 VALID_THEMES = ("system", "dark", "light")
 _DEFAULT_THEME = "system"
+
+logger = logging.getLogger(__name__)
 
 
 def _store_path() -> Path:
@@ -27,7 +30,8 @@ def _load() -> dict:
         return {}
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+    except json.JSONDecodeError:
+        logger.warning("settings file %s is corrupt; falling back to defaults", path, exc_info=True)
         return {}
     return data if isinstance(data, dict) else {}
 

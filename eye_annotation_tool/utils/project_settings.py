@@ -156,9 +156,9 @@ def default_project() -> dict:
 def load_project(project_path: str | Path) -> dict:
     """Load a project file from ``project_path`` and return a normalised payload.
 
-    Raises :class:`ProjectSchemaError` on the older ``"plugin"`` or
-    ``"detector"`` schemas — start a new project or recreate the
-    detector picks via the side panel.
+    Raises :class:`ProjectSchemaError` if the file is not valid JSON, or uses
+    the older ``"plugin"`` / ``"detector"`` schema — start a new project or
+    recreate the detector picks via the side panel.
     """
     project = default_project()
     path = Path(project_path)
@@ -166,8 +166,8 @@ def load_project(project_path: str | Path) -> dict:
         return project
     try:
         loaded = json.loads(path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError:
-        return project
+    except json.JSONDecodeError as exc:
+        raise ProjectSchemaError(f"Could not read project file {path}: it is not valid JSON.") from exc
     _reject_legacy_schema(loaded, path)
     detectors_in = loaded.pop("detectors", None)
     images_in = loaded.pop("images", None)

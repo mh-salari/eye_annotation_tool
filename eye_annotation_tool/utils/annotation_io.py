@@ -30,7 +30,10 @@ out-of-band, not read here.
 """
 
 import json
+import logging
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 
 def save_annotations(
@@ -92,10 +95,10 @@ def load_annotations(annotation_path: str) -> dict:
     try:
         with Path(annotation_path).open(encoding="utf-8") as f:
             ann = json.load(f)
-    except json.JSONDecodeError as exc:
-        # Corrupt or partially-written file (e.g. previous crash mid-save).
-        # Don't crash the GUI; treat as no saved annotations.
-        print(f"warning: skipping unreadable annotation file {annotation_path}: {exc}")
+    except json.JSONDecodeError:
+        # Corrupt/partially-written file (e.g. crash mid-save): log and treat as
+        # no saved annotations rather than crash the GUI on an external file.
+        logger.warning("skipping unreadable annotation file %s", annotation_path, exc_info=True)
         return _empty_payload()
 
     binocular = bool(ann.get("binocular_mode", True))
