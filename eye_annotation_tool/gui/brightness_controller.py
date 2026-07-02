@@ -30,25 +30,25 @@ class BrightnessController:
         self.factor: float = 1.0
         self._cached: QPixmap | None = None
 
-    # ---------------------------------------------------------------------------
-    # Public API
-    # ---------------------------------------------------------------------------
-
     def brighten(self) -> bool:
         """Multiply the factor by ``step``; returns whether the factor changed."""
-        return self._set_factor(self.factor * self._step)
+        return self.set_factor(self.factor * self._step)
 
     def darken(self) -> bool:
         """Divide the factor by ``step``; returns whether the factor changed."""
-        return self._set_factor(self.factor / self._step)
+        return self.set_factor(self.factor / self._step)
 
     def reset(self) -> bool:
         """Restore the factor to 1.0; returns whether the factor changed."""
         return self.set_factor(1.0)
 
     def set_factor(self, factor: float) -> bool:
-        """Set the brightness factor directly (clamped); returns whether the value changed."""
-        return self._set_factor(factor)
+        """Clamp ``factor`` and store; returns whether the value changed."""
+        clamped = max(self._min, min(self._max, float(factor)))
+        if clamped == self.factor and self._cached is not None:
+            return False
+        self.factor = clamped
+        return True
 
     def rebuild(self, original_pixmap: QPixmap | None, grayscale: np.ndarray | None) -> None:
         """Recompute the cached pixmap from ``grayscale`` (or use ``original_pixmap`` at identity).
@@ -71,15 +71,3 @@ class BrightnessController:
     def display_pixmap(self, original_pixmap: QPixmap | None) -> QPixmap | None:
         """Return the brightness-adjusted pixmap, falling back to ``original_pixmap``."""
         return self._cached if self._cached is not None else original_pixmap
-
-    # ---------------------------------------------------------------------------
-    # Internal
-    # ---------------------------------------------------------------------------
-
-    def _set_factor(self, factor: float) -> bool:
-        """Clamp ``factor`` and store; returns whether the value changed."""
-        clamped = max(self._min, min(self._max, float(factor)))
-        if clamped == self.factor and self._cached is not None:
-            return False
-        self.factor = clamped
-        return True
