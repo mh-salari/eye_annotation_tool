@@ -71,25 +71,23 @@ class NavigationController:
         self.load_current_image()
         self.image_tree.select_path(path)
 
-    def next_image(self) -> None:
-        """Navigate to the next image in the tree's display order."""
+    def _navigate_by(self, delta: int) -> None:
+        """Move ``delta`` images along the tree's display order, bounds-checked."""
         ordered = self.image_tree.ordered_paths()
         current = self._current_path()
         if current is None or current not in ordered:
             return
-        pos = ordered.index(current)
-        if pos < len(ordered) - 1 and self.handle_unsaved_before_switch():
-            self._switch_to(ordered[pos + 1])
+        target = ordered.index(current) + delta
+        if 0 <= target < len(ordered) and self.handle_unsaved_before_switch():
+            self._switch_to(ordered[target])
+
+    def next_image(self) -> None:
+        """Navigate to the next image in the tree's display order."""
+        self._navigate_by(1)
 
     def prev_image(self) -> None:
         """Navigate to the previous image in the tree's display order."""
-        ordered = self.image_tree.ordered_paths()
-        current = self._current_path()
-        if current is None or current not in ordered:
-            return
-        pos = ordered.index(current)
-        if pos > 0 and self.handle_unsaved_before_switch():
-            self._switch_to(ordered[pos - 1])
+        self._navigate_by(-1)
 
     def on_image_selected(self, path: str) -> None:
         """Handle an image leaf clicked in the tree."""
