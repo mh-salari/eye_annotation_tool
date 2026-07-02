@@ -95,7 +95,6 @@ class AnnotationController:
         with error_dialog(self._dialog_parent, "Load Failed", "Could not load the annotation for this image."):
             payload = load_annotations(get_annotation_path(image_paths[index]))
             self.binocular_controller.apply_loaded_image_meta(
-                binocular_mode=payload["binocular_mode"],
                 divider_x_norm=payload["divider_x_norm"],
             )
             self.detection_controller.apply_loaded_detections(payload["detections"])

@@ -130,9 +130,8 @@ class BinocularController(QObject):
         self.project_store.set_divider_override(image_path, float(value))
         self.annotation_modified.emit(True)
 
-    def apply_loaded_image_meta(self, *, binocular_mode: bool, divider_x_norm: float | None) -> None:
-        """Apply per-image divider metadata; ``binocular_mode`` is ignored."""
-        del binocular_mode
+    def apply_loaded_image_meta(self, *, divider_x_norm: float | None) -> None:
+        """Apply the per-image divider override from a loaded annotation file."""
         image_path = self._current_image_path_fn()
         if image_path is not None:
             self.project_store.set_divider_override(image_path, divider_x_norm)
