@@ -1,9 +1,8 @@
 """Compare-mode header controls (right panel while a pair is open).
 
 Choose the view (Overlay / Diff) and alignment, blend alpha, toggle the
-difference heatmap, and nudge / rotate the partner image by hand. The pair strip
-opens image A or B in the normal annotation view; overlay styling lives there,
-not here.
+difference heatmap, and nudge / rotate the partner image by hand. Overlay styling
+lives in the annotation view, not here.
 """
 
 import qtawesome as qta
@@ -23,7 +22,6 @@ from PyQt5.QtWidgets import (
 
 from .compare_compose import DIFF, OVERLAY, VIEWS
 from .image_viewer import ImageViewer
-from .pair_strip import PairStrip
 from .theme import PRIMARY, theme
 
 # Alignment modes mapped onto ImageViewer.set_compare_mode. "glints" matches the
@@ -80,10 +78,7 @@ class SegmentedControl(QWidget):
 
 
 class CompareControls(QWidget):
-    """Drive the viewer's composite and emit a request to open A or B for annotation."""
-
-    # Path of the image to open in the normal annotation view.
-    open_image_requested = pyqtSignal(str)
+    """Drive the viewer's composite for the open pair."""
 
     def __init__(self, viewer: ImageViewer, parent: QWidget | None = None) -> None:
         """Build the controls bound to ``viewer``."""
@@ -93,10 +88,6 @@ class CompareControls(QWidget):
         self.rotate_buttons: list[QToolButton] = []
         self._build_ui()
         self._sync_visibility()
-
-    def set_pair(self, path_a: str, path_b: str) -> None:
-        """Point the pair strip at the open pair (both A and B editable)."""
-        self.pair_strip.set_pair(path_a, path_b)
 
     def _build_ui(self) -> None:
         layout = QVBoxLayout(self)
@@ -127,10 +118,6 @@ class CompareControls(QWidget):
 
         self.nudge_pad = self._nudge_rotate_pad()
         layout.addWidget(self.nudge_pad)
-
-        self.pair_strip = PairStrip(show_compare=False)
-        self.pair_strip.open_image_requested.connect(self.open_image_requested.emit)
-        layout.addWidget(self.pair_strip)
 
         layout.addStretch(1)
 

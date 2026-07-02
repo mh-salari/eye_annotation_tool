@@ -479,16 +479,16 @@ class MainWindow(QMainWindow):
         # Compare header replaces the cards while a pair is open.
         self.compare_controls = CompareControls(self.image_viewer)
         self.compare_controls.setVisible(False)
-        # Pair strip sits above the cards while annotating an image that belongs
-        # to a pair, so the user can jump to the other image or back to Compare.
+        # One pair strip at the top of the right panel, shown in both the
+        # annotation view and compare mode when the current image is in a pair.
         self.pair_strip = PairStrip()
         self.pair_strip.setVisible(False)
 
         right_panel = QWidget()
         right_layout = QVBoxLayout()
         right_layout.setContentsMargins(0, 0, 0, 0)
-        right_layout.addWidget(self.compare_controls)
         right_layout.addWidget(self.pair_strip)
+        right_layout.addWidget(self.compare_controls)
         right_layout.addWidget(self.right_scroll, 1)
         right_layout.addWidget(self.annotation_controls.clear_all_button)
         right_panel.setLayout(right_layout)
@@ -503,10 +503,12 @@ class MainWindow(QMainWindow):
         self._update_pair_strip()
 
     def _update_pair_strip(self) -> None:
-        """Show the pair strip when annotating an image whose pair is usable.
+        """Show the pair strip whenever the current image belongs to a usable pair.
 
-        Hidden unless compare is enabled, the current image is in a pair, and both
-        of that pair's images are still in the project (so the buttons all work).
+        Shown at the top of the right panel in both the annotation view and compare
+        mode; hidden unless compare is enabled and both of the pair's images are
+        still in the project (so the buttons all work). While comparing, both A and
+        B stay enabled; in the annotation view the loaded image's button is disabled.
         """
         current = self._current_image_path()
         enabled = bool(self.project_store.project.get("enable_compare", False))
@@ -514,10 +516,11 @@ class MainWindow(QMainWindow):
             (p for p in self.pairs_panel.pairs() if current in p and all(x in self.image_paths for x in p)),
             None,
         )
-        if not enabled or pair is None or self.image_viewer.comparing:
+        if not enabled or pair is None:
             self.pair_strip.setVisible(False)
             return
-        self.pair_strip.set_pair(pair[0], pair[1], current)
+        loaded = "" if self.image_viewer.comparing else current
+        self.pair_strip.set_pair(pair[0], pair[1], loaded)
         self.pair_strip.setVisible(True)
 
     @property
@@ -605,7 +608,6 @@ class MainWindow(QMainWindow):
         self.pairs_panel.add_requested.connect(self._on_add_pair)
         self.pairs_panel.open_requested.connect(self._on_open_pair)
         self.pairs_panel.pairs_changed.connect(self._on_pairs_changed)
-        self.compare_controls.open_image_requested.connect(self._open_image_from_compare)
         self.pair_strip.open_image_requested.connect(self._open_image_from_compare)
         self.pair_strip.open_compare_requested.connect(self._on_open_pair)
         self.load_images_button.clicked.connect(self.on_load_images_clicked)
@@ -1003,7 +1005,6 @@ class MainWindow(QMainWindow):
         self.pairs_panel.select_pair(path_a, path_b)
         self.load_current_image()  # loads A in the normal view (and leaves any prior compare)
         self.image_viewer.enter_compare(path_a, path_b)
-        self.compare_controls.set_pair(path_a, path_b)
         self._set_compare_ui(True)
         # Apply comparison's own view settings, seeding them from the fitted
         # composite the first time (and syncing the sliders to the composite fit).

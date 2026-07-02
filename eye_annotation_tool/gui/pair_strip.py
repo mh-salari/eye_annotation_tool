@@ -1,8 +1,8 @@
-"""A strip for a compare pair: open image A or B, plus an optional Compare button.
+"""A strip for a compare pair: open image A or B, plus a Compare button.
 
-Used both while annotating a paired image (jump to the other image or open
-Compare) and inside the compare controls (open A / B to edit). The button for the
-image currently on screen, if any, is disabled.
+Shown at the top of the right panel whenever the current image belongs to a
+usable pair, in both the annotation view and compare mode. In the annotation view
+the loaded image's button is disabled; while comparing, both A and B stay enabled.
 """
 
 from pathlib import Path
@@ -21,8 +21,8 @@ class PairStrip(QWidget):
     open_image_requested = pyqtSignal(str)
     open_compare_requested = pyqtSignal(str, str)
 
-    def __init__(self, parent: QWidget | None = None, *, show_compare: bool = True) -> None:
-        """Build the label + A / B buttons, plus a Compare button when ``show_compare``."""
+    def __init__(self, parent: QWidget | None = None) -> None:
+        """Build the label + A / B / Compare buttons."""
         super().__init__(parent)
         self._path_a = ""
         self._path_b = ""
@@ -35,11 +35,10 @@ class PairStrip(QWidget):
         self.b_button = MaterialButton("B")
         self.b_button.clicked.connect(lambda: self.open_image_requested.emit(self._path_b))
         box.addWidget(self.b_button)
-        if show_compare:
-            self.compare_button = MaterialButton("Compare")
-            self.compare_button.setIcon(qta.icon("mdi6.compare-horizontal", color=theme.color("icon")))
-            self.compare_button.clicked.connect(lambda: self.open_compare_requested.emit(self._path_a, self._path_b))
-            box.addWidget(self.compare_button)
+        self.compare_button = MaterialButton("Compare")
+        self.compare_button.setIcon(qta.icon("mdi6.compare-horizontal", color=theme.color("icon")))
+        self.compare_button.clicked.connect(lambda: self.open_compare_requested.emit(self._path_a, self._path_b))
+        box.addWidget(self.compare_button)
         box.addStretch(1)
 
     def set_pair(self, path_a: str, path_b: str, current: str = "") -> None:
