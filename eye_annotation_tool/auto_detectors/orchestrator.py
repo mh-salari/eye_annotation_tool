@@ -7,9 +7,8 @@ cards) and the plugins discovered by :mod:`.plugin_loader`:
     kind via :meth:`set_enabled_detectors`. ``None`` means the kind is
     not run (Off or Manual).
   - On image change, the caller invokes :meth:`clear_cache`.
-  - :meth:`run_all` walks the enabled detectors in dependency order and
-    runs each one. :meth:`run_one` re-runs a single kind reusing
-    whichever upstream results are cached.
+  - :meth:`run_one` runs a single kind, reusing whichever upstream
+    results are cached.
 
 Upstream wiring is implicit:
 
@@ -28,6 +27,7 @@ Two signals carry outcomes outward:
     required upstream result is missing.
 """
 
+import logging
 from collections.abc import Callable
 
 import numpy as np
@@ -37,6 +37,8 @@ from ..utils.project_settings import KINDS
 from .plugin import DetectorPlugin
 
 PostProcess = Callable[[dict], dict]
+
+logger = logging.getLogger(__name__)
 
 
 class DetectorOrchestrator(QObject):
@@ -84,27 +86,6 @@ class DetectorOrchestrator(QObject):
 
     # ----- run paths -----
 
-    def run_all(
-        self,
-        image: np.ndarray,
-        params_by_kind: dict[str, dict],
-        post_process_by_kind: dict[str, PostProcess] | None = None,
-    ) -> None:
-        """Run every enabled detector on ``image`` in dependency order.
-
-        ``post_process_by_kind[kind]`` runs against ``kind``'s result
-        before the cache write, used by callers that need to translate
-        cropped results back into full-image coordinates.
-        """
-        self.clear_cache()
-        post = post_process_by_kind or {}
-        for kind in self._dependency_order():
-            det = self._enabled[kind]
-            if det is None:
-                continue
-            params = params_by_kind.get(kind) or self._default_params(det)
-            self._run(kind, det, image, params, post_process=post.get(kind))
-
     def run_one(
         self,
         kind: str,
@@ -141,6 +122,7 @@ class DetectorOrchestrator(QObject):
         try:
             result = det.function(image, *wired_args, **kwargs)
         except Exception:
+            logger.exception("detector %r crashed", kind)
             self._results[kind] = None
             self.detector_failed.emit(kind)
             return
@@ -164,7 +146,7 @@ class DetectorOrchestrator(QObject):
         kwargs.pop("pupil_center", None)
         kwargs.pop("pupil_radius", None)
         pupil = self._results.get("pupil")
-        if not pupil:
+        if pupil is None:
             return
         ellipse = pupil.get("ellipse")
         if ellipse is None:
@@ -183,7 +165,7 @@ class DetectorOrchestrator(QObject):
         irrelevant — we match by position against ``det.wired_inputs``.
         """
         pupil = self._results.get("pupil")
-        if not pupil:
+        if pupil is None:
             return None
         center = pupil.get("center")
         if center is None:
@@ -197,14 +179,6 @@ class DetectorOrchestrator(QObject):
                 return None
             positional.append(ellipse)
         return positional
-
-    @staticmethod
-    def _default_params(det: DetectorPlugin) -> dict:
-        return {s.name: s.default for s in det.settings}
-
-    def _dependency_order(self) -> list[str]:
-        """Order enabled kinds so each runs after every kind it would consume."""
-        return [k for k in KINDS if self._enabled.get(k) is not None]
 
 
 __all__ = ["KINDS", "DetectorOrchestrator"]
