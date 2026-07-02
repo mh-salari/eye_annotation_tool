@@ -1222,10 +1222,6 @@ class MainWindow(QMainWindow):
             frame_geometry.moveCenter(center_point)
             self.move(frame_geometry.topLeft())
 
-    def moveEvent(self, event: QEvent) -> None:  # noqa: N802
-        """Handle window move events."""
-        super().moveEvent(event)
-
     def eventFilter(self, obj: QWidget, event: QEvent) -> bool:  # noqa: N802
         """Filter window state changes to restore a sensible size when un-maximised."""
         if event.type() == QEvent.WindowStateChange:
