@@ -1,7 +1,9 @@
 """Main application window for the eye annotation tool."""
 
 import math
+from collections.abc import Callable
 from pathlib import Path
+from typing import NamedTuple
 
 import qtawesome as qta
 from PyQt5.QtCore import QEvent, QRect, QSize, Qt
@@ -70,12 +72,23 @@ _BRIGHTNESS_SLIDER_DEFAULT = 500  # 1.0x — identity brightness
 _BRIGHTNESS_MIN_FACTOR = 0.1
 _BRIGHTNESS_MAX_FACTOR = 10.0
 
-# Composable enhancement pipeline. Each method has an enable checkbox + one
-# slider for its main param; enabled stages apply in this (denoise -> contrast
-# -> sharpen) order. Tuple: (method, label, slider_min, slider_max,
-# slider_default, params_from_slider, slider_from_params).
+
+class _EnhanceSpec(NamedTuple):
+    """One enhancement stage: its slider range and the value<->params mapping."""
+
+    method: str
+    label: str
+    slider_min: int
+    slider_max: int
+    slider_default: int
+    params: Callable[[int], dict]  # slider value -> stage params
+    slider_value: Callable[[dict], int]  # stage params -> slider value
+
+
+# Enable checkbox + one slider per method; enabled stages apply in this
+# (denoise -> contrast -> sharpen) order.
 _ENHANCE_SPECS = (
-    (
+    _EnhanceSpec(
         "bilateral",
         "Bilateral",
         1,
@@ -84,7 +97,7 @@ _ENHANCE_SPECS = (
         lambda v: {"sigma_color": float(v), "sigma_space": float(v)},
         lambda p: int(p.get("sigma_color", 50)),
     ),
-    (
+    _EnhanceSpec(
         "percentile_stretch",
         "Stretch",
         0,
@@ -93,9 +106,9 @@ _ENHANCE_SPECS = (
         lambda v: {"lo_pct": float(v), "hi_pct": float(100 - v)},
         lambda p: int(p.get("lo_pct", 1)),
     ),
-    ("clahe", "CLAHE", 5, 80, 20, lambda v: {"clip_limit": v / 10.0}, lambda p: round(p.get("clip_limit", 2.0) * 10)),
-    ("gamma", "Gamma", 30, 300, 100, lambda v: {"g": v / 100.0}, lambda p: round(p.get("g", 1.0) * 100)),
-    ("unsharp", "Unsharp", 0, 300, 100, lambda v: {"amount": v / 100.0}, lambda p: round(p.get("amount", 1.0) * 100)),
+    _EnhanceSpec("clahe", "CLAHE", 5, 80, 20, lambda v: {"clip_limit": v / 10.0}, lambda p: round(p.get("clip_limit", 2.0) * 10)),
+    _EnhanceSpec("gamma", "Gamma", 30, 300, 100, lambda v: {"g": v / 100.0}, lambda p: round(p.get("g", 1.0) * 100)),
+    _EnhanceSpec("unsharp", "Unsharp", 0, 300, 100, lambda v: {"amount": v / 100.0}, lambda p: round(p.get("amount", 1.0) * 100)),
 )
 
 
@@ -377,19 +390,19 @@ class MainWindow(QMainWindow):
         enhance_layout.setContentsMargins(0, 0, 0, 0)
         self._enhance_checks: dict[str, QCheckBox] = {}
         self._enhance_sliders: dict[str, QSlider] = {}
-        for method, label, smin, smax, sdef, _params_fn, _slider_fn in _ENHANCE_SPECS:
+        for spec in _ENHANCE_SPECS:
             row = QHBoxLayout()
             row.setContentsMargins(0, 0, 0, 0)
-            check = QCheckBox(label)
+            check = QCheckBox(spec.label)
             slider = QSlider(Qt.Horizontal)
-            slider.setRange(smin, smax)
-            slider.setValue(sdef)
-            slider.setToolTip(f"{label} strength")
+            slider.setRange(spec.slider_min, spec.slider_max)
+            slider.setValue(spec.slider_default)
+            slider.setToolTip(f"{spec.label} strength")
             row.addWidget(check)
             row.addWidget(slider, 1)
             enhance_layout.addLayout(row)
-            self._enhance_checks[method] = check
-            self._enhance_sliders[method] = slider
+            self._enhance_checks[spec.method] = check
+            self._enhance_sliders[spec.method] = slider
             check.toggled.connect(self._on_enhancement_changed)
             slider.valueChanged.connect(self._on_enhancement_changed)
         self.enhance_detect_check = QCheckBox("Apply to detection")
@@ -410,25 +423,25 @@ class MainWindow(QMainWindow):
     def _collect_enhance_stages(self) -> list:
         """Read the enabled methods + their slider params into an ordered pipeline."""
         stages = []
-        for method, _label, _smin, _smax, _sdef, params_fn, _slider_fn in _ENHANCE_SPECS:
-            if self._enhance_checks[method].isChecked():
-                stages.append((method, params_fn(self._enhance_sliders[method].value())))
+        for spec in _ENHANCE_SPECS:
+            if self._enhance_checks[spec.method].isChecked():
+                stages.append((spec.method, spec.params(self._enhance_sliders[spec.method].value())))
         return stages
 
     def _restore_enhancement(self, block: dict | None) -> None:
         """Restore the enhancement controls + viewer from a saved project block."""
         self.image_viewer.enhancement.from_dict(block)
         params_by_method = dict(self.image_viewer.enhancement.stages)
-        for method, _label, _smin, _smax, _sdef, _params_fn, slider_fn in _ENHANCE_SPECS:
-            enabled = method in params_by_method
-            check = self._enhance_checks[method]
-            slider = self._enhance_sliders[method]
+        for spec in _ENHANCE_SPECS:
+            enabled = spec.method in params_by_method
+            check = self._enhance_checks[spec.method]
+            slider = self._enhance_sliders[spec.method]
             check.blockSignals(True)
             check.setChecked(enabled)
             check.blockSignals(False)
             if enabled:
                 slider.blockSignals(True)
-                slider.setValue(slider_fn(params_by_method[method]))
+                slider.setValue(spec.slider_value(params_by_method[spec.method]))
                 slider.blockSignals(False)
         self.enhance_detect_check.blockSignals(True)
         self.enhance_detect_check.setChecked(self.image_viewer.enhancement.apply_to_detection)
