@@ -14,6 +14,8 @@ callable). The store itself imports no Qt symbols.
 from collections.abc import Callable, Iterable
 from typing import TYPE_CHECKING, Protocol
 
+from ..utils.project_settings import EYE_SLOTS
+
 if TYPE_CHECKING:
     from ..auto_detectors.orchestrator import DetectorOrchestrator
 
@@ -42,7 +44,7 @@ class PerEyeStateStore:
     file round-trip relies on the distinction).
     """
 
-    SLOTS: tuple[EyeSlot, ...] = ("left", "right", "single")
+    SLOTS: tuple[EyeSlot, ...] = EYE_SLOTS
 
     def __init__(self, kinds: Iterable[Target]) -> None:
         """Build the three slot/kind tables for ``kinds``.
