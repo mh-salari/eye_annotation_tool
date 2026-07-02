@@ -29,6 +29,10 @@ if TYPE_CHECKING:
 
 AUTO_DETECT_DEBOUNCE_MS = 0
 
+# Auto detectors that run after pupil, each anchored on the cached pupil result.
+# Pupil runs first (they depend on it); purkinje_iv has no auto detector.
+_DOWNSTREAM_KINDS = ("glint", "limbus", "eyelid")
+
 # Manual annotation fields per kind, mirrored between the image viewer's eye
 # data and the unified per-eye detections blocks.
 _MANUAL_POINTS_FIELD = {
@@ -496,10 +500,10 @@ class DetectionController(QObject):
             self._run_with_crop("pupil", image, pupil_card.current_params())
         else:
             self.orchestrator.set_cached_result("pupil", self._manual_pupil_result())
-        # Glint / limbus / eyelid run on the active eye's half too, anchored on
-        # the pupil translated into that crop, so each kind stays on its side of
-        # the divider instead of latching onto the other eye or the face.
-        for kind in ("glint", "limbus", "eyelid"):
+        # Each runs on the active eye's half, anchored on the pupil translated
+        # into that crop, so it stays on its side of the divider instead of
+        # latching onto the other eye or the face.
+        for kind in _DOWNSTREAM_KINDS:
             card = self.annotation_controls.card(kind)
             if card is not None and card.active_detector() is not None:
                 self._run_with_crop(kind, image, card.current_params())
