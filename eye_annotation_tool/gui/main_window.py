@@ -717,7 +717,7 @@ class MainWindow(QMainWindow):
             return
         self.detection_controller.save_settings_to_project()
         self._commit_enhancement_to_project()
-        self.project_store.save()
+        self.project_store.persist()
         self._refresh_save_state_indicator()
 
     def save_project_as(self) -> None:

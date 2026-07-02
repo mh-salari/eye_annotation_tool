@@ -88,12 +88,6 @@ class ProjectStore:
         self.read_only = False
         self._guarded_save()
 
-    def save(self) -> None:
-        """Write to ``self.path``. Caller must guard against ``path is None`` / read-only."""
-        if self.path is None or self.read_only:
-            return
-        self._guarded_save()
-
     def persist(self) -> None:
         """Write the project to disk if a path is set and we're not read-only."""
         if self.path is None or self.read_only:
