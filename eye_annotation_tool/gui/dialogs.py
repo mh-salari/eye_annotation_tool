@@ -1,9 +1,12 @@
 """Shared dialog helpers: error reporting and action confirmation."""
 
+import logging
 from collections.abc import Iterator
 from contextlib import contextmanager
 
 from PyQt5.QtWidgets import QMessageBox, QWidget
+
+logger = logging.getLogger(__name__)
 
 
 def show_error(parent: QWidget | None, title: str, message: str) -> None:
@@ -47,4 +50,5 @@ def error_dialog(parent: QWidget | None, title: str, detail: str = "") -> Iterat
     try:
         yield
     except Exception as exc:
+        logger.exception("error in %s", title)
         show_error(parent, title, f"{detail}\n\n{exc}" if detail else str(exc))
