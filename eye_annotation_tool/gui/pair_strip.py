@@ -1,7 +1,8 @@
-"""A strip shown while annotating an image that belongs to a compare pair.
+"""A strip for a compare pair: open image A or B, plus an optional Compare button.
 
-Lets the user jump to the pair's other image or open the pair in Compare without
-going to the pairs tree. The button for the image currently on screen is disabled.
+Used both while annotating a paired image (jump to the other image or open
+Compare) and inside the compare controls (open A / B to edit). The button for the
+image currently on screen, if any, is disabled.
 """
 
 from pathlib import Path
@@ -20,8 +21,8 @@ class PairStrip(QWidget):
     open_image_requested = pyqtSignal(str)
     open_compare_requested = pyqtSignal(str, str)
 
-    def __init__(self, parent: QWidget | None = None) -> None:
-        """Build the label + A / B / Compare buttons."""
+    def __init__(self, parent: QWidget | None = None, *, show_compare: bool = True) -> None:
+        """Build the label + A / B buttons, plus a Compare button when ``show_compare``."""
         super().__init__(parent)
         self._path_a = ""
         self._path_b = ""
@@ -34,14 +35,18 @@ class PairStrip(QWidget):
         self.b_button = MaterialButton("B")
         self.b_button.clicked.connect(lambda: self.open_image_requested.emit(self._path_b))
         box.addWidget(self.b_button)
-        self.compare_button = MaterialButton("Compare")
-        self.compare_button.setIcon(qta.icon("mdi6.compare-horizontal", color=theme.color("icon")))
-        self.compare_button.clicked.connect(lambda: self.open_compare_requested.emit(self._path_a, self._path_b))
-        box.addWidget(self.compare_button)
+        if show_compare:
+            self.compare_button = MaterialButton("Compare")
+            self.compare_button.setIcon(qta.icon("mdi6.compare-horizontal", color=theme.color("icon")))
+            self.compare_button.clicked.connect(lambda: self.open_compare_requested.emit(self._path_a, self._path_b))
+            box.addWidget(self.compare_button)
         box.addStretch(1)
 
-    def set_pair(self, path_a: str, path_b: str, current: str) -> None:
-        """Show the pair; the button for ``current`` (the loaded image) is disabled."""
+    def set_pair(self, path_a: str, path_b: str, current: str = "") -> None:
+        """Show the pair; the button for ``current`` (the loaded image) is disabled.
+
+        Pass no ``current`` (compare mode shows both images) to keep A and B enabled.
+        """
         self._path_a = path_a
         self._path_b = path_b
         self.a_button.setToolTip(Path(path_a).name)

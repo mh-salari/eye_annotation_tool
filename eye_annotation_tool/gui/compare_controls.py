@@ -1,9 +1,9 @@
 """Compare-mode header controls (right panel while a pair is open).
 
 Choose the view (Overlay / Diff) and alignment, blend alpha, toggle the
-difference heatmap, and nudge / rotate the partner image by hand. The two Edit
-buttons open image A or B in the normal annotation view; overlay styling lives
-there, not here.
+difference heatmap, and nudge / rotate the partner image by hand. The pair strip
+opens image A or B in the normal annotation view; overlay styling lives there,
+not here.
 """
 
 import qtawesome as qta
@@ -22,8 +22,8 @@ from PyQt5.QtWidgets import (
 )
 
 from .compare_compose import DIFF, OVERLAY, VIEWS
-from .custom_widgets import MaterialButton
 from .image_viewer import ImageViewer
+from .pair_strip import PairStrip
 from .theme import PRIMARY, theme
 
 # Alignment modes mapped onto ImageViewer.set_compare_mode. "glints" matches the
@@ -89,17 +89,14 @@ class CompareControls(QWidget):
         """Build the controls bound to ``viewer``."""
         super().__init__(parent)
         self._viewer = viewer
-        self._path_a = ""
-        self._path_b = ""
         self.nudge_buttons: list[QToolButton] = []
         self.rotate_buttons: list[QToolButton] = []
         self._build_ui()
         self._sync_visibility()
 
     def set_pair(self, path_a: str, path_b: str) -> None:
-        """Store the open pair's paths for the Edit buttons."""
-        self._path_a = path_a
-        self._path_b = path_b
+        """Point the pair strip at the open pair (both A and B editable)."""
+        self.pair_strip.set_pair(path_a, path_b)
 
     def _build_ui(self) -> None:
         layout = QVBoxLayout(self)
@@ -131,21 +128,9 @@ class CompareControls(QWidget):
         self.nudge_pad = self._nudge_rotate_pad()
         layout.addWidget(self.nudge_pad)
 
-        pencil = qta.icon("mdi6.pencil", color=theme.color("icon"))
-        self.edit_a_button = MaterialButton("Edit A")
-        self.edit_a_button.setIcon(pencil)
-        self.edit_a_button.setToolTip("Open image A in the normal view to edit its annotations")
-        self.edit_a_button.clicked.connect(lambda: self.open_image_requested.emit(self._path_a))
-        self.edit_b_button = MaterialButton("Edit B")
-        self.edit_b_button.setIcon(pencil)
-        self.edit_b_button.setToolTip("Open image B in the normal view to edit its annotations")
-        self.edit_b_button.clicked.connect(lambda: self.open_image_requested.emit(self._path_b))
-        edit_row = QWidget()
-        edit_box = QHBoxLayout(edit_row)
-        edit_box.setContentsMargins(0, 0, 0, 0)
-        edit_box.addWidget(self.edit_a_button, 1)
-        edit_box.addWidget(self.edit_b_button, 1)
-        layout.addWidget(self._labelled("Edit", edit_row))
+        self.pair_strip = PairStrip(show_compare=False)
+        self.pair_strip.open_image_requested.connect(self.open_image_requested.emit)
+        layout.addWidget(self.pair_strip)
 
         layout.addStretch(1)
 
