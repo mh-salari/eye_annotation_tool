@@ -95,16 +95,6 @@ class AnnotationGroup(QWidget):
         if self.point_cap:
             self._build_point_cap_control(layout)
 
-        if self.has_fit:
-            button_layout = QHBoxLayout()
-            button_layout.setSpacing(4)
-            self.fit_button = QPushButton("fit")
-            self.fit_button.setToolTip("Fit ellipse / curve to the points")
-            self.fit_button.clicked.connect(self.fit_requested.emit)
-            button_layout.addWidget(self.fit_button)
-            button_layout.addStretch()
-            layout.addLayout(button_layout)
-
         self.setLayout(layout)
 
     # Smoothness slider (0..100) maps to the spline penalty; squared for fine
@@ -116,12 +106,15 @@ class AnnotationGroup(QWidget):
         mode_row = QHBoxLayout()
         mode_row.setContentsMargins(0, 0, 0, 0)
         mode_row.setSpacing(4)
-        mode_row.addWidget(QLabel("fit"))
         self.mode_combo = QComboBox()
         self.mode_combo.addItem("Ellipse", "ellipse")
         self.mode_combo.addItem("Smooth curve", "smooth")
         self.mode_combo.currentIndexChanged.connect(self._on_mode_changed)
         mode_row.addWidget(self.mode_combo, 1)
+        self.fit_button = QPushButton("fit")
+        self.fit_button.setToolTip("Fit ellipse / curve to the points")
+        self.fit_button.clicked.connect(self.fit_requested.emit)
+        mode_row.addWidget(self.fit_button)
         layout.addLayout(mode_row)
 
         # Smooth-curve-only row: centre estimator + smoothness slider
