@@ -85,6 +85,11 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Detector slug ('off' / 'manual' / cheshm id) for eyelid (used by --new-project).",
     )
     parser.add_argument(
+        "--purkinje-iv",
+        default=None,
+        help="Detector slug ('off' / 'manual' / cheshm id) for purkinje_iv (used by --new-project).",
+    )
+    parser.add_argument(
         "--autosave",
         action="store_true",
         help="Pre-set the autosave flag in a new project (used by --new-project).",
